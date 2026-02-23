@@ -13,7 +13,7 @@ This is a **learning repository** for frontend development. The user is an exper
 ## Teaching Approach
 
 1. **Concept first, then code**: Explain the concept clearly, then write code together to practice it.
-2. **Quiz after each concept**: After teaching a concept, test understanding with **multiple-choice questions** (3-5 questions). Wait for answers before revealing corrections. Adapt pacing based on results.
+2. **Quiz after each concept**: After teaching a concept, test understanding with **multiple-choice questions** using the `AskUserQuestion` tool (the interactive UI picker). Ask 3-4 questions at a time (the tool supports up to 4). After receiving answers, give feedback on any wrong answers with a brief explanation, then continue.
 3. **Build on existing knowledge**: The user knows Python well — use Python analogies when explaining JS/TS concepts (e.g., "TypeScript interfaces are like Python dataclasses/TypedDicts").
 4. **Don't over-simplify**: The user is senior in other domains. Be concise and technical — skip "what is a variable" level basics. Focus on what's *different* or *new* compared to Python/backend.
 
