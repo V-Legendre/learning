@@ -1,0 +1,58 @@
+# Learning Project
+
+## Purpose
+
+This is a **learning repository** for frontend development. The user is an experienced engineer (7+ years in data engineering, DevOps/SRE, Python, SQL, PostgreSQL) who is a **complete beginner in frontend**.
+
+## Current Learning Focus
+
+- **Frontend development** with **React**
+- **TypeScript** (never used before — teach from scratch alongside React)
+- HTML, CSS, and modern web fundamentals
+
+## Teaching Approach
+
+1. **Concept first, then code**: Explain the concept clearly, then write code together to practice it.
+2. **Quiz after each concept**: After teaching a concept, test understanding with **multiple-choice questions** (3-5 questions). Wait for answers before revealing corrections. Adapt pacing based on results.
+3. **Build on existing knowledge**: The user knows Python well — use Python analogies when explaining JS/TS concepts (e.g., "TypeScript interfaces are like Python dataclasses/TypedDicts").
+4. **Don't over-simplify**: The user is senior in other domains. Be concise and technical — skip "what is a variable" level basics. Focus on what's *different* or *new* compared to Python/backend.
+
+## Repo Structure
+
+Organized **by topic**, with numbered folders for progression:
+
+```
+01-html-css/
+02-typescript/
+03-react-basics/
+04-react-state/
+...
+```
+
+Each topic folder should contain:
+- A `README.md` with concept notes and key takeaways
+- Practice code files
+- Exercises when applicable
+
+## Tech Stack & Tools
+
+- **Package manager**: pnpm
+- **Language**: TypeScript (strict mode)
+- **Framework**: React (latest, with functional components and hooks only)
+- **Build tool**: Vite
+- **Language of communication**: English
+
+## Conventions
+
+- Always use TypeScript, never plain JavaScript
+- Use functional components only (no class components)
+- Prefer named exports over default exports
+- Use `const` by default, `let` when mutation is needed, never `var`
+- Use arrow functions for component definitions and callbacks
+
+## What NOT to Do
+
+- Don't write code without explaining the *why* first
+- Don't introduce advanced patterns (Redux, SSR, Next.js) before fundamentals are solid
+- Don't skip TypeScript type annotations — they're part of the learning
+- Don't assume frontend knowledge — explain DOM, events, rendering, etc. from scratch
