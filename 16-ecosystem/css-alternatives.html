@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — CSS Alternatives</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>16 — CSS Alternatives</h1>
+  <p class="subtitle">Beyond Tailwind: CSS Modules, styled-components, vanilla-extract, and modern CSS features.</p>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <h2>The CSS Scaling Problem</h2>
+
+  <p>CSS has no built-in scoping. Every class name is global. In a large React app, this causes:</p>
+
+  <ul>
+    <li><strong>Naming collisions</strong> &mdash; two developers create <code>.card</code> with different styles</li>
+    <li><strong>Dead code</strong> &mdash; CSS grows but nobody knows which rules are still used</li>
+    <li><strong>Specificity wars</strong> &mdash; overriding styles requires increasingly specific selectors or <code>!important</code></li>
+  </ul>
+
+  <p>Every CSS approach below solves these problems differently. Tailwind is our primary choice, but knowing the alternatives helps you work in any codebase.</p>
+
+  <!-- ===== CSS MODULES ===== -->
+  <h2>CSS Modules</h2>
+
+  <p>CSS Modules automatically scope class names to the component that imports them. You write normal CSS, but class names are made unique at build time.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header css">Button.module.css</div>
+      <div class="comp-body">
+<pre><code><span class="cm">/* Normal CSS &mdash; but class names are scoped */</span>
+.<span class="attr">primary</span> {
+  <span class="attr">background</span>: <span class="val">#3b82f6</span>;
+  <span class="attr">color</span>: <span class="val">white</span>;
+  <span class="attr">padding</span>: <span class="val">8px 16px</span>;
+  <span class="attr">border-radius</span>: <span class="val">6px</span>;
+  <span class="attr">border</span>: <span class="val">none</span>;
+}
+
+.<span class="attr">primary</span>:<span class="kw">hover</span> {
+  <span class="attr">background</span>: <span class="val">#2563eb</span>;
+}
+
+.<span class="attr">danger</span> {
+  <span class="attr">background</span>: <span class="val">#ef4444</span>;
+  <span class="attr">color</span>: <span class="val">white</span>;
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Button.tsx</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> <span class="prop">styles</span> <span class="kw">from</span> <span class="str">'./Button.module.css'</span>
+
+<span class="kw">interface</span> <span class="type">ButtonProps</span> {
+  <span class="prop">variant</span>: <span class="str">'primary'</span> | <span class="str">'danger'</span>
+  <span class="prop">children</span>: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Button</span> = ({
+  <span class="prop">variant</span>,
+  <span class="prop">children</span>,
+}: <span class="type">ButtonProps</span>) =&gt; (
+  &lt;<span class="tag">button</span> <span class="attr">className</span>={<span class="prop">styles</span>[<span class="prop">variant</span>]}&gt;
+    {<span class="prop">children</span>}
+  &lt;/<span class="tag">button</span>&gt;
+)
+
+<span class="cm">// Rendered HTML:</span>
+<span class="cm">// &lt;button class="Button_primary_x7ht9"&gt;</span>
+<span class="cm">// Unique hash = no conflicts</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">CSS Modules pros and cons</div>
+    <div class="grid-2">
+      <div>
+        <h3>Pros</h3>
+        <ul>
+          <li>No naming conflicts (scoped by default)</li>
+          <li>Standard CSS syntax (no learning curve)</li>
+          <li>Zero runtime cost (resolved at build time)</li>
+          <li>Works with Vite out of the box</li>
+          <li>Easy to migrate existing CSS</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Cons</h3>
+        <ul>
+          <li>No dynamic styles based on props (use inline styles or multiple classes)</li>
+          <li>Class name composition is awkward (<code>clsx</code> needed for conditionals)</li>
+          <li>Separate file per component</li>
+          <li>TypeScript doesn't know available class names by default</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== STYLED-COMPONENTS ===== -->
+  <h2>styled-components / Emotion (CSS-in-JS)</h2>
+
+  <p>CSS-in-JS writes styles as JavaScript template literals. The styles live in the same file as the component and can be dynamic based on props.</p>
+
+<pre><code><span class="cm">// CSS-in-JS with styled-components</span>
+<span class="kw">import</span> <span class="prop">styled</span> <span class="kw">from</span> <span class="str">'styled-components'</span>
+
+<span class="kw">interface</span> <span class="type">ButtonProps</span> {
+  <span class="prop">variant</span>: <span class="str">'primary'</span> | <span class="str">'danger'</span>
+  <span class="prop">size</span>?: <span class="str">'sm'</span> | <span class="str">'md'</span> | <span class="str">'lg'</span>
+}
+
+<span class="kw">const</span> <span class="type">StyledButton</span> = <span class="prop">styled</span>.<span class="fn">button</span>&lt;<span class="type">ButtonProps</span>&gt;<span class="str">`
+  background: ${(props) =&gt; props.variant === 'primary' ? '#3b82f6' : '#ef4444'};
+  color: white;
+  padding: ${(props) =&gt; props.size === 'lg' ? '12px 24px' : '8px 16px'};
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+
+  &amp;:hover {
+    opacity: 0.9;
+  }
+`</span>
+
+<span class="cm">// Usage &mdash; props drive the styles</span>
+&lt;<span class="tag">StyledButton</span> <span class="attr">variant</span>=<span class="str">"primary"</span> <span class="attr">size</span>=<span class="str">"lg"</span>&gt;Save&lt;/<span class="tag">StyledButton</span>&gt;</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">CSS-in-JS pros and cons</div>
+    <div class="grid-2">
+      <div>
+        <h3>Pros</h3>
+        <ul>
+          <li>Dynamic styles based on props/state</li>
+          <li>Co-located with component (no separate file)</li>
+          <li>Full power of JavaScript in styles</li>
+          <li>Automatic scoping</li>
+          <li>Theme support built in</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Cons</h3>
+        <ul>
+          <li><strong>Runtime cost</strong> &mdash; styles generated in the browser</li>
+          <li><strong>Larger bundle</strong> &mdash; library (12KB+) + all style strings</li>
+          <li><strong>RSC incompatible</strong> &mdash; doesn't work with React Server Components</li>
+          <li>Performance issues with many dynamic styles</li>
+          <li>Community moving away from this pattern</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Industry trend:</strong> CSS-in-JS (styled-components, Emotion) had their peak around 2019-2021. The React community is moving away from runtime CSS-in-JS because of performance costs and Server Component incompatibility. New projects should prefer Tailwind, CSS Modules, or vanilla-extract.
+  </div>
+
+  <!-- ===== VANILLA-EXTRACT ===== -->
+  <h2>vanilla-extract</h2>
+
+  <p>The best of both worlds: write styles in TypeScript, but they compile to static CSS at build time. Zero runtime cost.</p>
+
+<pre><code><span class="cm">// Button.css.ts (note: .css.ts extension)</span>
+<span class="kw">import</span> { <span class="fn">style</span>, <span class="fn">styleVariants</span> } <span class="kw">from</span> <span class="str">'@vanilla-extract/css'</span>
+
+<span class="kw">export const</span> <span class="prop">base</span> = <span class="fn">style</span>({
+  <span class="prop">color</span>: <span class="str">'white'</span>,
+  <span class="prop">padding</span>: <span class="str">'8px 16px'</span>,
+  <span class="prop">borderRadius</span>: <span class="str">'6px'</span>,
+  <span class="prop">border</span>: <span class="str">'none'</span>,
+  <span class="prop">cursor</span>: <span class="str">'pointer'</span>,
+  <span class="str">':hover'</span>: {
+    <span class="prop">opacity</span>: <span class="num">0.9</span>,
+  },
+})
+
+<span class="kw">export const</span> <span class="prop">variant</span> = <span class="fn">styleVariants</span>({
+  <span class="prop">primary</span>: { <span class="prop">background</span>: <span class="str">'#3b82f6'</span> },
+  <span class="prop">danger</span>:  { <span class="prop">background</span>: <span class="str">'#ef4444'</span> },
+})</code></pre>
+
+<pre><code><span class="cm">// Button.tsx</span>
+<span class="kw">import</span> { <span class="prop">base</span>, <span class="prop">variant</span> } <span class="kw">from</span> <span class="str">'./Button.css'</span>
+
+<span class="kw">export const</span> <span class="fn">Button</span> = ({ <span class="prop">v</span>, <span class="prop">children</span> }: <span class="type">Props</span>) =&gt; (
+  &lt;<span class="tag">button</span> <span class="attr">className</span>={<span class="str">`</span>${<span class="prop">base</span>} ${<span class="prop">variant</span>[<span class="prop">v</span>]}<span class="str">`</span>}&gt;
+    {<span class="prop">children</span>}
+  &lt;/<span class="tag">button</span>&gt;
+)
+
+<span class="cm">// TypeScript knows variant keys: 'primary' | 'danger'</span>
+<span class="cm">// Typos caught at compile time!</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">vanilla-extract pros and cons</div>
+    <div class="grid-2">
+      <div>
+        <h3>Pros</h3>
+        <ul>
+          <li>Zero runtime (CSS extracted at build)</li>
+          <li>Full TypeScript type safety</li>
+          <li>Works with Server Components</li>
+          <li>Atomic CSS recipes (like Tailwind)</li>
+          <li>Theme tokens with type safety</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Cons</h3>
+        <ul>
+          <li>More setup required</li>
+          <li>Learning curve (new API)</li>
+          <li>Smaller community than Tailwind</li>
+          <li>Verbose for simple styles</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MODERN CSS ===== -->
+  <h2>Modern CSS Features</h2>
+
+  <p>Modern CSS itself is solving many problems these tools were created for. These features are available in all modern browsers.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>What It Does</th>
+        <th>Browser Support</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>CSS Nesting</strong></td>
+        <td>Native nesting like Sass: <code>.card { &amp; .title { } }</code></td>
+        <td>All modern browsers (2024+)</td>
+      </tr>
+      <tr>
+        <td><strong>CSS Layers</strong> (<code>@layer</code>)</td>
+        <td>Control specificity order. Base, components, utilities layers.</td>
+        <td>All modern browsers</td>
+      </tr>
+      <tr>
+        <td><strong><code>@scope</code></strong></td>
+        <td>Scope styles to a subtree of the DOM</td>
+        <td>Chrome, Edge (2024)</td>
+      </tr>
+      <tr>
+        <td><strong><code>:where()</code> / <code>:is()</code></strong></td>
+        <td>Group selectors. <code>:where()</code> has zero specificity.</td>
+        <td>All modern browsers</td>
+      </tr>
+      <tr>
+        <td><strong>Container queries</strong></td>
+        <td>Responsive based on parent size, not viewport</td>
+        <td>All modern browsers</td>
+      </tr>
+      <tr>
+        <td><strong>CSS Custom Properties</strong></td>
+        <td><code>--color-primary: #3b82f6</code> &mdash; theme tokens in CSS</td>
+        <td>All browsers (long supported)</td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">/* Modern CSS with nesting, layers, and custom properties */</span>
+<span class="kw">@layer</span> <span class="val">base</span>, <span class="val">components</span>, <span class="val">utilities</span>;
+
+<span class="kw">@layer</span> <span class="val">components</span> {
+  .<span class="attr">card</span> {
+    <span class="attr">background</span>: <span class="fn">var</span>(<span class="val">--color-surface</span>);
+    <span class="attr">border-radius</span>: <span class="val">8px</span>;
+    <span class="attr">padding</span>: <span class="val">16px</span>;
+
+    <span class="cm">/* Native nesting! */</span>
+    &amp; .<span class="attr">title</span> {
+      <span class="attr">font-weight</span>: <span class="val">bold</span>;
+      <span class="attr">color</span>: <span class="fn">var</span>(<span class="val">--color-text</span>);
+    }
+
+    &amp;:<span class="kw">hover</span> {
+      <span class="attr">box-shadow</span>: <span class="val">0 2px 8px rgba(0,0,0,0.1)</span>;
+    }
+  }
+}</code></pre>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>Full Comparison</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Tailwind</th>
+        <th>CSS Modules</th>
+        <th>styled-components</th>
+        <th>vanilla-extract</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Scoping</td>
+        <td>Utility classes (no scope needed)</td>
+        <td>Auto-scoped class names</td>
+        <td>Auto-scoped via JS</td>
+        <td>Auto-scoped at build</td>
+      </tr>
+      <tr>
+        <td>Runtime cost</td>
+        <td>Zero</td>
+        <td>Zero</td>
+        <td>Yes (generates CSS in browser)</td>
+        <td>Zero</td>
+      </tr>
+      <tr>
+        <td>Bundle size impact</td>
+        <td>Tiny (purges unused)</td>
+        <td>Normal CSS size</td>
+        <td>Library + style strings</td>
+        <td>Normal CSS size</td>
+      </tr>
+      <tr>
+        <td>Dynamic styles</td>
+        <td>Conditional classes</td>
+        <td>Multiple classes / inline</td>
+        <td>Props-based (best)</td>
+        <td>Variants (type-safe)</td>
+      </tr>
+      <tr>
+        <td>TypeScript support</td>
+        <td>Class names (no types)</td>
+        <td>Plugins needed</td>
+        <td>Good (prop types)</td>
+        <td>Excellent (fully typed)</td>
+      </tr>
+      <tr>
+        <td>Server Components</td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Learning curve</td>
+        <td>Medium (utility classes)</td>
+        <td>Low (just CSS)</td>
+        <td>Medium (template literals)</td>
+        <td>Medium-high (new API)</td>
+      </tr>
+      <tr>
+        <td>Design system</td>
+        <td>Built in (theme config)</td>
+        <td>Manual (CSS variables)</td>
+        <td>ThemeProvider</td>
+        <td>createTheme</td>
+      </tr>
+      <tr>
+        <td>Ecosystem</td>
+        <td>Huge (shadcn/ui, daisyUI)</td>
+        <td>Standard (built into Vite)</td>
+        <td>Mature but declining</td>
+        <td>Growing</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== WHY TAILWIND ===== -->
+  <h2>Why We Picked Tailwind</h2>
+
+  <div class="panel">
+    <div class="panel-title">The case for Tailwind in 2026</div>
+    <ul>
+      <li><strong>Consistent design system</strong> &mdash; spacing, colors, typography all come from a predefined scale. No more "should this be 14px or 15px?"</li>
+      <li><strong>No naming</strong> &mdash; never spend time naming CSS classes again. <code>className="flex items-center gap-4 p-6"</code> is self-documenting.</li>
+      <li><strong>Fast iteration</strong> &mdash; change styles directly in JSX, no context switching between files</li>
+      <li><strong>Tiny production CSS</strong> &mdash; only the utilities you actually use are included (typically 5-15KB gzipped)</li>
+      <li><strong>Ecosystem</strong> &mdash; shadcn/ui gives you beautiful, accessible, customizable components built on Tailwind</li>
+      <li><strong>Server Component safe</strong> &mdash; no runtime, no JavaScript, just class names</li>
+      <li><strong>Community momentum</strong> &mdash; most popular approach for new React projects</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>When to pick something else:</strong> If you join a team using CSS Modules or styled-components, work within their system. All of these approaches are valid. The important thing is consistency within a project.
+  </div>
+
+</body>
+</html>

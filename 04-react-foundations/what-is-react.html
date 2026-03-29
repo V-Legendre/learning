@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 — What Is React</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>04 — What Is React</h1>
+  <p class="subtitle">A JavaScript library for building user interfaces. The core mental model: UI = f(state).</p>
+
+  <!-- ===== THE CORE IDEA ===== -->
+  <h2>UI = f(state)</h2>
+
+  <p>The single most important idea in React: your <strong>UI is a pure function of your data</strong>. Given the same state, you always get the same output. No hidden mutations, no manual DOM poking.</p>
+
+  <div class="panel">
+    <div class="panel-title">The mental model</div>
+<pre><code><span class="cm">// This is basically all of React:</span>
+<span class="kw">const</span> <span class="fn">UI</span> = (state: <span class="type">AppState</span>) => <span class="tag">&lt;SomeHTML /&gt;</span>
+
+<span class="cm">// State changes? React calls your function again.</span>
+<span class="cm">// New output differs from old output? React updates the DOM.</span></code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy: Jinja2</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Server-side: data -> HTML string</span>
+<span class="cm"># Sent to browser once, done.</span>
+<span class="fn">render_template</span>(<span class="str">"users.html"</span>,
+  users=user_list
+)</code></pre>
+        <p>Data flows into a template. Output is HTML. But it's a one-shot render on the server.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Client-side: data -> UI, continuously</span>
+<span class="cm">// State changes -> re-render -> DOM update</span>
+<span class="kw">const</span> <span class="fn">UserList</span> = () => {
+  <span class="kw">const</span> [users, setUsers] = <span class="fn">useState</span>([])
+  <span class="kw">return</span> <span class="tag">&lt;ul&gt;</span>{users.<span class="fn">map</span>(u =>
+    <span class="tag">&lt;li&gt;</span>{u.name}<span class="tag">&lt;/li&gt;</span>
+  )}<span class="tag">&lt;/ul&gt;</span>
+}</code></pre>
+        <p>Same idea, but runs in the browser and <strong>reacts</strong> to state changes automatically.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key insight:</strong> You never write code like "find the third &lt;li&gt; and change its text." You describe the final state of the UI. React figures out what to change in the DOM.
+  </div>
+
+  <!-- ===== DECLARATIVE VS IMPERATIVE ===== -->
+  <h2>Declarative vs Imperative</h2>
+
+  <p><strong>Declarative</strong> = describe <em>what</em> you want. <strong>Imperative</strong> = describe <em>how</em> to do it step by step.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Imperative (jQuery-style)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Step-by-step DOM manipulation</span>
+<span class="kw">const</span> list = document.<span class="fn">getElementById</span>(<span class="str">"myList"</span>)
+<span class="kw">const</span> li = document.<span class="fn">createElement</span>(<span class="str">"li"</span>)
+li.textContent = <span class="str">"New item"</span>
+li.className = <span class="str">"active"</span>
+list.<span class="fn">appendChild</span>(li)
+
+<span class="cm">// You manage every mutation yourself.</span>
+<span class="cm">// Gets messy fast with complex UIs.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Declarative (React)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Describe the desired output</span>
+<span class="kw">const</span> <span class="fn">MyList</span> = ({ items }: <span class="type">Props</span>) => (
+  <span class="tag">&lt;ul&gt;</span>
+    {items.<span class="fn">map</span>(item =>
+      <span class="tag">&lt;li</span> <span class="attr">className</span>=<span class="str">"active"</span><span class="tag">&gt;</span>
+        {item.text}
+      <span class="tag">&lt;/li&gt;</span>
+    )}
+  <span class="tag">&lt;/ul&gt;</span>
+)
+
+<span class="cm">// React handles the DOM changes.</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Python analogy</div>
+    <table>
+      <thead>
+        <tr><th>Style</th><th>Example</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Declarative</strong></td>
+          <td><code>SELECT name FROM users WHERE active = true</code> — you say what you want, the DB engine decides how</td>
+        </tr>
+        <tr>
+          <td><strong>Imperative</strong></td>
+          <td>Loop through a file line by line, parse each field, filter manually, collect results — you control every step</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>React is SQL for UIs. You describe the result, not the procedure.</p>
+  </div>
+
+  <!-- ===== VIRTUAL DOM & RECONCILIATION ===== -->
+  <h2>Virtual DOM & Reconciliation</h2>
+
+  <p>React doesn't modify the real DOM directly. It maintains a lightweight in-memory copy (the <strong>Virtual DOM</strong>), diffs it against the previous version, and applies <strong>only the minimal changes</strong> to the real DOM.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">State Changes</div>
+      <div class="desc">User clicks a button, data arrives from API, timer fires</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Re-render</div>
+      <div class="desc">React calls your component function again with new state</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">New Virtual DOM</div>
+      <div class="desc">Your function returns a new tree of elements (plain JS objects)</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Diff (Reconciliation)</div>
+      <div class="desc">React compares new tree vs old tree, finds what changed</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Patch Real DOM</div>
+      <div class="desc">Only the changed elements get updated. Minimal, fast mutations.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why not just update the real DOM directly?</div>
+    <ul>
+      <li><strong>DOM operations are slow</strong> — each mutation triggers layout recalculation, style recomputation, and repainting. Browsers are optimized for reading the DOM, not writing to it thousands of times.</li>
+      <li><strong>Batching</strong> — React batches multiple state changes into a single DOM update. Change 10 things? One DOM write.</li>
+      <li><strong>Predictability</strong> — You always describe the complete UI. No partial updates that leave the DOM in an inconsistent state.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Think of it like SQLAlchemy's unit of work pattern. You make changes to your ORM objects in memory, then <code>session.commit()</code> flushes only the diffs to the database in a single transaction. React's reconciliation is the <code>commit()</code> step.
+  </div>
+
+  <!-- ===== COMPONENTS = FUNCTIONS ===== -->
+  <h2>Components = Functions</h2>
+
+  <p>In React, every piece of UI is a <strong>function</strong> that returns JSX (HTML-like syntax). No classes needed.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># A function that returns formatted data</span>
+<span class="kw">def</span> <span class="fn">user_card</span>(name: <span class="type">str</span>, role: <span class="type">str</span>) -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">f"""
+    &lt;div class="card"&gt;
+      &lt;h2&gt;{name}&lt;/h2&gt;
+      &lt;p&gt;{role}&lt;/p&gt;
+    &lt;/div&gt;
+    """</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React component</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// A function that returns UI</span>
+<span class="kw">const</span> <span class="fn">UserCard</span> = ({ name, role }: <span class="type">Props</span>) => {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"card"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>{name}<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{role}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key rules for components</div>
+    <ul>
+      <li><strong>Name must start with uppercase</strong> — <code>UserCard</code> not <code>userCard</code>. Lowercase = HTML element.</li>
+      <li><strong>Must return JSX</strong> (or <code>null</code> to render nothing).</li>
+      <li><strong>Pure by convention</strong> — given the same props and state, always return the same output. No side effects during rendering.</li>
+      <li><strong>Composable</strong> — components can use other components. <code>&lt;App&gt;</code> renders <code>&lt;Header&gt;</code> which renders <code>&lt;NavLink&gt;</code>.</li>
+    </ul>
+  </div>
+
+  <!-- ===== ONE-WAY DATA FLOW ===== -->
+  <h2>One-Way Data Flow</h2>
+
+  <p>Data flows <strong>down</strong> (parent to child via props). Events flow <strong>up</strong> (child to parent via callbacks). Never sideways, never backwards.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Parent owns state</div>
+      <div class="desc"><code>const [users, setUsers] = useState([])</code></div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Passes data down</div>
+      <div class="desc"><code>&lt;UserList users={users} /&gt;</code></div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Child renders it</div>
+      <div class="desc">Child uses props, never modifies them</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Child event fires</div>
+      <div class="desc">User clicks "Delete" button</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Calls parent callback</div>
+      <div class="desc"><code>onDelete(userId)</code> — function passed as prop</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Parent updates state</div>
+      <div class="desc"><code>setUsers(prev => prev.filter(...))</code></div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Functions take args (data down)</span>
+<span class="cm"># and return values (results up)</span>
+<span class="kw">def</span> <span class="fn">process</span>(data: <span class="type">list</span>) -> <span class="type">Result</span>:
+    filtered = <span class="fn">filter_items</span>(data)
+    <span class="kw">return</span> <span class="fn">format_output</span>(filtered)
+
+<span class="cm"># You'd never have filter_items()</span>
+<span class="cm"># reach back and modify process()'s</span>
+<span class="cm"># local variables. Same idea in React.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Props = arguments (data down)</span>
+<span class="cm">// Callbacks = return channel (events up)</span>
+<span class="kw">const</span> <span class="fn">Parent</span> = () => {
+  <span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>([])
+  <span class="kw">const</span> <span class="fn">handleDelete</span> = (id: <span class="type">number</span>) => {
+    <span class="fn">setItems</span>(prev => prev.<span class="fn">filter</span>(
+      i => i.id !== id
+    ))
+  }
+  <span class="kw">return</span> <span class="tag">&lt;List</span>
+    <span class="attr">items</span>={items}
+    <span class="attr">onDelete</span>={handleDelete}
+  <span class="tag">/&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Why one-way?</strong> Two-way data binding (like Angular v1) sounds convenient but creates feedback loops and makes it impossible to trace where a state change came from. One-way flow is predictable and debuggable, like a well-structured Python call stack.
+  </div>
+
+  <!-- ===== WHEN NOT TO USE REACT ===== -->
+  <h2>When NOT to Use React</h2>
+
+  <p>React is a tool, not a religion. It adds complexity. Use it when you need it.</p>
+
+  <table>
+    <thead>
+      <tr><th>Scenario</th><th>Use React?</th><th>Better alternative</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Blog, documentation, marketing page</td>
+        <td>No</td>
+        <td>Static HTML, Astro, Hugo</td>
+      </tr>
+      <tr>
+        <td>Simple form + server submission</td>
+        <td>Probably not</td>
+        <td>Plain HTML + a sprinkle of JS</td>
+      </tr>
+      <tr>
+        <td>Dashboard with live updates, filters, interactive charts</td>
+        <td><strong>Yes</strong></td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td>Multi-step wizard, complex form logic</td>
+        <td><strong>Yes</strong></td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td>SPA (single-page application) with client-side routing</td>
+        <td><strong>Yes</strong></td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td>Email templates</td>
+        <td>No</td>
+        <td>MJML, plain HTML</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> If your page has lots of interactive state that changes over time, React shines. If it's mostly static content, you're adding overhead for nothing.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>The React Mental Model (Summary)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Five things to remember</div>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Concept</th><th>One-liner</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td><strong>UI = f(state)</strong></td><td>Your UI is a pure function of your data</td></tr>
+        <tr><td>2</td><td><strong>Declarative</strong></td><td>Describe what, not how</td></tr>
+        <tr><td>3</td><td><strong>Virtual DOM</strong></td><td>Diff in memory, patch the real DOM minimally</td></tr>
+        <tr><td>4</td><td><strong>Components</strong></td><td>Functions that return UI, composed together</td></tr>
+        <tr><td>5</td><td><strong>One-way flow</strong></td><td>Data down via props, events up via callbacks</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>

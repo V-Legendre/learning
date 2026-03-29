@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>11 — Zustand</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>11 — Zustand</h1>
+  <p class="subtitle">Minimal, type-safe client state management without the boilerplate.</p>
+
+  <!-- ===== WHY ZUSTAND ===== -->
+  <h2>Why Zustand?</h2>
+
+  <p>Zustand (German for "state") is a tiny (~1KB) state management library that beats the alternatives in simplicity and performance.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Redux Toolkit</th>
+        <th>Context API</th>
+        <th>Zustand</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Bundle size</td>
+        <td>~11KB</td>
+        <td>0 (built-in)</td>
+        <td>~1KB</td>
+      </tr>
+      <tr>
+        <td>Boilerplate</td>
+        <td>High (slices, reducers, actions)</td>
+        <td>Medium (Provider, context)</td>
+        <td>Minimal</td>
+      </tr>
+      <tr>
+        <td>TypeScript</td>
+        <td>Good</td>
+        <td>Built-in</td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td>Providers needed</td>
+        <td>Yes (store provider)</td>
+        <td>Yes (context provider)</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>Re-render control</td>
+        <td>Selectors</td>
+        <td>None (all consumers re-render)</td>
+        <td>Selectors (built-in)</td>
+      </tr>
+      <tr>
+        <td>DevTools</td>
+        <td>Built-in</td>
+        <td>React DevTools only</td>
+        <td>Via middleware</td>
+      </tr>
+      <tr>
+        <td>Learning curve</td>
+        <td>Steep</td>
+        <td>Low</td>
+        <td>Very low</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Zustand is like a <strong>typed singleton module</strong> with subscription callbacks. Think of a Python module-level state with an observer pattern:</p>
+<pre><code><span class="cm"># Python: module-level state</span>
+<span class="kw">class</span> <span class="type">Store</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self.count = <span class="num">0</span>
+        self._listeners = []
+
+    <span class="kw">def</span> <span class="fn">increment</span>(self):
+        self.count += <span class="num">1</span>
+        <span class="kw">for</span> cb <span class="kw">in</span> self._listeners:
+            <span class="fn">cb</span>(self)
+
+    <span class="kw">def</span> <span class="fn">subscribe</span>(self, cb):
+        self._listeners.<span class="fn">append</span>(cb)
+
+store = <span class="type">Store</span>()  <span class="cm"># singleton</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Zustand equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Zustand: same idea, way less code</span>
+<span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+
+<span class="kw">interface</span> <span class="type">CounterState</span> {
+  count: <span class="type">number</span>
+  <span class="fn">increment</span>: () => <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">useCounterStore</span> = <span class="fn">create</span>&lt;<span class="type">CounterState</span>&gt;()(
+  (set) => ({
+    count: <span class="num">0</span>,
+    <span class="fn">increment</span>: () =>
+      <span class="fn">set</span>((state) => ({
+        count: state.count + <span class="num">1</span>
+      })),
+  })
+)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BASIC STORE ===== -->
+  <h2>Creating a Store</h2>
+
+  <p>A Zustand store is created with <code>create</code>. It returns a <strong>hook</strong> (by convention prefixed with <code>use</code>). The function receives <code>set</code> and <code>get</code> to update and read state.</p>
+
+  <div class="panel">
+    <div class="panel-title">Complete typed store example</div>
+<pre><code><span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+
+<span class="cm">// 1. Define the state type</span>
+<span class="kw">interface</span> <span class="type">TodoState</span> {
+  <span class="cm">// State</span>
+  todos: <span class="type">Array</span>&lt;{ id: <span class="type">string</span>; text: <span class="type">string</span>; done: <span class="type">boolean</span> }&gt;
+  filter: <span class="str">'all'</span> | <span class="str">'active'</span> | <span class="str">'done'</span>
+
+  <span class="cm">// Actions</span>
+  <span class="fn">addTodo</span>: (text: <span class="type">string</span>) => <span class="type">void</span>
+  <span class="fn">toggleTodo</span>: (id: <span class="type">string</span>) => <span class="type">void</span>
+  <span class="fn">removeTodo</span>: (id: <span class="type">string</span>) => <span class="type">void</span>
+  <span class="fn">setFilter</span>: (filter: <span class="type">TodoState</span>[<span class="str">'filter'</span>]) => <span class="type">void</span>
+}
+
+<span class="cm">// 2. Create the store</span>
+<span class="kw">const</span> <span class="fn">useTodoStore</span> = <span class="fn">create</span>&lt;<span class="type">TodoState</span>&gt;()((set) => ({
+  todos: [],
+  filter: <span class="str">'all'</span>,
+
+  <span class="fn">addTodo</span>: (text) =>
+    <span class="fn">set</span>((state) => ({
+      todos: [...state.todos, {
+        id: crypto.<span class="fn">randomUUID</span>(),
+        text,
+        done: <span class="kw">false</span>,
+      }],
+    })),
+
+  <span class="fn">toggleTodo</span>: (id) =>
+    <span class="fn">set</span>((state) => ({
+      todos: state.todos.<span class="fn">map</span>((t) =>
+        t.id === id ? { ...t, done: !t.done } : t
+      ),
+    })),
+
+  <span class="fn">removeTodo</span>: (id) =>
+    <span class="fn">set</span>((state) => ({
+      todos: state.todos.<span class="fn">filter</span>((t) => t.id !== id),
+    })),
+
+  <span class="fn">setFilter</span>: (filter) => <span class="fn">set</span>({ filter }),
+}))</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> <code>set</code> does a <strong>shallow merge</strong> by default. You only need to return the properties you want to change. <code>set({ filter: 'done' })</code> merges into existing state, preserving <code>todos</code>.
+  </div>
+
+  <!-- ===== USING IN COMPONENTS ===== -->
+  <h2>Using a Store in Components</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without selector (BAD)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">TodoCount</span> = () => {
+  <span class="cm">// Subscribes to ENTIRE store</span>
+  <span class="cm">// Re-renders on ANY state change</span>
+  <span class="kw">const</span> state = <span class="fn">useTodoStore</span>()
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>{state.todos.length} todos<span class="tag">&lt;/p&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With selector (GOOD)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">TodoCount</span> = () => {
+  <span class="cm">// Only subscribes to todos</span>
+  <span class="cm">// Only re-renders when todos change</span>
+  <span class="kw">const</span> todos = <span class="fn">useTodoStore</span>(
+    (s) => s.todos
+  )
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>{todos.length} todos<span class="tag">&lt;/p&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Always use selectors.</strong> <code>const state = useStore()</code> with no argument subscribes to the entire store. Every update to any property will re-render that component. Select only what you need.
+  </div>
+
+  <h3>Selecting Multiple Values</h3>
+
+<pre><code><span class="cm">// Option 1: Multiple selectors (preferred for unrelated values)</span>
+<span class="kw">const</span> <span class="fn">TodoList</span> = () => {
+  <span class="kw">const</span> todos = <span class="fn">useTodoStore</span>((s) => s.todos)
+  <span class="kw">const</span> filter = <span class="fn">useTodoStore</span>((s) => s.filter)
+  <span class="kw">const</span> toggleTodo = <span class="fn">useTodoStore</span>((s) => s.toggleTodo)
+  <span class="cm">// ...</span>
+}
+
+<span class="cm">// Option 2: useShallow for object selection</span>
+<span class="kw">import</span> { <span class="fn">useShallow</span> } <span class="kw">from</span> <span class="str">'zustand/react/shallow'</span>
+
+<span class="kw">const</span> <span class="fn">TodoList</span> = () => {
+  <span class="kw">const</span> { todos, filter, toggleTodo } = <span class="fn">useTodoStore</span>(
+    <span class="fn">useShallow</span>((s) => ({
+      todos: s.todos,
+      filter: s.filter,
+      toggleTodo: s.toggleTodo,
+    }))
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> Actions (functions) never change, so selecting them doesn't cause re-renders. You can safely select them without <code>useShallow</code>. The re-render concern is about data values.
+  </div>
+
+  <!-- ===== ACCESSING STORE OUTSIDE REACT ===== -->
+  <h2>Accessing the Store Outside React</h2>
+
+  <p>Unlike Context, Zustand stores work outside of React components. This is useful for utility functions, event handlers, and testing.</p>
+
+<pre><code><span class="cm">// Read current state (snapshot, not reactive)</span>
+<span class="kw">const</span> currentTodos = <span class="fn">useTodoStore</span>.<span class="fn">getState</span>().todos
+
+<span class="cm">// Call actions directly</span>
+<span class="fn">useTodoStore</span>.<span class="fn">getState</span>().<span class="fn">addTodo</span>(<span class="str">'Buy milk'</span>)
+
+<span class="cm">// Subscribe to changes (returns unsubscribe function)</span>
+<span class="kw">const</span> unsub = <span class="fn">useTodoStore</span>.<span class="fn">subscribe</span>((state) => {
+  console.<span class="fn">log</span>(<span class="str">'State changed:'</span>, state)
+})</code></pre>
+
+  <!-- ===== MIDDLEWARE ===== -->
+  <h2>Middleware</h2>
+
+  <p>Zustand middleware wraps the store to add functionality. They compose with function nesting.</p>
+
+  <h3>persist — Save to localStorage</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+<span class="kw">import</span> { <span class="fn">persist</span> } <span class="kw">from</span> <span class="str">'zustand/middleware'</span>
+
+<span class="kw">interface</span> <span class="type">ThemeState</span> {
+  theme: <span class="str">'light'</span> | <span class="str">'dark'</span>
+  <span class="fn">toggle</span>: () => <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">useThemeStore</span> = <span class="fn">create</span>&lt;<span class="type">ThemeState</span>&gt;()(
+  <span class="fn">persist</span>(
+    (set) => ({
+      theme: <span class="str">'dark'</span>,
+      <span class="fn">toggle</span>: () =>
+        <span class="fn">set</span>((s) => ({
+          theme: s.theme === <span class="str">'dark'</span> ? <span class="str">'light'</span> : <span class="str">'dark'</span>,
+        })),
+    }),
+    {
+      name: <span class="str">'theme-storage'</span>, <span class="cm">// localStorage key</span>
+    }
+  )
+)</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> The <code>persist</code> middleware automatically serializes to JSON and hydrates on page load. You can configure which parts to persist with <code>partialize</code>, and use custom storage backends.
+  </div>
+
+  <h3>devtools — Redux DevTools Integration</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">devtools</span> } <span class="kw">from</span> <span class="str">'zustand/middleware'</span>
+
+<span class="kw">const</span> <span class="fn">useStore</span> = <span class="fn">create</span>&lt;<span class="type">State</span>&gt;()(
+  <span class="fn">devtools</span>(
+    (set) => ({
+      count: <span class="num">0</span>,
+      <span class="fn">increment</span>: () =>
+        <span class="fn">set</span>(
+          (s) => ({ count: s.count + <span class="num">1</span> }),
+          <span class="kw">false</span>,     <span class="cm">// replace (false = merge)</span>
+          <span class="str">'increment'</span> <span class="cm">// action name in DevTools</span>
+        ),
+    }),
+    { name: <span class="str">'CounterStore'</span> }
+  )
+)</code></pre>
+
+  <h3>immer — Mutable Update Syntax</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Without immer (immutable)</div>
+      <div class="comp-body">
+<pre><code><span class="fn">toggleTodo</span>: (id) =>
+  <span class="fn">set</span>((state) => ({
+    todos: state.todos.<span class="fn">map</span>((t) =>
+      t.id === id
+        ? { ...t, done: !t.done }
+        : t
+    ),
+  }))</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">With immer (mutable syntax)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { <span class="fn">immer</span> } <span class="kw">from</span> <span class="str">'zustand/middleware/immer'</span>
+
+<span class="fn">toggleTodo</span>: (id) =>
+  <span class="fn">set</span>((state) => {
+    <span class="kw">const</span> todo = state.todos.<span class="fn">find</span>(
+      (t) => t.id === id
+    )
+    <span class="kw">if</span> (todo) todo.done = !todo.done
+  })</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> Immer uses proxies under the hood — your mutations are actually producing new immutable objects. This is the same Immer library Redux Toolkit uses.
+  </div>
+
+  <h3>Combining Middleware</h3>
+
+<pre><code><span class="cm">// Middleware composes from inside out</span>
+<span class="kw">const</span> <span class="fn">useStore</span> = <span class="fn">create</span>&lt;<span class="type">State</span>&gt;()(
+  <span class="fn">devtools</span>(
+    <span class="fn">persist</span>(
+      <span class="fn">immer</span>(
+        (set) => ({
+          <span class="cm">// your state and actions</span>
+        })
+      ),
+      { name: <span class="str">'my-store'</span> }
+    ),
+    { name: <span class="str">'MyStore'</span> }
+  )
+)</code></pre>
+
+  <!-- ===== MULTIPLE STORES ===== -->
+  <h2>Multiple Stores</h2>
+
+  <p>Prefer <strong>multiple small stores</strong> over one big store. Organize by domain, not by type.</p>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">stores/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useAuthStore.ts</span> &nbsp;&nbsp;<span class="cm">// user, login, logout</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useCartStore.ts</span> &nbsp;&nbsp;<span class="cm">// items, addItem, removeItem</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useUIStore.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// sidebar, theme, modals</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useNotificationStore.ts</span> <span class="cm">// toasts, alerts</span>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">One mega store</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Everything in one store</span>
+<span class="cm">// Hard to maintain, test, reason about</span>
+<span class="kw">const</span> <span class="fn">useStore</span> = <span class="fn">create</span>((set) => ({
+  user: <span class="kw">null</span>,
+  cartItems: [],
+  theme: <span class="str">'dark'</span>,
+  sidebarOpen: <span class="kw">false</span>,
+  notifications: [],
+  <span class="cm">// 50 more properties...</span>
+  <span class="cm">// 30 more actions...</span>
+}))</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Small, focused stores</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Each store has a single responsibility</span>
+<span class="kw">const</span> <span class="fn">useAuthStore</span> = <span class="fn">create</span>(() => ({
+  user: <span class="kw">null</span>,
+  <span class="fn">login</span>: ...,
+  <span class="fn">logout</span>: ...,
+}))
+
+<span class="kw">const</span> <span class="fn">useCartStore</span> = <span class="fn">create</span>(() => ({
+  items: [],
+  <span class="fn">addItem</span>: ...,
+  <span class="fn">removeItem</span>: ...,
+}))</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TESTING ===== -->
+  <h2>Testing Zustand Stores</h2>
+
+  <p>Since stores are just functions, you can test them <strong>outside of React</strong>. No rendering, no providers, no hooks.</p>
+
+<pre><code><span class="kw">import</span> { describe, it, expect, beforeEach } <span class="kw">from</span> <span class="str">'vitest'</span>
+<span class="kw">import</span> { <span class="fn">useTodoStore</span> } <span class="kw">from</span> <span class="str">'./useTodoStore'</span>
+
+describe(<span class="str">'useTodoStore'</span>, () => {
+  <span class="cm">// Reset store between tests</span>
+  <span class="fn">beforeEach</span>(() => {
+    <span class="fn">useTodoStore</span>.<span class="fn">setState</span>({ todos: [], filter: <span class="str">'all'</span> })
+  })
+
+  <span class="fn">it</span>(<span class="str">'adds a todo'</span>, () => {
+    <span class="fn">useTodoStore</span>.<span class="fn">getState</span>().<span class="fn">addTodo</span>(<span class="str">'Buy milk'</span>)
+    <span class="kw">const</span> { todos } = <span class="fn">useTodoStore</span>.<span class="fn">getState</span>()
+
+    <span class="fn">expect</span>(todos).toHaveLength(<span class="num">1</span>)
+    <span class="fn">expect</span>(todos[<span class="num">0</span>].text).<span class="fn">toBe</span>(<span class="str">'Buy milk'</span>)
+    <span class="fn">expect</span>(todos[<span class="num">0</span>].done).<span class="fn">toBe</span>(<span class="kw">false</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">'toggles a todo'</span>, () => {
+    <span class="fn">useTodoStore</span>.<span class="fn">getState</span>().<span class="fn">addTodo</span>(<span class="str">'Buy milk'</span>)
+    <span class="kw">const</span> id = <span class="fn">useTodoStore</span>.<span class="fn">getState</span>().todos[<span class="num">0</span>].id
+
+    <span class="fn">useTodoStore</span>.<span class="fn">getState</span>().<span class="fn">toggleTodo</span>(id)
+    <span class="fn">expect</span>(<span class="fn">useTodoStore</span>.<span class="fn">getState</span>().todos[<span class="num">0</span>].done).<span class="fn">toBe</span>(<span class="kw">true</span>)
+  })
+})</code></pre>
+
+  <div class="tip">
+    <strong>Key advantage over Context:</strong> Context-based state requires rendering components with providers to test. Zustand stores are plain functions — test them like you'd test a Python class in pytest.
+  </div>
+
+  <!-- ===== FULL EXAMPLE ===== -->
+  <h2>Full Example: Shopping Cart Store</h2>
+
+  <div class="panel">
+    <div class="panel-title">useCartStore.ts — complete, production-style store</div>
+<pre><code><span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+<span class="kw">import</span> { <span class="fn">persist</span>, <span class="fn">devtools</span> } <span class="kw">from</span> <span class="str">'zustand/middleware'</span>
+
+<span class="kw">interface</span> <span class="type">CartItem</span> {
+  id: <span class="type">string</span>
+  name: <span class="type">string</span>
+  price: <span class="type">number</span>
+  quantity: <span class="type">number</span>
+}
+
+<span class="kw">interface</span> <span class="type">CartState</span> {
+  items: <span class="type">CartItem</span>[]
+  <span class="fn">addItem</span>: (item: <span class="type">Omit</span>&lt;<span class="type">CartItem</span>, <span class="str">'quantity'</span>&gt;) => <span class="type">void</span>
+  <span class="fn">removeItem</span>: (id: <span class="type">string</span>) => <span class="type">void</span>
+  <span class="fn">updateQuantity</span>: (id: <span class="type">string</span>, quantity: <span class="type">number</span>) => <span class="type">void</span>
+  <span class="fn">clearCart</span>: () => <span class="type">void</span>
+  <span class="fn">totalItems</span>: () => <span class="type">number</span>
+  <span class="fn">totalPrice</span>: () => <span class="type">number</span>
+}
+
+<span class="kw">export const</span> <span class="fn">useCartStore</span> = <span class="fn">create</span>&lt;<span class="type">CartState</span>&gt;()(
+  <span class="fn">devtools</span>(
+    <span class="fn">persist</span>(
+      (set, get) => ({
+        items: [],
+
+        <span class="fn">addItem</span>: (item) =>
+          <span class="fn">set</span>((state) => {
+            <span class="kw">const</span> existing = state.items.<span class="fn">find</span>((i) => i.id === item.id)
+            <span class="kw">if</span> (existing) {
+              <span class="kw">return</span> {
+                items: state.items.<span class="fn">map</span>((i) =>
+                  i.id === item.id
+                    ? { ...i, quantity: i.quantity + <span class="num">1</span> }
+                    : i
+                ),
+              }
+            }
+            <span class="kw">return</span> { items: [...state.items, { ...item, quantity: <span class="num">1</span> }] }
+          }),
+
+        <span class="fn">removeItem</span>: (id) =>
+          <span class="fn">set</span>((state) => ({
+            items: state.items.<span class="fn">filter</span>((i) => i.id !== id),
+          })),
+
+        <span class="fn">updateQuantity</span>: (id, quantity) =>
+          <span class="fn">set</span>((state) => ({
+            items: quantity &lt;= <span class="num">0</span>
+              ? state.items.<span class="fn">filter</span>((i) => i.id !== id)
+              : state.items.<span class="fn">map</span>((i) =>
+                  i.id === id ? { ...i, quantity } : i
+                ),
+          })),
+
+        <span class="fn">clearCart</span>: () => <span class="fn">set</span>({ items: [] }),
+
+        <span class="cm">// Computed values using get()</span>
+        <span class="fn">totalItems</span>: () =>
+          <span class="fn">get</span>().items.<span class="fn">reduce</span>((sum, i) => sum + i.quantity, <span class="num">0</span>),
+
+        <span class="fn">totalPrice</span>: () =>
+          <span class="fn">get</span>().items.<span class="fn">reduce</span>(
+            (sum, i) => sum + i.price * i.quantity, <span class="num">0</span>
+          ),
+      }),
+      { name: <span class="str">'cart-storage'</span> }
+    ),
+    { name: <span class="str">'CartStore'</span> }
+  )
+)</code></pre>
+  </div>
+
+  <h3>Using the Cart Store</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">CartIcon</span> = () => {
+  <span class="kw">const</span> totalItems = <span class="fn">useCartStore</span>((s) => s.<span class="fn">totalItems</span>())
+  <span class="kw">return</span> <span class="tag">&lt;span&gt;</span>Cart ({totalItems})<span class="tag">&lt;/span&gt;</span>
+}
+
+<span class="kw">const</span> <span class="fn">CartTotal</span> = () => {
+  <span class="kw">const</span> totalPrice = <span class="fn">useCartStore</span>((s) => s.<span class="fn">totalPrice</span>())
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>Total: ${totalPrice.<span class="fn">toFixed</span>(<span class="num">2</span>)}<span class="tag">&lt;/p&gt;</span>
+}
+
+<span class="kw">const</span> <span class="fn">AddToCartButton</span> = ({ product }: { product: <span class="type">Product</span> }) => {
+  <span class="kw">const</span> addItem = <span class="fn">useCartStore</span>((s) => s.addItem)
+  <span class="kw">return</span> (
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => <span class="fn">addItem</span>(product)}<span class="tag">&gt;</span>
+      Add to Cart
+    <span class="tag">&lt;/button&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">Zustand in 30 seconds</div>
+    <ul>
+      <li><code>create&lt;Type&gt;()((set, get) => ({ ... }))</code> — define state + actions</li>
+      <li><code>useStore((s) => s.value)</code> — always use selectors in components</li>
+      <li><code>useStore.getState()</code> — access outside React</li>
+      <li><code>persist</code> — save to localStorage</li>
+      <li><code>devtools</code> — Redux DevTools integration</li>
+      <li><code>immer</code> — mutable update syntax</li>
+      <li>Multiple small stores > one mega store</li>
+      <li>Test stores as plain functions — no React needed</li>
+    </ul>
+  </div>
+
+</body>
+</html>

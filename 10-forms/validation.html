@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>10 — Form Validation</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>10 — Form Validation</h1>
+  <p class="subtitle">Zod + React Hook Form: single schema for validation and TypeScript types, field and form-level validation, async checks, and error display.</p>
+
+  <!-- ===== WHY ZOD + RHF ===== -->
+  <h2>Why Zod + React Hook Form?</h2>
+
+  <p>React Hook Form has built-in validation (<code>required</code>, <code>minLength</code>, etc.), but it's limited. Zod gives you a single schema that is both your <strong>validation rules</strong> and your <strong>TypeScript type</strong>. Define once, use everywhere.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Pydantic (Python)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+
+<span class="kw">class</span> <span class="type">SignupForm</span>(BaseModel):
+    username: <span class="type">str</span>  <span class="cm"># min 3 chars</span>
+    email: <span class="type">EmailStr</span>
+    password: <span class="type">str</span>  <span class="cm"># min 8 chars</span>
+
+<span class="cm"># Schema IS the type.</span>
+<span class="cm"># Validation IS type checking.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Zod (TypeScript)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="kw">const</span> signupSchema = z.<span class="fn">object</span>({
+  <span class="prop">username</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">3</span>),
+  <span class="prop">email</span>: z.<span class="fn">string</span>().<span class="fn">email</span>(),
+  <span class="prop">password</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">8</span>),
+})
+
+<span class="cm">// Infer the TS type from the schema:</span>
+<span class="kw">type</span> <span class="type">SignupForm</span> = z.<span class="fn">infer</span>&lt;
+  <span class="kw">typeof</span> signupSchema
+&gt;</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The key insight: <code>z.infer</code></div>
+    <p><code>z.infer&lt;typeof schema&gt;</code> extracts the TypeScript type from a Zod schema. You never write the type manually. Change the schema, the type updates automatically. This is the same idea as Pydantic — the model definition IS the validation AND the type.</p>
+  </div>
+
+  <!-- ===== SETUP ===== -->
+  <h2>Setup</h2>
+
+  <div class="terminal">
+    <span class="prompt">$</span> pnpm add react-hook-form zod @hookform/resolvers
+  </div>
+
+  <p>The <code>@hookform/resolvers</code> package bridges Zod and React Hook Form. It provides <code>zodResolver</code>, which translates Zod validation errors into the format RHF expects.</p>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useForm</span> } <span class="kw">from</span> <span class="str">'react-hook-form'</span>
+<span class="kw">import</span> { <span class="fn">zodResolver</span> } <span class="kw">from</span> <span class="str">'@hookform/resolvers/zod'</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="prop">email</span>: z.<span class="fn">string</span>().<span class="fn">email</span>(<span class="str">'Invalid email'</span>),
+  <span class="prop">password</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">8</span>, <span class="str">'Min 8 characters'</span>),
+})
+
+<span class="kw">type</span> <span class="type">FormValues</span> = z.<span class="fn">infer</span>&lt;<span class="kw">typeof</span> schema&gt;
+
+<span class="kw">const</span> { register, handleSubmit } = <span class="fn">useForm</span>&lt;<span class="type">FormValues</span>&gt;({
+  <span class="prop">resolver</span>: <span class="fn">zodResolver</span>(schema),  <span class="cm">// &lt;-- This connects Zod to RHF</span>
+})</code></pre>
+
+  <!-- ===== FIELD VALIDATION ===== -->
+  <h2>Field Validation Rules</h2>
+
+  <p>Zod provides a rich set of built-in validators. Here are the most common ones you'll use in forms:</p>
+
+  <h3>String validations</h3>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="cm">// Required (non-empty)</span>
+  <span class="prop">name</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">1</span>, <span class="str">'Name is required'</span>),
+
+  <span class="cm">// Email format</span>
+  <span class="prop">email</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">1</span>, <span class="str">'Email is required'</span>)
+    .<span class="fn">email</span>(<span class="str">'Invalid email address'</span>),
+
+  <span class="cm">// Min/max length</span>
+  <span class="prop">username</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">3</span>, <span class="str">'At least 3 characters'</span>)
+    .<span class="fn">max</span>(<span class="num">20</span>, <span class="str">'Max 20 characters'</span>),
+
+  <span class="cm">// Regex pattern</span>
+  <span class="prop">slug</span>: z.<span class="fn">string</span>()
+    .<span class="fn">regex</span>(<span class="val">/^[a-z0-9-]+$/</span>, <span class="str">'Only lowercase letters, numbers, hyphens'</span>),
+
+  <span class="cm">// URL format</span>
+  <span class="prop">website</span>: z.<span class="fn">string</span>().<span class="fn">url</span>(<span class="str">'Must be a valid URL'</span>).<span class="fn">optional</span>(),
+
+  <span class="cm">// Exact value from a set (enum)</span>
+  <span class="prop">role</span>: z.<span class="fn">enum</span>([<span class="str">'admin'</span>, <span class="str">'user'</span>, <span class="str">'editor'</span>], {
+    <span class="prop">errorMap</span>: () =&gt; ({ <span class="prop">message</span>: <span class="str">'Select a valid role'</span> }),
+  }),
+})</code></pre>
+
+  <h3>Number validations</h3>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="cm">// Basic number</span>
+  <span class="prop">age</span>: z.<span class="fn">number</span>()
+    .<span class="fn">min</span>(<span class="num">13</span>, <span class="str">'Must be at least 13'</span>)
+    .<span class="fn">max</span>(<span class="num">120</span>, <span class="str">'Really?'</span>),
+
+  <span class="cm">// Integer only</span>
+  <span class="prop">quantity</span>: z.<span class="fn">number</span>().<span class="fn">int</span>().<span class="fn">positive</span>(),
+
+  <span class="cm">// coerce: convert string input to number</span>
+  <span class="cm">// HTML inputs always return strings, so this is essential</span>
+  <span class="prop">price</span>: z.<span class="fn">coerce</span>.<span class="fn">number</span>()
+    .<span class="fn">min</span>(<span class="num">0</span>, <span class="str">'Price must be positive'</span>),
+})</code></pre>
+
+  <div class="warn">
+    <strong>HTML inputs return strings!</strong> Even <code>&lt;input type="number"&gt;</code> gives you a string. Use <code>z.coerce.number()</code> to automatically convert the string to a number during validation. Without coerce, you'll get a "Expected number, received string" error.
+  </div>
+
+  <h3>Optional and nullable fields</h3>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="cm">// Optional: field can be missing or undefined</span>
+  <span class="prop">middleName</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),
+  <span class="cm">// Type: string | undefined</span>
+
+  <span class="cm">// Optional with default: fill in if missing</span>
+  <span class="prop">country</span>: z.<span class="fn">string</span>().<span class="fn">default</span>(<span class="str">'US'</span>),
+  <span class="cm">// Type: string (always has a value)</span>
+
+  <span class="cm">// Nullable: field can be null</span>
+  <span class="prop">deletedAt</span>: z.<span class="fn">string</span>().<span class="fn">nullable</span>(),
+  <span class="cm">// Type: string | null</span>
+
+  <span class="cm">// Transform empty string to undefined (common for optional text inputs)</span>
+  <span class="prop">bio</span>: z.<span class="fn">string</span>().<span class="fn">transform</span>(v =&gt; v === <span class="str">''</span> ? <span class="kw">undefined</span> : v).<span class="fn">optional</span>(),
+})</code></pre>
+
+  <!-- ===== FORM-LEVEL VALIDATION ===== -->
+  <h2>Form-Level Validation</h2>
+
+  <p>Sometimes validation depends on multiple fields. Zod's <code>.refine()</code> and <code>.superRefine()</code> handle cross-field validation.</p>
+
+  <h3>Confirm password</h3>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="prop">password</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">8</span>, <span class="str">'Min 8 characters'</span>),
+  <span class="prop">confirmPassword</span>: z.<span class="fn">string</span>(),
+}).<span class="fn">refine</span>(
+  (data) =&gt; data.password === data.confirmPassword,
+  {
+    <span class="prop">message</span>: <span class="str">'Passwords do not match'</span>,
+    <span class="prop">path</span>: [<span class="str">'confirmPassword'</span>],  <span class="cm">// Attach error to this field</span>
+  }
+)</code></pre>
+
+  <div class="note">
+    <strong><code>path</code> is important:</strong> Without <code>path</code>, the error attaches to the root of the form (not any specific field). With <code>path: ['confirmPassword']</code>, the error shows up in <code>errors.confirmPassword</code>, so you can display it next to the right input.
+  </div>
+
+  <h3>Conditional validation</h3>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="prop">contactMethod</span>: z.<span class="fn">enum</span>([<span class="str">'email'</span>, <span class="str">'phone'</span>]),
+  <span class="prop">email</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),
+  <span class="prop">phone</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),
+}).<span class="fn">superRefine</span>((data, ctx) =&gt; {
+  <span class="cm">// If they chose email, email is required</span>
+  <span class="kw">if</span> (data.contactMethod === <span class="str">'email'</span> &amp;&amp; !data.email) {
+    ctx.<span class="fn">addIssue</span>({
+      <span class="prop">code</span>: z.ZodIssueCode.custom,
+      <span class="prop">message</span>: <span class="str">'Email is required'</span>,
+      <span class="prop">path</span>: [<span class="str">'email'</span>],
+    })
+  }
+
+  <span class="cm">// If they chose phone, phone is required</span>
+  <span class="kw">if</span> (data.contactMethod === <span class="str">'phone'</span> &amp;&amp; !data.phone) {
+    ctx.<span class="fn">addIssue</span>({
+      <span class="prop">code</span>: z.ZodIssueCode.custom,
+      <span class="prop">message</span>: <span class="str">'Phone number is required'</span>,
+      <span class="prop">path</span>: [<span class="str">'phone'</span>],
+    })
+  }
+})</code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Pydantic (model_validator)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">class</span> <span class="type">ContactForm</span>(BaseModel):
+    method: <span class="type">str</span>
+    email: <span class="type">str</span> | <span class="kw">None</span>
+
+    <span class="kw">@model_validator</span>(mode=<span class="str">'after'</span>)
+    <span class="kw">def</span> <span class="fn">check</span>(self):
+        <span class="kw">if</span> self.method == <span class="str">'email'</span>:
+            <span class="kw">assert</span> self.email
+        <span class="kw">return</span> self</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Zod (superRefine)</div>
+      <div class="comp-body">
+<pre><code>schema.<span class="fn">superRefine</span>((data, ctx) =&gt; {
+  <span class="kw">if</span> (data.method === <span class="str">'email'</span>
+      &amp;&amp; !data.email) {
+    ctx.<span class="fn">addIssue</span>({
+      <span class="prop">code</span>: z.ZodIssueCode.custom,
+      <span class="prop">message</span>: <span class="str">'Email required'</span>,
+      <span class="prop">path</span>: [<span class="str">'email'</span>],
+    })
+  }
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ASYNC VALIDATION ===== -->
+  <h2>Async Validation</h2>
+
+  <p>Check server-side constraints: is this username taken? Is this email already registered? Zod supports async refinements.</p>
+
+<pre><code><span class="kw">const</span> schema = z.<span class="fn">object</span>({
+  <span class="prop">username</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">3</span>, <span class="str">'At least 3 characters'</span>)
+    .<span class="fn">refine</span>(
+      <span class="kw">async</span> (username) =&gt; {
+        <span class="cm">// Call your API to check availability</span>
+        <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(
+          <span class="str">`/api/check-username?u=${username}`</span>
+        )
+        <span class="kw">const</span> { available } = <span class="kw">await</span> res.<span class="fn">json</span>()
+        <span class="kw">return</span> available
+      },
+      { <span class="prop">message</span>: <span class="str">'Username is already taken'</span> }
+    ),
+  <span class="prop">email</span>: z.<span class="fn">string</span>().<span class="fn">email</span>(),
+})</code></pre>
+
+  <div class="warn">
+    <strong>Performance consideration:</strong> Async validation runs on every validation trigger (submit, blur, change depending on your mode). For server checks, use <code>mode: 'onBlur'</code> so the API call only fires when the user leaves the field, not on every keystroke.
+  </div>
+
+  <!-- ===== ERROR DISPLAY ===== -->
+  <h2>Error Display Patterns</h2>
+
+  <h3>Basic inline error</h3>
+
+<pre><code><span class="tag">&lt;div&gt;</span>
+  <span class="tag">&lt;label&gt;</span>Email<span class="tag">&lt;/label&gt;</span>
+  <span class="tag">&lt;input</span>
+    {...<span class="fn">register</span>(<span class="str">'email'</span>)}
+    <span class="attr">aria-invalid</span>={errors.email ? <span class="str">'true'</span> : <span class="str">'false'</span>}
+  <span class="tag">/&gt;</span>
+  {errors.email &amp;&amp; (
+    <span class="tag">&lt;p</span> <span class="attr">role</span>=<span class="str">"alert"</span> <span class="attr">className</span>=<span class="str">"error"</span><span class="tag">&gt;</span>
+      {errors.email.message}
+    <span class="tag">&lt;/p&gt;</span>
+  )}
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <h3>Reusable error component</h3>
+
+<pre><code><span class="kw">import</span> <span class="kw">type</span> { <span class="type">FieldError</span> } <span class="kw">from</span> <span class="str">'react-hook-form'</span>
+
+<span class="kw">type</span> <span class="type">Props</span> = {
+  <span class="prop">error</span>: <span class="type">FieldError</span> | <span class="kw">undefined</span>
+}
+
+<span class="kw">export const</span> <span class="fn">FieldError</span> = ({ error }: <span class="type">Props</span>) =&gt; {
+  <span class="kw">if</span> (!error) <span class="kw">return null</span>
+  <span class="kw">return</span> (
+    <span class="tag">&lt;p</span> <span class="attr">role</span>=<span class="str">"alert"</span> <span class="attr">style</span>={{ <span class="prop">color</span>: <span class="str">'#ef4444'</span>, <span class="prop">fontSize</span>: <span class="str">'0.875rem'</span> }}<span class="tag">&gt;</span>
+      {error.message}
+    <span class="tag">&lt;/p&gt;</span>
+  )
+}
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">'email'</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;FieldError</span> <span class="attr">error</span>={errors.email} <span class="tag">/&gt;</span></code></pre>
+
+  <h3>Reusable form field wrapper</h3>
+
+<pre><code><span class="kw">type</span> <span class="type">FormFieldProps</span> = {
+  <span class="prop">label</span>: <span class="type">string</span>
+  <span class="prop">error</span>?: <span class="type">FieldError</span>
+  <span class="prop">children</span>: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">export const</span> <span class="fn">FormField</span> = ({ label, error, children }: <span class="type">FormFieldProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="str">`field ${error ? 'field-error' : ''}`</span>}<span class="tag">&gt;</span>
+    <span class="tag">&lt;label&gt;</span>{label}<span class="tag">&lt;/label&gt;</span>
+    {children}
+    {error &amp;&amp; <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"error-msg"</span><span class="tag">&gt;</span>{error.message}<span class="tag">&lt;/p&gt;</span>}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;FormField</span> <span class="attr">label</span>=<span class="str">"Email"</span> <span class="attr">error</span>={errors.email}<span class="tag">&gt;</span>
+  <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"email"</span> {...<span class="fn">register</span>(<span class="str">'email'</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;/FormField&gt;</span></code></pre>
+
+  <!-- ===== REAL EXAMPLE ===== -->
+  <h2>Full Example: Registration Form</h2>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useForm</span> } <span class="kw">from</span> <span class="str">'react-hook-form'</span>
+<span class="kw">import</span> { <span class="fn">zodResolver</span> } <span class="kw">from</span> <span class="str">'@hookform/resolvers/zod'</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="cm">// ---- Schema (single source of truth) ----</span>
+<span class="kw">const</span> registrationSchema = z.<span class="fn">object</span>({
+  <span class="prop">username</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">3</span>, <span class="str">'At least 3 characters'</span>)
+    .<span class="fn">max</span>(<span class="num">20</span>, <span class="str">'Max 20 characters'</span>)
+    .<span class="fn">regex</span>(<span class="val">/^[a-zA-Z0-9_]+$/</span>, <span class="str">'Letters, numbers, underscores only'</span>),
+
+  <span class="prop">email</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">1</span>, <span class="str">'Email is required'</span>)
+    .<span class="fn">email</span>(<span class="str">'Invalid email address'</span>),
+
+  <span class="prop">password</span>: z.<span class="fn">string</span>()
+    .<span class="fn">min</span>(<span class="num">8</span>, <span class="str">'At least 8 characters'</span>)
+    .<span class="fn">regex</span>(<span class="val">/[A-Z]/</span>, <span class="str">'Must contain an uppercase letter'</span>)
+    .<span class="fn">regex</span>(<span class="val">/[0-9]/</span>, <span class="str">'Must contain a number'</span>),
+
+  <span class="prop">confirmPassword</span>: z.<span class="fn">string</span>(),
+
+  <span class="prop">age</span>: z.<span class="fn">coerce</span>.<span class="fn">number</span>()
+    .<span class="fn">min</span>(<span class="num">13</span>, <span class="str">'Must be at least 13'</span>)
+    .<span class="fn">max</span>(<span class="num">120</span>, <span class="str">'Invalid age'</span>),
+
+  <span class="prop">acceptTerms</span>: z.<span class="fn">literal</span>(<span class="kw">true</span>, {
+    <span class="prop">errorMap</span>: () =&gt; ({ <span class="prop">message</span>: <span class="str">'You must accept the terms'</span> }),
+  }),
+}).<span class="fn">refine</span>(
+  (data) =&gt; data.password === data.confirmPassword,
+  {
+    <span class="prop">message</span>: <span class="str">'Passwords do not match'</span>,
+    <span class="prop">path</span>: [<span class="str">'confirmPassword'</span>],
+  }
+)
+
+<span class="cm">// ---- Type (inferred from schema) ----</span>
+<span class="kw">type</span> <span class="type">RegistrationForm</span> = z.<span class="fn">infer</span>&lt;<span class="kw">typeof</span> registrationSchema&gt;
+
+<span class="cm">// ---- Component ----</span>
+<span class="kw">export const</span> <span class="fn">RegistrationPage</span> = () =&gt; {
+  <span class="kw">const</span> {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = <span class="fn">useForm</span>&lt;<span class="type">RegistrationForm</span>&gt;({
+    <span class="prop">resolver</span>: <span class="fn">zodResolver</span>(registrationSchema),
+    <span class="prop">defaultValues</span>: {
+      <span class="prop">username</span>: <span class="str">''</span>,
+      <span class="prop">email</span>: <span class="str">''</span>,
+      <span class="prop">password</span>: <span class="str">''</span>,
+      <span class="prop">confirmPassword</span>: <span class="str">''</span>,
+      <span class="prop">age</span>: <span class="kw">undefined</span> <span class="kw">as</span> <span class="kw">unknown</span> <span class="kw">as</span> <span class="type">number</span>,
+      <span class="prop">acceptTerms</span>: <span class="kw">false</span> <span class="kw">as</span> <span class="kw">unknown</span> <span class="kw">as</span> <span class="kw">true</span>,
+    },
+  })
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (data: <span class="type">RegistrationForm</span>) =&gt; {
+    <span class="cm">// data is fully validated and typed</span>
+    console.<span class="fn">log</span>(<span class="str">'Registering:'</span>, data)
+    <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/register'</span>, {
+      <span class="prop">method</span>: <span class="str">'POST'</span>,
+      <span class="prop">body</span>: <span class="fn">JSON.stringify</span>(data),
+    })
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>Username<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">'username'</span>)} <span class="tag">/&gt;</span>
+        {errors.username &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.username.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>Email<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"email"</span> {...<span class="fn">register</span>(<span class="str">'email'</span>)} <span class="tag">/&gt;</span>
+        {errors.email &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.email.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>Password<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"password"</span> {...<span class="fn">register</span>(<span class="str">'password'</span>)} <span class="tag">/&gt;</span>
+        {errors.password &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.password.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>Confirm Password<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"password"</span> {...<span class="fn">register</span>(<span class="str">'confirmPassword'</span>)} <span class="tag">/&gt;</span>
+        {errors.confirmPassword &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.confirmPassword.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>Age<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"number"</span> {...<span class="fn">register</span>(<span class="str">'age'</span>)} <span class="tag">/&gt;</span>
+        {errors.age &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.age.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label&gt;</span>
+          <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"checkbox"</span> {...<span class="fn">register</span>(<span class="str">'acceptTerms'</span>)} <span class="tag">/&gt;</span>
+          I accept the terms and conditions
+        <span class="tag">&lt;/label&gt;</span>
+        {errors.acceptTerms &amp;&amp; <span class="tag">&lt;p&gt;</span>{errors.acceptTerms.message}<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span> <span class="attr">disabled</span>={isSubmitting}<span class="tag">&gt;</span>
+        {isSubmitting ? <span class="str">'Creating account...'</span> : <span class="str">'Sign up'</span>}
+      <span class="tag">&lt;/button&gt;</span>
+
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Validation Cheat Sheet</h2>
+
+  <table>
+    <thead>
+      <tr><th>What you need</th><th>Zod method</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Required string</td><td><code>.min(1, msg)</code></td><td><code>z.string().min(1, 'Required')</code></td></tr>
+      <tr><td>Email</td><td><code>.email(msg)</code></td><td><code>z.string().email('Invalid')</code></td></tr>
+      <tr><td>Length range</td><td><code>.min() .max()</code></td><td><code>z.string().min(3).max(20)</code></td></tr>
+      <tr><td>Pattern</td><td><code>.regex()</code></td><td><code>z.string().regex(/^[a-z]+$/)</code></td></tr>
+      <tr><td>Number from input</td><td><code>z.coerce.number()</code></td><td><code>z.coerce.number().min(0)</code></td></tr>
+      <tr><td>Enum/select</td><td><code>z.enum()</code></td><td><code>z.enum(['a', 'b', 'c'])</code></td></tr>
+      <tr><td>Cross-field</td><td><code>.refine()</code></td><td>Password confirmation</td></tr>
+      <tr><td>Complex cross-field</td><td><code>.superRefine()</code></td><td>Conditional required fields</td></tr>
+      <tr><td>Async (server check)</td><td><code>.refine(async fn)</code></td><td>Username availability</td></tr>
+      <tr><td>Boolean must be true</td><td><code>z.literal(true)</code></td><td>Accept terms checkbox</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 — Router Setup</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>09 — Router Setup</h1>
+  <p class="subtitle">Client-side routing with TanStack Router: type-safe, file-based, with built-in data loading.</p>
+
+  <!-- ===== WHAT IS CLIENT-SIDE ROUTING ===== -->
+  <h2>What Is Client-Side Routing?</h2>
+
+  <p>In a traditional server-rendered app (Flask, Django), every URL change triggers a <strong>full HTTP request</strong>. The server responds with an entirely new HTML page. In a Single Page Application (SPA), the browser loads your React app once, and then <strong>URL changes are handled entirely in JavaScript</strong> — no page reload, no server round-trip.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Server-side routing (Flask)</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Each URL = full page reload</span>
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/users"</span>)
+<span class="kw">def</span> <span class="fn">users</span>():
+    <span class="kw">return</span> <span class="fn">render_template</span>(<span class="str">"users.html"</span>)
+
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/users/&lt;id&gt;"</span>)
+<span class="kw">def</span> <span class="fn">user_detail</span>(id):
+    <span class="kw">return</span> <span class="fn">render_template</span>(<span class="str">"user.html"</span>)</code></pre>
+        <p>Browser sends GET to server, receives full HTML. White flash between pages.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Client-side routing (React)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// URL changes, but the page doesn't reload</span>
+<span class="cm">// React swaps out the component tree</span>
+<span class="str">"/users"</span>    <span class="cm">// renders &lt;UserList /&gt;</span>
+<span class="str">"/users/42"</span> <span class="cm">// renders &lt;UserDetail /&gt;</span>
+
+<span class="cm">// Under the hood: Browser History API</span>
+<span class="cm">// window.history.pushState()</span></code></pre>
+        <p>No server request. Instant transitions. Shared state persists across "pages."</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How it works under the hood</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">User clicks link</div>
+        <div class="desc">Or uses back/forward</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Router intercepts</div>
+        <div class="desc">Prevents default navigation</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">URL updates</div>
+        <div class="desc">history.pushState()</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">Router matches</div>
+        <div class="desc">URL &rarr; component</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">5</div>
+        <div class="label">React renders</div>
+        <div class="desc">Swaps component tree</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key concept:</strong> The browser's History API (<code>pushState</code>, <code>popstate</code> event) is what makes SPA routing possible. The router library wraps this API so you never touch it directly.
+  </div>
+
+  <!-- ===== WHY TANSTACK ROUTER ===== -->
+  <h2>Why TanStack Router Over React Router?</h2>
+
+  <p>React Router is the classic choice (been around since 2014), but TanStack Router is the modern alternative built for TypeScript-first development. Here's why we're using it:</p>
+
+  <table>
+    <thead>
+      <tr><th>Feature</th><th>React Router</th><th>TanStack Router</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Type safety</td><td>Partial (string-based paths)</td><td>Full (all paths, params, search params typed)</td></tr>
+      <tr><td>Search params</td><td>Manual parsing, untyped</td><td>Built-in Zod validation, fully typed</td></tr>
+      <tr><td>Route loaders</td><td>Basic (v6.4+)</td><td>Deep integration with TanStack Query</td></tr>
+      <tr><td>File-based routing</td><td>Requires Remix or plugin</td><td>Built-in via Vite plugin</td></tr>
+      <tr><td>Preloading</td><td>Manual</td><td>Built-in (preload on hover)</td></tr>
+      <tr><td>Maturity</td><td>Very mature, huge ecosystem</td><td>Newer, smaller ecosystem</td></tr>
+      <tr><td>Bundle size</td><td>~14 KB</td><td>~12 KB</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Python analogy:</strong> Choosing TanStack Router is like choosing FastAPI over Flask. Both work, but one is built from the ground up with type safety and modern patterns (like FastAPI using Pydantic for validation). TanStack Router uses Zod for search params the same way FastAPI uses Pydantic for query params.
+  </div>
+
+  <!-- ===== INSTALLATION ===== -->
+  <h2>Installation</h2>
+
+  <div class="terminal">
+    <span class="prompt">$</span> pnpm add @tanstack/react-router<br>
+    <span class="prompt">$</span> pnpm add -D @tanstack/router-plugin
+  </div>
+
+  <h3>Vite Configuration</h3>
+
+  <p>The Vite plugin watches your <code>src/routes/</code> folder and auto-generates a route tree. You never manually maintain route config.</p>
+
+<pre><code><span class="cm">// vite.config.ts</span>
+<span class="kw">import</span> { <span class="fn">defineConfig</span> } <span class="kw">from</span> <span class="str">'vite'</span>
+<span class="kw">import</span> react <span class="kw">from</span> <span class="str">'@vitejs/plugin-react'</span>
+<span class="kw">import</span> { <span class="fn">TanStackRouterVite</span> } <span class="kw">from</span> <span class="str">'@tanstack/router-plugin/vite'</span>
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  <span class="prop">plugins</span>: [
+    <span class="fn">TanStackRouterVite</span>(),  <span class="cm">// Must be before react()</span>
+    <span class="fn">react</span>(),
+  ],
+})</code></pre>
+
+  <div class="warn">
+    <strong>Order matters:</strong> <code>TanStackRouterVite()</code> must come before <code>react()</code> in the plugins array. It needs to process routes before React's compilation step.
+  </div>
+
+  <!-- ===== FILE-BASED ROUTING ===== -->
+  <h2>File-Based Routing</h2>
+
+  <p>Instead of writing route config manually, you create files in <code>src/routes/</code> and the plugin generates the route tree for you. The file name determines the URL path.</p>
+
+  <div class="panel">
+    <div class="panel-title">File naming conventions</div>
+    <table>
+      <thead>
+        <tr><th>File name</th><th>URL path</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>index.tsx</code></td><td><code>/</code></td><td>Default route for that directory</td></tr>
+        <tr><td><code>about.tsx</code></td><td><code>/about</code></td><td>Static route</td></tr>
+        <tr><td><code>users.tsx</code></td><td><code>/users</code></td><td>Static route (also a layout if it has children)</td></tr>
+        <tr><td><code>users/$userId.tsx</code></td><td><code>/users/:userId</code></td><td>Dynamic segment (like Flask's <code>&lt;userId&gt;</code>)</td></tr>
+        <tr><td><code>_layout.tsx</code></td><td>(none)</td><td>Layout wrapper (no URL segment)</td></tr>
+        <tr><td><code>_authenticated.tsx</code></td><td>(none)</td><td>Pathless layout for route groups</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Flask (decorators)</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Routes defined in Python code</span>
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/"</span>)
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/about"</span>)
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/users"</span>)
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/users/&lt;user_id&gt;"</span>)</code></pre>
+        <p>Routes live alongside handler code. You wire URL to function via decorator.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router (files)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Routes defined by file structure</span>
+src/routes/
+  index.tsx          <span class="cm">// /</span>
+  about.tsx          <span class="cm">// /about</span>
+  users/
+    index.tsx        <span class="cm">// /users</span>
+    $userId.tsx      <span class="cm">// /users/:userId</span></code></pre>
+        <p>File path IS the URL. Each file exports a route component. No manual wiring.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PROJECT STRUCTURE ===== -->
+  <h2>Project Structure with Routing</h2>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">routes/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">__root.tsx</span>          &larr; Root layout (wraps everything: nav, footer)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.tsx</span>            &larr; Home page  (<code>/</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">about.tsx</span>            &larr; About page (<code>/about</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">users/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.tsx</span>          &larr; User list  (<code>/users</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">$userId.tsx</span>        &larr; User detail (<code>/users/42</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">_authenticated/</span>     &larr; Pathless layout (no URL segment)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">dashboard.tsx</span>      &larr; <code>/dashboard</code> (protected)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">settings.tsx</span>       &larr; <code>/settings</code>  (protected)<br>
+    &nbsp;&nbsp;<span class="highlight">routeTree.gen.ts</span>       &larr; Auto-generated! Never edit this.<br>
+    &nbsp;&nbsp;<span class="file">main.tsx</span>               &larr; App entry: creates router, renders &lt;RouterProvider&gt;<br>
+    &nbsp;&nbsp;<span class="dir">components/</span>            &larr; Shared components (not routes)<br>
+    &nbsp;&nbsp;<span class="dir">lib/</span>                   &larr; Utilities, API clients, etc.
+  </div>
+
+  <div class="warn">
+    <strong>Never edit <code>routeTree.gen.ts</code>:</strong> This file is auto-generated by the Vite plugin every time you add, remove, or rename a route file. It will be overwritten on the next build.
+  </div>
+
+  <!-- ===== CONFIGURATION ===== -->
+  <h2>Router Configuration</h2>
+
+  <h3>The root route (<code>__root.tsx</code>)</h3>
+
+  <p>This is the top-level layout that wraps every page. Think of it like your base template in Jinja2.</p>
+
+<pre><code><span class="cm">// src/routes/__root.tsx</span>
+<span class="kw">import</span> { <span class="fn">createRootRoute</span>, <span class="fn">Outlet</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createRootRoute</span>({
+  <span class="prop">component</span>: () =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;nav&gt;</span>
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/"</span><span class="tag">&gt;</span>Home<span class="tag">&lt;/Link&gt;</span>
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/about"</span><span class="tag">&gt;</span>About<span class="tag">&lt;/Link&gt;</span>
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/users"</span><span class="tag">&gt;</span>Users<span class="tag">&lt;/Link&gt;</span>
+      <span class="tag">&lt;/nav&gt;</span>
+      <span class="tag">&lt;Outlet /&gt;</span>  <span class="cm">{/* Child route renders here */}</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+})</code></pre>
+
+  <div class="note">
+    <strong><code>&lt;Outlet /&gt;</code></strong> is the slot where child routes render. Same concept as Jinja2's <code>{% block content %}</code> or Django's <code>{{ block.super }}</code>. The nav stays; the content swaps.
+  </div>
+
+  <h3>A basic route file</h3>
+
+<pre><code><span class="cm">// src/routes/about.tsx</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/about'</span>)({
+  <span class="prop">component</span>: <span class="fn">AboutPage</span>,
+})
+
+<span class="kw">function</span> <span class="fn">AboutPage</span>() {
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>About us<span class="tag">&lt;/h1&gt;</span>
+}</code></pre>
+
+  <h3>Creating the router instance (<code>main.tsx</code>)</h3>
+
+<pre><code><span class="cm">// src/main.tsx</span>
+<span class="kw">import</span> { <span class="fn">StrictMode</span> } <span class="kw">from</span> <span class="str">'react'</span>
+<span class="kw">import</span> { <span class="fn">createRoot</span> } <span class="kw">from</span> <span class="str">'react-dom/client'</span>
+<span class="kw">import</span> { <span class="fn">RouterProvider</span>, <span class="fn">createRouter</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="fn">routeTree</span> } <span class="kw">from</span> <span class="str">'./routeTree.gen'</span>
+
+<span class="cm">// Create a router instance</span>
+<span class="kw">const</span> router = <span class="fn">createRouter</span>({ <span class="prop">routeTree</span> })
+
+<span class="cm">// Register the router for type safety</span>
+<span class="kw">declare module</span> <span class="str">'@tanstack/react-router'</span> {
+  <span class="kw">interface</span> <span class="type">Register</span> {
+    <span class="prop">router</span>: <span class="kw">typeof</span> router
+  }
+}
+
+<span class="fn">createRoot</span>(document.<span class="fn">getElementById</span>(<span class="str">'root'</span>)!).<span class="fn">render</span>(
+  <span class="tag">&lt;StrictMode&gt;</span>
+    <span class="tag">&lt;RouterProvider</span> <span class="attr">router</span>={router} <span class="tag">/&gt;</span>
+  <span class="tag">&lt;/StrictMode&gt;</span>
+)</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">The <code>declare module</code> trick</div>
+    <p>The <code>declare module</code> block tells TypeScript about your specific router instance. This is how TanStack Router achieves full type safety: every <code>&lt;Link to="..."&gt;</code>, every <code>useParams()</code>, every <code>useSearch()</code> in your entire app knows the exact set of valid routes, params, and search params. You get autocomplete and compile-time errors for invalid paths.</p>
+  </div>
+
+  <div class="tip">
+    <strong>Python analogy:</strong> The <code>declare module</code> is conceptually like Python's <code>TYPE_CHECKING</code> pattern. It's purely for the type system, has zero runtime cost, but gives you IDE support everywhere.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Setup Checklist</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><code>pnpm add @tanstack/react-router</code> and <code>pnpm add -D @tanstack/router-plugin</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>Add <code>TanStackRouterVite()</code> to <code>vite.config.ts</code> (before <code>react()</code>)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Create <code>src/routes/__root.tsx</code> with a root layout and <code>&lt;Outlet /&gt;</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>Create route files in <code>src/routes/</code> using <code>createFileRoute</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>In <code>main.tsx</code>: import generated <code>routeTree</code>, create router, render <code>&lt;RouterProvider&gt;</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>Add the <code>declare module</code> block for full type safety</div>
+    </div>
+  </div>
+
+</body>
+</html>

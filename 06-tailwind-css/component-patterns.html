@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>06 — Tailwind Component Patterns</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>06 — Tailwind Component Patterns</h1>
+  <p class="subtitle">How to use Tailwind effectively in React: taming long class strings and building reusable components.</p>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <h2>The Problem: Long Class Strings</h2>
+
+  <p>Once you start adding responsive, hover, focus, and dark mode variants, class strings get long. This is normal and not inherently bad, but it needs management.</p>
+
+<pre><code><span class="cm">{/* This is a real-world button. It's fine, but hard to scan. */}</span>
+<span class="tag">&lt;button</span> <span class="attr">className</span>=<span class="str">"inline-flex items-center justify-center rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"</span><span class="tag">&gt;</span>
+  Save Changes
+<span class="tag">&lt;/button&gt;</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">The solution is NOT to go back to CSS files</div>
+    <p>In Tailwind, the answer to "this class string is too long" is <strong>extract a React component</strong>, not create a CSS class. The component encapsulates the styles and gives you a clean API through props.</p>
+  </div>
+
+  <!-- ===== CN() UTILITY ===== -->
+  <h2>The cn() Utility: Conditional Class Merging</h2>
+
+  <p>Before building components, you need a helper to conditionally join class names and handle Tailwind conflicts. The standard pattern combines two libraries: <code>clsx</code> (conditional joining) and <code>tailwind-merge</code> (deduplication).</p>
+
+  <h3>Installation</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add clsx tailwind-merge<br>
+  </div>
+
+  <h3>Create the helper</h3>
+
+<pre><code><span class="cm">// src/lib/utils.ts</span>
+<span class="kw">import</span> { clsx, <span class="type">type ClassValue</span> } <span class="kw">from</span> <span class="str">"clsx"</span>
+<span class="kw">import</span> { twMerge } <span class="kw">from</span> <span class="str">"tailwind-merge"</span>
+
+<span class="kw">export const</span> <span class="fn">cn</span> = (...inputs: <span class="type">ClassValue[]</span>): <span class="type">string</span> => {
+  <span class="kw">return</span> <span class="fn">twMerge</span>(<span class="fn">clsx</span>(inputs))
+}</code></pre>
+
+  <h3>What each library does</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">clsx: conditional joining</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { clsx } <span class="kw">from</span> <span class="str">"clsx"</span>
+
+<span class="fn">clsx</span>(<span class="str">"px-4"</span>, <span class="str">"py-2"</span>)
+<span class="cm">// "px-4 py-2"</span>
+
+<span class="fn">clsx</span>(<span class="str">"px-4"</span>, isActive &amp;&amp; <span class="str">"bg-blue-500"</span>)
+<span class="cm">// "px-4 bg-blue-500" (if isActive)</span>
+<span class="cm">// "px-4" (if !isActive)</span>
+
+<span class="fn">clsx</span>({
+  <span class="str">"bg-red-500"</span>: hasError,
+  <span class="str">"bg-green-500"</span>: isSuccess,
+})</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">tailwind-merge: deduplication</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { twMerge } <span class="kw">from</span> <span class="str">"tailwind-merge"</span>
+
+<span class="fn">twMerge</span>(<span class="str">"px-4 px-6"</span>)
+<span class="cm">// "px-6" (last one wins)</span>
+
+<span class="fn">twMerge</span>(<span class="str">"bg-red-500 bg-blue-500"</span>)
+<span class="cm">// "bg-blue-500" (removes conflict)</span>
+
+<span class="cm">// Without twMerge, both classes stay</span>
+<span class="cm">// and the one later in CSS wins</span>
+<span class="cm">// (unpredictable!)</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Using cn() in practice</h3>
+
+<pre><code><span class="kw">import</span> { cn } <span class="kw">from</span> <span class="str">"@/lib/utils"</span>
+
+<span class="cm">// Conditional classes</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="fn">cn</span>(
+  <span class="str">"px-4 py-2 rounded-lg"</span>,          <span class="cm">// always applied</span>
+  isActive &amp;&amp; <span class="str">"bg-blue-500 text-white"</span>,  <span class="cm">// only if active</span>
+  isDisabled &amp;&amp; <span class="str">"opacity-50 cursor-not-allowed"</span>,
+)}<span class="tag">&gt;</span>
+
+<span class="cm">// Override defaults from parent</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="fn">cn</span>(
+  <span class="str">"p-4 bg-gray-800"</span>,  <span class="cm">// component defaults</span>
+  className,            <span class="cm">// parent overrides — tailwind-merge resolves conflicts</span>
+)}<span class="tag">&gt;</span></code></pre>
+
+  <div class="note">
+    <strong>Why <code>cn()</code> matters:</strong> Without <code>tailwind-merge</code>, if a parent passes <code>className="p-6"</code> to override <code>p-4</code>, both classes stay in the DOM and the result depends on CSS source order (unreliable). <code>tailwind-merge</code> removes the conflicting <code>p-4</code>, leaving only <code>p-6</code>.
+  </div>
+
+  <!-- ===== VARIANT PATTERN ===== -->
+  <h2>The Variant Pattern: Building a Button</h2>
+
+  <p>The most important Tailwind + React pattern: a component with typed variant props that map to different Tailwind classes.</p>
+
+<pre><code><span class="cm">// src/components/Button.tsx</span>
+<span class="kw">import</span> { cn } <span class="kw">from</span> <span class="str">"@/lib/utils"</span>
+
+<span class="kw">interface</span> <span class="type">ButtonProps</span> <span class="kw">extends</span> React.<span class="type">ButtonHTMLAttributes</span>&lt;<span class="type">HTMLButtonElement</span>&gt; {
+  <span class="prop">variant</span>?: <span class="str">"primary"</span> | <span class="str">"secondary"</span> | <span class="str">"danger"</span> | <span class="str">"ghost"</span>
+  <span class="prop">size</span>?: <span class="str">"sm"</span> | <span class="str">"md"</span> | <span class="str">"lg"</span>
+}
+
+<span class="kw">const</span> variantStyles: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">string</span>&gt; = {
+  <span class="prop">primary</span>: <span class="str">"bg-blue-500 text-white hover:bg-blue-600 focus:ring-blue-500"</span>,
+  <span class="prop">secondary</span>: <span class="str">"bg-gray-700 text-gray-100 hover:bg-gray-600 focus:ring-gray-500"</span>,
+  <span class="prop">danger</span>: <span class="str">"bg-red-500 text-white hover:bg-red-600 focus:ring-red-500"</span>,
+  <span class="prop">ghost</span>: <span class="str">"bg-transparent text-gray-400 hover:text-white hover:bg-gray-800"</span>,
+}
+
+<span class="kw">const</span> sizeStyles: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">string</span>&gt; = {
+  <span class="prop">sm</span>: <span class="str">"px-3 py-1.5 text-xs"</span>,
+  <span class="prop">md</span>: <span class="str">"px-4 py-2 text-sm"</span>,
+  <span class="prop">lg</span>: <span class="str">"px-6 py-3 text-base"</span>,
+}
+
+<span class="kw">export const</span> <span class="fn">Button</span> = ({
+  variant = <span class="str">"primary"</span>,
+  size = <span class="str">"md"</span>,
+  className,
+  children,
+  ...props
+}: <span class="type">ButtonProps</span>) => {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;button</span>
+      <span class="attr">className</span>={<span class="fn">cn</span>(
+        <span class="cm">// Base styles (always applied)</span>
+        <span class="str">"inline-flex items-center justify-center rounded-lg font-medium"</span>,
+        <span class="str">"focus:outline-none focus:ring-2 focus:ring-offset-2"</span>,
+        <span class="str">"disabled:opacity-50 disabled:cursor-not-allowed"</span>,
+        <span class="str">"transition-all duration-150 active:scale-95"</span>,
+        <span class="cm">// Variant + size</span>
+        variantStyles[variant],
+        sizeStyles[size],
+        <span class="cm">// Allow parent to override</span>
+        className,
+      )}
+      {...props}
+    <span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/button&gt;</span>
+  )
+}</code></pre>
+
+  <h3>Usage</h3>
+
+<pre><code><span class="cm">// Default: primary, medium</span>
+<span class="tag">&lt;Button&gt;</span>Save<span class="tag">&lt;/Button&gt;</span>
+
+<span class="cm">// Danger variant, large size</span>
+<span class="tag">&lt;Button</span> <span class="attr">variant</span>=<span class="str">"danger"</span> <span class="attr">size</span>=<span class="str">"lg"</span><span class="tag">&gt;</span>Delete Account<span class="tag">&lt;/Button&gt;</span>
+
+<span class="cm">// Ghost with custom override</span>
+<span class="tag">&lt;Button</span> <span class="attr">variant</span>=<span class="str">"ghost"</span> <span class="attr">className</span>=<span class="str">"mt-4"</span><span class="tag">&gt;</span>Cancel<span class="tag">&lt;/Button&gt;</span>
+
+<span class="cm">// Disabled (native HTML attribute, passed via ...props)</span>
+<span class="tag">&lt;Button</span> <span class="attr">disabled</span><span class="tag">&gt;</span>Loading...<span class="tag">&lt;/Button&gt;</span></code></pre>
+
+  <div class="tip">
+    <strong>Key pattern:</strong> <code>extends React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code> lets the component accept all native button props (<code>onClick</code>, <code>disabled</code>, <code>type</code>, etc.) without listing them manually. The spread <code>{...props}</code> passes them to the underlying <code>&lt;button&gt;</code>.
+  </div>
+
+  <!-- ===== COMPONENT EXTRACTION ===== -->
+  <h2>When to Extract a Component</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Extract when:</div>
+      <div class="comp-body">
+        <ul>
+          <li>You're copying the same class string 3+ times</li>
+          <li>The element has variants (sizes, colors, states)</li>
+          <li>It has complex conditional styling logic</li>
+          <li>It's a recognizable UI pattern (Button, Card, Badge, Input)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Don't extract when:</div>
+      <div class="comp-body">
+        <ul>
+          <li>It's used only once or twice</li>
+          <li>It's just a layout wrapper (<code>flex gap-4</code>)</li>
+          <li>Extraction would create a component with only <code>className</code> and <code>children</code> props</li>
+          <li>You're trying to avoid long class strings (that's fine)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== COMMON COMPONENTS ===== -->
+  <h2>Common Component Examples</h2>
+
+  <h3>Card</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">CardProps</span> {
+  <span class="prop">children</span>: React.<span class="type">ReactNode</span>
+  <span class="prop">className</span>?: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Card</span> = ({ children, className }: <span class="type">CardProps</span>) => (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="fn">cn</span>(
+    <span class="str">"rounded-xl border border-gray-800 bg-gray-900 p-6"</span>,
+    className,
+  )}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="kw">export const</span> <span class="fn">CardTitle</span> = ({ children, className }: <span class="type">CardProps</span>) => (
+  <span class="tag">&lt;h3</span> <span class="attr">className</span>={<span class="fn">cn</span>(<span class="str">"text-lg font-semibold text-white mb-2"</span>, className)}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/h3&gt;</span>
+)
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;Card&gt;</span>
+  <span class="tag">&lt;CardTitle&gt;</span>Settings<span class="tag">&lt;/CardTitle&gt;</span>
+  <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"text-gray-400"</span><span class="tag">&gt;</span>Configure your account.<span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;/Card&gt;</span></code></pre>
+
+  <h3>Badge</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">BadgeProps</span> {
+  <span class="prop">children</span>: React.<span class="type">ReactNode</span>
+  <span class="prop">color</span>?: <span class="str">"gray"</span> | <span class="str">"green"</span> | <span class="str">"red"</span> | <span class="str">"blue"</span> | <span class="str">"yellow"</span>
+  <span class="prop">className</span>?: <span class="type">string</span>
+}
+
+<span class="kw">const</span> colorStyles: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">string</span>&gt; = {
+  <span class="prop">gray</span>: <span class="str">"bg-gray-800 text-gray-300"</span>,
+  <span class="prop">green</span>: <span class="str">"bg-green-900/50 text-green-400"</span>,
+  <span class="prop">red</span>: <span class="str">"bg-red-900/50 text-red-400"</span>,
+  <span class="prop">blue</span>: <span class="str">"bg-blue-900/50 text-blue-400"</span>,
+  <span class="prop">yellow</span>: <span class="str">"bg-yellow-900/50 text-yellow-400"</span>,
+}
+
+<span class="kw">export const</span> <span class="fn">Badge</span> = ({ children, color = <span class="str">"gray"</span>, className }: <span class="type">BadgeProps</span>) => (
+  <span class="tag">&lt;span</span> <span class="attr">className</span>={<span class="fn">cn</span>(
+    <span class="str">"inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"</span>,
+    colorStyles[color],
+    className,
+  )}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/span&gt;</span>
+)
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;Badge</span> <span class="attr">color</span>=<span class="str">"green"</span><span class="tag">&gt;</span>Active<span class="tag">&lt;/Badge&gt;</span>
+<span class="tag">&lt;Badge</span> <span class="attr">color</span>=<span class="str">"red"</span><span class="tag">&gt;</span>Error<span class="tag">&lt;/Badge&gt;</span>
+<span class="tag">&lt;Badge&gt;</span>Draft<span class="tag">&lt;/Badge&gt;</span></code></pre>
+
+  <h3>Input</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">InputProps</span> <span class="kw">extends</span> React.<span class="type">InputHTMLAttributes</span>&lt;<span class="type">HTMLInputElement</span>&gt; {
+  <span class="prop">label</span>?: <span class="type">string</span>
+  <span class="prop">error</span>?: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Input</span> = ({ label, error, className, id, ...props }: <span class="type">InputProps</span>) => (
+  <span class="tag">&lt;div&gt;</span>
+    {label &amp;&amp; (
+      <span class="tag">&lt;label</span>
+        <span class="attr">htmlFor</span>={id}
+        <span class="attr">className</span>=<span class="str">"block text-sm font-medium text-gray-300 mb-1.5"</span>
+      <span class="tag">&gt;</span>
+        {label}
+      <span class="tag">&lt;/label&gt;</span>
+    )}
+    <span class="tag">&lt;input</span>
+      <span class="attr">id</span>={id}
+      <span class="attr">className</span>={<span class="fn">cn</span>(
+        <span class="str">"block w-full rounded-lg border bg-gray-900 px-3 py-2 text-sm text-white"</span>,
+        <span class="str">"placeholder:text-gray-500"</span>,
+        <span class="str">"focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-950"</span>,
+        error
+          ? <span class="str">"border-red-500 focus:ring-red-500"</span>
+          : <span class="str">"border-gray-700 focus:ring-blue-500"</span>,
+        className,
+      )}
+      {...props}
+    <span class="tag">/&gt;</span>
+    {error &amp;&amp; (
+      <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"mt-1.5 text-xs text-red-400"</span><span class="tag">&gt;</span>{error}<span class="tag">&lt;/p&gt;</span>
+    )}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;Input</span> <span class="attr">label</span>=<span class="str">"Email"</span> <span class="attr">type</span>=<span class="str">"email"</span> <span class="attr">placeholder</span>=<span class="str">"you@example.com"</span> <span class="tag">/&gt;</span>
+<span class="tag">&lt;Input</span> <span class="attr">label</span>=<span class="str">"Name"</span> <span class="attr">error</span>=<span class="str">"Name is required"</span> <span class="tag">/&gt;</span></code></pre>
+
+  <!-- ===== DON'T DO ===== -->
+  <h2>Anti-Patterns to Avoid</h2>
+
+  <div class="panel">
+    <div class="panel-title">1. Don't use @apply</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">@apply defeats the purpose</div>
+        <div class="comp-body">
+<pre><code><span class="cm">/* Don't do this */</span>
+.<span class="fn">btn-primary</span> {
+  <span class="kw">@apply</span> inline-flex items-center
+    rounded-lg bg-blue-500 px-4 py-2
+    text-sm font-medium text-white;
+}
+<span class="cm">/* You just recreated traditional CSS</span>
+<span class="cm">   with extra steps. The class string is</span>
+<span class="cm">   still there, just hidden in CSS. */</span></code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Extract a component instead</div>
+        <div class="comp-body">
+<pre><code><span class="cm">// Do this instead</span>
+<span class="kw">export const</span> <span class="fn">Button</span> = ({ children }: <span class="type">Props</span>) => (
+  <span class="tag">&lt;button</span> <span class="attr">className</span>=<span class="str">"inline-flex items-center
+    rounded-lg bg-blue-500 px-4 py-2
+    text-sm font-medium text-white"</span>
+  <span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/button&gt;</span>
+)
+<span class="cm">// Encapsulated, reusable, typed props</span></code></pre>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top: 10px; color: #999;">The one acceptable use of <code>@apply</code>: styling third-party HTML you don't control (e.g., Markdown rendered by a CMS).</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">2. Don't mix CSS Modules and Tailwind</div>
+    <p>Pick one approach. Using both means two systems to maintain, conflicting specificity rules, and confusion about where styles live. Tailwind is designed to be your entire styling solution.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">3. Don't use inconsistent spacing</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Inconsistent</div>
+        <div class="comp-body">
+<pre><code><span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-3"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-5"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-7"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="cm">{/* Slightly different padding everywhere */}</span></code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Consistent</div>
+        <div class="comp-body">
+<pre><code><span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-4"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-4"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"p-6"</span><span class="tag">&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+<span class="cm">{/* Stick to 4, 6, 8 for most padding */}</span></code></pre>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top: 10px; color: #999;">Pick a small set of spacing values and stick with them. Most apps use <code>2, 4, 6, 8, 12</code> for padding/margin and <code>3, 4, 6, 8</code> for gap.</p>
+  </div>
+
+  <!-- ===== ORGANIZING ===== -->
+  <h2>Organizing Tailwind Classes</h2>
+
+  <p>When class strings are long, use a consistent order. The Tailwind Prettier plugin sorts them automatically, but here's the mental model:</p>
+
+  <table>
+    <thead>
+      <tr><th>Order</th><th>Category</th><th>Examples</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Layout / Display</td><td><code>flex</code>, <code>grid</code>, <code>block</code>, <code>hidden</code></td></tr>
+      <tr><td>2</td><td>Position / Overflow</td><td><code>relative</code>, <code>absolute</code>, <code>overflow-hidden</code></td></tr>
+      <tr><td>3</td><td>Sizing</td><td><code>w-full</code>, <code>h-10</code>, <code>max-w-lg</code></td></tr>
+      <tr><td>4</td><td>Flex/Grid children</td><td><code>items-center</code>, <code>justify-between</code>, <code>gap-4</code></td></tr>
+      <tr><td>5</td><td>Spacing</td><td><code>p-4</code>, <code>px-6</code>, <code>mt-2</code>, <code>mb-4</code></td></tr>
+      <tr><td>6</td><td>Border / Rounded / Shadow</td><td><code>border</code>, <code>rounded-lg</code>, <code>shadow-md</code></td></tr>
+      <tr><td>7</td><td>Background</td><td><code>bg-gray-900</code></td></tr>
+      <tr><td>8</td><td>Typography</td><td><code>text-sm</code>, <code>font-bold</code>, <code>text-gray-400</code></td></tr>
+      <tr><td>9</td><td>States / Transitions</td><td><code>hover:</code>, <code>focus:</code>, <code>transition</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add -D prettier-plugin-tailwindcss<br>
+  </div>
+
+  <p>The Prettier plugin auto-sorts your classes on save. No need to think about ordering manually.</p>
+
+  <!-- ===== FILE STRUCTURE ===== -->
+  <h2>Recommended File Structure</h2>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">ui/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// Primitive UI components</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Button.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Card.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Badge.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Input.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.ts</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// re-exports all UI components</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">features/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// Feature-specific components</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">UserCard.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">TodoItem.tsx</span><br>
+    &nbsp;&nbsp;<span class="dir">lib/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">utils.ts</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// cn() helper lives here</span><br>
+    &nbsp;&nbsp;<span class="file">index.css</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// @import "tailwindcss" + @theme</span><br>
+  </div>
+
+  <div class="note">
+    <strong>Pattern:</strong> <code>ui/</code> folder contains generic, reusable components with no business logic (Button, Card, Badge). <code>features/</code> contains app-specific components that compose <code>ui/</code> components. This separation keeps your design system clean and your feature code focused.
+  </div>
+
+</body>
+</html>

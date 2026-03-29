@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 — ES Modules</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>03 — ES Modules</h1>
+  <p class="subtitle">How TypeScript/JavaScript organizes code into files. Every file is a module.</p>
+
+  <!-- ===== OVERVIEW ===== -->
+  <h2>Module System Overview</h2>
+
+  <div class="panel">
+    <div class="panel-title">What's a module?</div>
+    <p>In modern JS/TS, <strong>every file is a module</strong>. Variables, functions, and types are private to the file unless explicitly exported. This is the same as Python: code in <code>utils.py</code> isn't accessible elsewhere unless you <code>import</code> it.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript / ES Modules</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// math.ts</span>
+<span class="kw">export const</span> <span class="fn">add</span> = (a: <span class="type">number</span>, b: <span class="type">number</span>) => a + b
+<span class="kw">export const</span> PI = <span class="num">3.14159</span>
+
+<span class="cm">// app.ts</span>
+<span class="kw">import</span> { add, PI } <span class="kw">from</span> <span class="str">"./math"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># math_utils.py</span>
+<span class="kw">def</span> <span class="fn">add</span>(a: <span class="type">int</span>, b: <span class="type">int</span>) -> <span class="type">int</span>:
+    <span class="kw">return</span> a + b
+PI = <span class="num">3.14159</span>
+
+<span class="cm"># app.py</span>
+<span class="kw">from</span> math_utils <span class="kw">import</span> add, PI</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Historical context:</strong> JS originally had no module system. Scripts shared a global scope (chaos). CommonJS (<code>require()</code>) came with Node.js. ES Modules (<code>import/export</code>) is the modern standard. Always use ES Modules in new code.
+  </div>
+
+  <!-- ===== NAMED EXPORTS ===== -->
+  <h2>Named Exports (Preferred)</h2>
+
+  <p>Export specific items by name. Consumers import them by the exact same name.</p>
+
+  <h3>Two equivalent syntaxes</h3>
+
+<pre><code><span class="cm">// Style 1: inline export (preferred — export as you define)</span>
+<span class="kw">export const</span> <span class="fn">formatDate</span> = (d: <span class="type">Date</span>): <span class="type">string</span> => d.<span class="fn">toISOString</span>()
+<span class="kw">export type</span> <span class="type">User</span> = { name: <span class="type">string</span>; age: <span class="type">number</span> }
+<span class="kw">export const</span> MAX_RETRIES = <span class="num">3</span>
+
+<span class="cm">// Style 2: export list at bottom (less common)</span>
+<span class="kw">const</span> <span class="fn">formatDate</span> = (d: <span class="type">Date</span>): <span class="type">string</span> => d.<span class="fn">toISOString</span>()
+<span class="kw">type</span> <span class="type">User</span> = { name: <span class="type">string</span>; age: <span class="type">number</span> }
+<span class="kw">const</span> MAX_RETRIES = <span class="num">3</span>
+
+<span class="kw">export</span> { formatDate, <span class="type">User</span>, MAX_RETRIES }</code></pre>
+
+  <h3>Importing Named Exports</h3>
+
+<pre><code><span class="cm">// Import specific items</span>
+<span class="kw">import</span> { formatDate, <span class="kw">type</span> <span class="type">User</span> } <span class="kw">from</span> <span class="str">"./utils"</span>
+
+<span class="cm">// Rename on import (like Python's "as")</span>
+<span class="kw">import</span> { formatDate <span class="kw">as</span> fmt } <span class="kw">from</span> <span class="str">"./utils"</span>
+
+<span class="cm">// Import everything as a namespace</span>
+<span class="kw">import</span> * <span class="kw">as</span> utils <span class="kw">from</span> <span class="str">"./utils"</span>
+utils.<span class="fn">formatDate</span>(<span class="kw">new</span> <span class="type">Date</span>())
+<span class="cm">// Like Python: import utils</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript imports</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { add } <span class="kw">from</span> <span class="str">"./math"</span>
+<span class="kw">import</span> { add <span class="kw">as</span> sum } <span class="kw">from</span> <span class="str">"./math"</span>
+<span class="kw">import</span> * <span class="kw">as</span> math <span class="kw">from</span> <span class="str">"./math"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python imports</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> math <span class="kw">import</span> add
+<span class="kw">from</span> math <span class="kw">import</span> add <span class="kw">as</span> sum_fn
+<span class="kw">import</span> math</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DEFAULT EXPORTS ===== -->
+  <h2>Default Exports (Avoid)</h2>
+
+  <p>Each module can have one "default" export. The consumer picks any name for it.</p>
+
+<pre><code><span class="cm">// Button.tsx — default export</span>
+<span class="kw">const</span> <span class="fn">Button</span> = () => &lt;<span class="tag">button</span>&gt;Click&lt;/<span class="tag">button</span>&gt;
+<span class="kw">export default</span> Button
+
+<span class="cm">// App.tsx — import with ANY name (no braces)</span>
+<span class="kw">import</span> Button <span class="kw">from</span> <span class="str">"./Button"</span>      <span class="cm">// works</span>
+<span class="kw">import</span> MyButton <span class="kw">from</span> <span class="str">"./Button"</span>    <span class="cm">// also works — same thing!</span>
+<span class="kw">import</span> Banana <span class="kw">from</span> <span class="str">"./Button"</span>      <span class="cm">// also works — confusing!</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Why avoid default exports?</div>
+    <ul>
+      <li><strong>No autocomplete</strong> — editors can't suggest the name since you can use anything</li>
+      <li><strong>Inconsistent naming</strong> — different files import the same thing with different names</li>
+      <li><strong>Harder to refactor</strong> — rename-symbol doesn't catch all usages</li>
+      <li><strong>Can't tree-shake</strong> as effectively — bundlers optimize named exports better</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Default export (avoid)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// UserCard.tsx</span>
+<span class="kw">export default</span> <span class="kw">const</span> <span class="fn">UserCard</span> = ...
+
+<span class="cm">// Various importers use different names:</span>
+<span class="kw">import</span> UserCard <span class="kw">from</span> <span class="str">"./UserCard"</span>
+<span class="kw">import</span> Card <span class="kw">from</span> <span class="str">"./UserCard"</span>
+<span class="kw">import</span> UC <span class="kw">from</span> <span class="str">"./UserCard"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Named export (preferred)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// UserCard.tsx</span>
+<span class="kw">export const</span> <span class="fn">UserCard</span> = ...
+
+<span class="cm">// Everyone uses the same name:</span>
+<span class="kw">import</span> { UserCard } <span class="kw">from</span> <span class="str">"./UserCard"</span>
+<span class="kw">import</span> { UserCard } <span class="kw">from</span> <span class="str">"./UserCard"</span>
+<span class="kw">import</span> { UserCard } <span class="kw">from</span> <span class="str">"./UserCard"</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Exception:</strong> Some frameworks (Next.js pages, React.lazy) require default exports. Use them there, but prefer named exports everywhere else.
+  </div>
+
+  <!-- ===== TYPE-ONLY IMPORTS ===== -->
+  <h2>Type-Only Imports</h2>
+
+  <p>TypeScript adds <code>import type</code> to explicitly mark imports that are types only — they're erased at compile time and produce no JS code.</p>
+
+<pre><code><span class="cm">// types.ts</span>
+<span class="kw">export type</span> <span class="type">User</span> = { id: <span class="type">number</span>; name: <span class="type">string</span> }
+<span class="kw">export interface</span> <span class="type">ApiResponse</span>&lt;<span class="type">T</span>&gt; { data: <span class="type">T</span>; status: <span class="type">number</span> }
+
+<span class="cm">// consumer.ts — three ways to import types:</span>
+
+<span class="cm">// 1. Type-only import (whole statement)</span>
+<span class="kw">import type</span> { <span class="type">User</span>, <span class="type">ApiResponse</span> } <span class="kw">from</span> <span class="str">"./types"</span>
+
+<span class="cm">// 2. Inline type modifier (mix values and types)</span>
+<span class="kw">import</span> { <span class="fn">fetchUsers</span>, <span class="kw">type</span> <span class="type">User</span> } <span class="kw">from</span> <span class="str">"./api"</span>
+
+<span class="cm">// 3. Regular import (also works, but less explicit)</span>
+<span class="kw">import</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">"./types"</span>
+<span class="cm">// TS knows User is a type and will erase it</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Why bother with <code>import type</code>?</div>
+    <ul>
+      <li><strong>Clarity</strong> — makes it obvious what's a type vs a runtime value</li>
+      <li><strong>Prevents bugs</strong> — can't accidentally use a type as a value at runtime</li>
+      <li><strong>Better bundling</strong> — bundlers can more easily drop type-only imports</li>
+      <li><strong>Required sometimes</strong> — some TS configs (<code>verbatimModuleSyntax</code>) enforce this</li>
+    </ul>
+  </div>
+
+  <!-- ===== RE-EXPORTS ===== -->
+  <h2>Re-exports (Barrel Files)</h2>
+
+  <p>Re-export items from other modules. Used to create "barrel files" — a single entry point for a folder.</p>
+
+<pre><code><span class="cm">// components/Button.tsx</span>
+<span class="kw">export const</span> <span class="fn">Button</span> = () => { ... }
+
+<span class="cm">// components/Card.tsx</span>
+<span class="kw">export const</span> <span class="fn">Card</span> = () => { ... }
+
+<span class="cm">// components/index.ts — barrel file</span>
+<span class="kw">export</span> { Button } <span class="kw">from</span> <span class="str">"./Button"</span>
+<span class="kw">export</span> { Card } <span class="kw">from</span> <span class="str">"./Card"</span>
+<span class="kw">export type</span> { ButtonProps } <span class="kw">from</span> <span class="str">"./Button"</span>
+
+<span class="cm">// Now consumers import from the folder:</span>
+<span class="kw">import</span> { Button, Card } <span class="kw">from</span> <span class="str">"./components"</span>
+<span class="cm">// instead of:</span>
+<span class="cm">// import { Button } from "./components/Button"</span>
+<span class="cm">// import { Card } from "./components/Card"</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript barrel</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// index.ts</span>
+<span class="kw">export</span> { Button } <span class="kw">from</span> <span class="str">"./Button"</span>
+<span class="kw">export</span> { Card } <span class="kw">from</span> <span class="str">"./Card"</span>
+
+<span class="cm">// Re-export all:</span>
+<span class="kw">export</span> * <span class="kw">from</span> <span class="str">"./utils"</span>
+
+<span class="cm">// Re-export with rename:</span>
+<span class="kw">export</span> { Button <span class="kw">as</span> Btn } <span class="kw">from</span> <span class="str">"./Button"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python __init__.py</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># __init__.py</span>
+<span class="kw">from</span> .button <span class="kw">import</span> Button
+<span class="kw">from</span> .card <span class="kw">import</span> Card
+
+<span class="cm"># Re-export all:</span>
+<span class="kw">from</span> .utils <span class="kw">import</span> *
+
+<span class="cm"># Same concept — index.ts = __init__.py</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Gotcha: Barrel files can hurt performance.</strong> If you <code>export * from "./utils"</code> and <code>utils</code> has 100 exports, importing one thing pulls in everything. Keep barrels small and specific. Some teams avoid them entirely.
+  </div>
+
+  <!-- ===== DYNAMIC IMPORTS ===== -->
+  <h2>Dynamic Imports</h2>
+
+  <p>Load modules at runtime instead of at build time. Returns a Promise. Used for code splitting.</p>
+
+<pre><code><span class="cm">// Static import — always loaded</span>
+<span class="kw">import</span> { heavyFunction } <span class="kw">from</span> <span class="str">"./heavy-module"</span>
+
+<span class="cm">// Dynamic import — loaded on demand</span>
+<span class="kw">const</span> <span class="fn">loadHeavy</span> = <span class="kw">async</span> () => {
+  <span class="kw">const</span> { heavyFunction } = <span class="kw">await</span> <span class="kw">import</span>(<span class="str">"./heavy-module"</span>)
+  <span class="fn">heavyFunction</span>()
+}
+
+<span class="cm">// React lazy loading (code splitting)</span>
+<span class="kw">const</span> AdminPanel = <span class="fn">lazy</span>(() => <span class="kw">import</span>(<span class="str">"./AdminPanel"</span>))
+<span class="cm">// AdminPanel code is only downloaded when the component renders</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> mod = <span class="kw">await import</span>(<span class="str">"./module"</span>)
+mod.<span class="fn">doStuff</span>()</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> importlib
+mod = importlib.<span class="fn">import_module</span>(<span class="str">"module"</span>)
+mod.<span class="fn">do_stuff</span>()</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SIDE-EFFECT IMPORTS ===== -->
+  <h2>Side-Effect Imports</h2>
+
+  <p>Import a module purely for its side effects (no values imported). The module's top-level code runs.</p>
+
+<pre><code><span class="cm">// Import CSS — the bundler processes it, no export needed</span>
+<span class="kw">import</span> <span class="str">"./styles.css"</span>
+
+<span class="cm">// Import a polyfill — modifies global scope</span>
+<span class="kw">import</span> <span class="str">"core-js/stable"</span>
+
+<span class="cm">// Import just to run initialization code</span>
+<span class="kw">import</span> <span class="str">"./init-analytics"</span></code></pre>
+
+  <div class="note">
+    <strong>CSS imports</strong> are a bundler feature (Vite, webpack), not native JS. The bundler sees the import and injects the CSS into the page. This is how component-scoped styles work in React projects.
+  </div>
+
+  <!-- ===== MODULE RESOLUTION ===== -->
+  <h2>Module Resolution</h2>
+
+  <p>How TypeScript/bundlers find the file when you write <code>import ... from "..."</code>.</p>
+
+  <table>
+    <thead>
+      <tr><th>Import path</th><th>What it resolves to</th><th>Type</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>"./utils"</code></td><td><code>./utils.ts</code> or <code>./utils/index.ts</code></td><td>Relative</td></tr>
+      <tr><td><code>"../hooks/useAuth"</code></td><td><code>../hooks/useAuth.ts</code></td><td>Relative</td></tr>
+      <tr><td><code>"react"</code></td><td><code>node_modules/react/...</code></td><td>Package</td></tr>
+      <tr><td><code>"@/components/Button"</code></td><td>Aliased path (configured in tsconfig)</td><td>Alias</td></tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">File extensions</div>
+    <ul>
+      <li><strong>TypeScript</strong>: Omit <code>.ts</code> / <code>.tsx</code> extensions in imports. TS resolves them automatically.</li>
+      <li><strong>CSS / JSON / assets</strong>: Include the extension: <code>import "./styles.css"</code>, <code>import data from "./data.json"</code></li>
+    </ul>
+    <p style="margin-top: 8px;">This differs from Python where you never include <code>.py</code> in imports.</p>
+  </div>
+
+  <h3>Path Aliases</h3>
+
+<pre><code><span class="cm">// tsconfig.json — configure path aliases</span>
+{
+  <span class="str">"compilerOptions"</span>: {
+    <span class="str">"paths"</span>: {
+      <span class="str">"@/*"</span>: [<span class="str">"./src/*"</span>]
+    }
+  }
+}
+
+<span class="cm">// Now instead of this nightmare:</span>
+<span class="kw">import</span> { Button } <span class="kw">from</span> <span class="str">"../../../components/Button"</span>
+
+<span class="cm">// You write:</span>
+<span class="kw">import</span> { Button } <span class="kw">from</span> <span class="str">"@/components/Button"</span></code></pre>
+
+  <!-- ===== FILE ORGANIZATION ===== -->
+  <h2>Common File Organization</h2>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">Button/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// component</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.test.tsx</span> <span class="cm">// tests</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">index.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// re-exports Button</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">Card/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Card.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">index.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">index.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// barrel: exports Button, Card</span><br>
+    &nbsp;&nbsp;<span class="dir">hooks/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useAuth.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useFetch.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">types/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">api.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// shared types</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">user.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">utils/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">format.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">validation.ts</span><br>
+    &nbsp;&nbsp;<span class="file">App.tsx</span><br>
+    &nbsp;&nbsp;<span class="file">main.tsx</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// entry point</span>
+  </div>
+
+  <!-- ===== GOTCHAS ===== -->
+  <h2>Common Mistakes &amp; Gotchas</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Circular imports</div>
+<pre><code><span class="cm">// a.ts</span>
+<span class="kw">import</span> { B } <span class="kw">from</span> <span class="str">"./b"</span>
+<span class="kw">export const</span> A = <span class="str">"A uses "</span> + B
+
+<span class="cm">// b.ts</span>
+<span class="kw">import</span> { A } <span class="kw">from</span> <span class="str">"./a"</span>  <span class="cm">// circular!</span>
+<span class="kw">export const</span> B = <span class="str">"B uses "</span> + A
+
+<span class="cm">// A is undefined at import time</span>
+<span class="cm">// Fix: restructure or use a shared module</span></code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Importing types as values</div>
+<pre><code><span class="kw">import type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">"./types"</span>
+
+<span class="cm">// ERROR: can't use type as a value</span>
+<span class="kw">const</span> u = <span class="kw">new</span> <span class="type">User</span>()         <span class="cm">// types don't exist at runtime</span>
+console.<span class="fn">log</span>(<span class="type">User</span>)             <span class="cm">// types are erased</span>
+
+<span class="cm">// OK: use type as a type annotation</span>
+<span class="kw">const</span> u: <span class="type">User</span> = { ... }       <span class="cm">// type annotation is fine</span>
+<span class="kw">const</span> <span class="fn">fn</span> = (u: <span class="type">User</span>) => ... <span class="cm">// parameter type is fine</span></code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Import order convention</div>
+<pre><code><span class="cm">// 1. External packages (node_modules)</span>
+<span class="kw">import</span> { useState } <span class="kw">from</span> <span class="str">"react"</span>
+<span class="kw">import</span> { useQuery } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+
+<span class="cm">// 2. Internal aliases</span>
+<span class="kw">import</span> { Button } <span class="kw">from</span> <span class="str">"@/components/Button"</span>
+<span class="kw">import</span> { useAuth } <span class="kw">from</span> <span class="str">"@/hooks/useAuth"</span>
+
+<span class="cm">// 3. Relative imports</span>
+<span class="kw">import</span> { formatName } <span class="kw">from</span> <span class="str">"./utils"</span>
+
+<span class="cm">// 4. Type imports</span>
+<span class="kw">import type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">"@/types/user"</span>
+
+<span class="cm">// 5. Side-effect imports</span>
+<span class="kw">import</span> <span class="str">"./styles.css"</span>
+
+<span class="cm">// ESLint plugins can auto-sort imports for you</span></code></pre>
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Syntax</th><th>What it does</th><th>Python analogy</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>export const fn = ...</code></td><td>Named export</td><td>Just define it (all public by default in Python)</td></tr>
+      <tr><td><code>import { fn } from "./mod"</code></td><td>Named import</td><td><code>from mod import fn</code></td></tr>
+      <tr><td><code>import { fn as alias }</code></td><td>Rename import</td><td><code>from mod import fn as alias</code></td></tr>
+      <tr><td><code>import * as mod</code></td><td>Namespace import</td><td><code>import mod</code></td></tr>
+      <tr><td><code>export default fn</code></td><td>Default export (avoid)</td><td>No direct equivalent</td></tr>
+      <tr><td><code>import type { T }</code></td><td>Type-only import</td><td><code>from typing import T</code> (always erased)</td></tr>
+      <tr><td><code>export { X } from "./y"</code></td><td>Re-export</td><td><code>from .y import X</code> in <code>__init__.py</code></td></tr>
+      <tr><td><code>import("./mod")</code></td><td>Dynamic import</td><td><code>importlib.import_module()</code></td></tr>
+      <tr><td><code>import "./styles.css"</code></td><td>Side-effect import</td><td>No equivalent</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 — Data Loading</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>09 — Data Loading</h1>
+  <p class="subtitle">Route loaders, TanStack Query integration, pending UI, error handling, and preloading for instant navigation.</p>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <h2>The Problem: Fetch-in-Component</h2>
+
+  <p>The naive approach is to fetch data inside <code>useEffect</code> when the component mounts. This creates two major problems:</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Problem 1: Loading spinners everywhere</div>
+      <p>Every component shows its own spinner independently. The user sees a skeleton page fill in piece by piece. Jarring UX.</p>
+<pre><code><span class="kw">function</span> <span class="fn">UserProfile</span>() {
+  <span class="kw">const</span> [user, setUser] = <span class="fn">useState</span>(<span class="kw">null</span>)
+  <span class="kw">const</span> [loading, setLoading] = <span class="fn">useState</span>(<span class="kw">true</span>)
+
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="fn">fetchUser</span>(id).<span class="fn">then</span>(setUser)
+      .<span class="fn">finally</span>(() =&gt; <span class="fn">setLoading</span>(<span class="kw">false</span>))
+  }, [id])
+
+  <span class="kw">if</span> (loading) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+  <span class="cm">// ...render user</span>
+}</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Problem 2: Request waterfalls</div>
+      <p>Parent loads data, THEN renders child, THEN child loads its data. Sequential requests that could have been parallel.</p>
+<pre><code><span class="cm">// Timeline:</span>
+<span class="cm">// 1. Navigate to /users/42</span>
+<span class="cm">// 2. UserLayout mounts → fetches user</span>
+<span class="cm">// 3. ...500ms later, user loads...</span>
+<span class="cm">// 4. UserPosts mounts → fetches posts</span>
+<span class="cm">// 5. ...500ms later, posts load...</span>
+<span class="cm">// Total: 1000ms (sequential!)</span>
+<span class="cm">//</span>
+<span class="cm">// With loaders: both fetch in parallel</span>
+<span class="cm">// Total: 500ms</span></code></pre>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Without loaders</div>
+      <div class="desc">Navigate &rarr; Render &rarr; Fetch &rarr; Spinner &rarr; Render children &rarr; Fetch &rarr; Spinner</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">With loaders</div>
+      <div class="desc">Navigate &rarr; Fetch all data &rarr; Render everything</div>
+    </div>
+  </div>
+
+  <!-- ===== ROUTE LOADERS ===== -->
+  <h2>Route Loaders</h2>
+
+  <p>A loader is a function that runs <strong>before</strong> the route component renders. It fetches all the data the route needs, so by the time the component mounts, everything is ready. No <code>useEffect</code>, no loading state, no spinners in the component itself.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">FastAPI dependency injection</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Data resolved BEFORE endpoint runs</span>
+<span class="kw">async def</span> <span class="fn">get_user</span>(
+    user_id: <span class="type">int</span>,
+    db: <span class="type">Session</span> = <span class="fn">Depends</span>(get_db)
+) -&gt; <span class="type">User</span>:
+    <span class="kw">return</span> db.<span class="fn">query</span>(User).<span class="fn">get</span>(user_id)
+
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/users/{user_id}"</span>)
+<span class="kw">async def</span> <span class="fn">user_detail</span>(
+    user: <span class="type">User</span> = <span class="fn">Depends</span>(get_user)
+):
+    <span class="cm"># user is already loaded!</span>
+    <span class="kw">return</span> user</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router loader</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Data resolved BEFORE component renders</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(
+  <span class="str">'/users/$userId'</span>
+)({
+  <span class="prop">loader</span>: <span class="kw">async</span> ({ <span class="prop">params</span> }) =&gt; {
+    <span class="kw">const</span> user = <span class="kw">await</span> <span class="fn">fetchUser</span>(params.userId)
+    <span class="kw">return</span> { user }
+  },
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})
+
+<span class="kw">function</span> <span class="fn">UserDetail</span>() {
+  <span class="cm">// user is already loaded!</span>
+  <span class="kw">const</span> { user } = <span class="fn">Route</span>.<span class="fn">useLoaderData</span>()
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>{user.name}<span class="tag">&lt;/h1&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Loader function signature</h3>
+
+<pre><code><span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/$userId'</span>)({
+  <span class="prop">loader</span>: <span class="kw">async</span> ({
+    <span class="prop">params</span>,        <span class="cm">// { userId: string } — from the URL</span>
+    <span class="prop">search</span>,        <span class="cm">// validated search params (if validateSearch is set)</span>
+    <span class="prop">context</span>,       <span class="cm">// shared context (auth, queryClient, etc.)</span>
+    <span class="prop">abortController</span>, <span class="cm">// cancel signal if navigation changes</span>
+  }) =&gt; {
+    <span class="kw">const</span> user = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/users/${params.userId}`</span>)
+      .<span class="fn">then</span>(r =&gt; r.<span class="fn">json</span>())
+
+    <span class="kw">return</span> { user }  <span class="cm">// Returned data is available via useLoaderData()</span>
+  },
+})</code></pre>
+
+  <!-- ===== TANSTACK QUERY INTEGRATION ===== -->
+  <h2>TanStack Query Integration</h2>
+
+  <p>Loaders alone work, but they re-fetch on every navigation. Combining loaders with TanStack Query gives you: caching, background refetching, deduplication, and stale-while-revalidate. The loader just <strong>ensures</strong> the data exists in the cache.</p>
+
+  <h3>The pattern: <code>queryOptions</code> + <code>ensureQueryData</code></h3>
+
+<pre><code><span class="cm">// src/lib/queries/users.ts — Define query options once, reuse everywhere</span>
+<span class="kw">import</span> { <span class="fn">queryOptions</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+
+<span class="kw">export const</span> <span class="fn">userQueryOptions</span> = (userId: <span class="type">string</span>) =&gt;
+  <span class="fn">queryOptions</span>({
+    <span class="prop">queryKey</span>: [<span class="str">'users'</span>, userId],
+    <span class="prop">queryFn</span>: () =&gt; <span class="fn">fetch</span>(<span class="str">`/api/users/${userId}`</span>).<span class="fn">then</span>(r =&gt; r.<span class="fn">json</span>()),
+  })
+
+<span class="kw">export const</span> <span class="fn">usersListQueryOptions</span> = (page: <span class="type">number</span>) =&gt;
+  <span class="fn">queryOptions</span>({
+    <span class="prop">queryKey</span>: [<span class="str">'users'</span>, <span class="str">'list'</span>, page],
+    <span class="prop">queryFn</span>: () =&gt; <span class="fn">fetch</span>(<span class="str">`/api/users?page=${page}`</span>).<span class="fn">then</span>(r =&gt; r.<span class="fn">json</span>()),
+  })</code></pre>
+
+<pre><code><span class="cm">// src/routes/users/$userId.tsx — Use in the loader</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="fn">useSuspenseQuery</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+<span class="kw">import</span> { <span class="fn">userQueryOptions</span> } <span class="kw">from</span> <span class="str">'../../lib/queries/users'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/$userId'</span>)({
+  <span class="prop">loader</span>: ({ <span class="prop">context</span>, <span class="prop">params</span> }) =&gt; {
+    <span class="cm">// ensureQueryData: fetch if not cached, return cache if fresh</span>
+    context.queryClient.<span class="fn">ensureQueryData</span>(
+      <span class="fn">userQueryOptions</span>(params.userId)
+    )
+  },
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})
+
+<span class="kw">function</span> <span class="fn">UserDetail</span>() {
+  <span class="kw">const</span> { userId } = <span class="fn">Route</span>.<span class="fn">useParams</span>()
+
+  <span class="cm">// Data is guaranteed to be in cache (loader ensured it)</span>
+  <span class="cm">// useSuspenseQuery reads from cache, no loading state needed</span>
+  <span class="kw">const</span> { <span class="prop">data</span>: user } = <span class="fn">useSuspenseQuery</span>(
+    <span class="fn">userQueryOptions</span>(userId)
+  )
+
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>{user.name}<span class="tag">&lt;/h1&gt;</span>
+}</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">How to pass <code>queryClient</code> via context</div>
+<pre><code><span class="cm">// src/main.tsx</span>
+<span class="kw">import</span> { <span class="fn">QueryClient</span>, <span class="fn">QueryClientProvider</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+
+<span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="fn">QueryClient</span>()
+
+<span class="kw">const</span> router = <span class="fn">createRouter</span>({
+  <span class="prop">routeTree</span>,
+  <span class="prop">context</span>: { <span class="prop">queryClient</span> },  <span class="cm">// Available in every loader</span>
+})
+
+<span class="cm">// In __root.tsx, wrap with QueryClientProvider</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createRootRouteWithContext</span>&lt;{
+  <span class="prop">queryClient</span>: <span class="type">QueryClient</span>
+}&gt;()({
+  <span class="prop">component</span>: () =&gt; (
+    <span class="tag">&lt;QueryClientProvider</span> <span class="attr">client</span>={queryClient}<span class="tag">&gt;</span>
+      <span class="tag">&lt;Outlet /&gt;</span>
+    <span class="tag">&lt;/QueryClientProvider&gt;</span>
+  ),
+})</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Why both loader + useSuspenseQuery?</strong> The loader fires on navigation, ensuring data is cached. <code>useSuspenseQuery</code> reads from that cache and also handles background refetching when data becomes stale. Loader handles the "before render" part, Query handles the "stay fresh" part.
+  </div>
+
+  <!-- ===== PENDING UI ===== -->
+  <h2>Pending UI</h2>
+
+  <p>While the loader fetches data, the user sees... what? TanStack Router gives you several options for pending/loading states.</p>
+
+  <h3>Option 1: <code>pendingComponent</code></h3>
+
+<pre><code><span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/$userId'</span>)({
+  <span class="prop">loader</span>: <span class="kw">async</span> ({ <span class="prop">params</span> }) =&gt; {
+    <span class="kw">return</span> { <span class="prop">user</span>: <span class="kw">await</span> <span class="fn">fetchUser</span>(params.userId) }
+  },
+  <span class="prop">pendingComponent</span>: () =&gt; <span class="tag">&lt;div&gt;</span>Loading user...<span class="tag">&lt;/div&gt;</span>,
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})</code></pre>
+
+  <h3>Option 2: <code>pendingMinMs</code> and <code>pendingMs</code></h3>
+
+<pre><code><span class="kw">const</span> router = <span class="fn">createRouter</span>({
+  <span class="prop">routeTree</span>,
+  <span class="prop">defaultPendingMs</span>: <span class="num">200</span>,     <span class="cm">// Wait 200ms before showing pending UI</span>
+  <span class="prop">defaultPendingMinMs</span>: <span class="num">300</span>,  <span class="cm">// Show pending UI for at least 300ms (no flash)</span>
+})</code></pre>
+
+  <div class="tip">
+    <strong>Why <code>pendingMs</code>?</strong> If data loads in 50ms, you don't want a loading spinner that appears and disappears instantly (flash). The 200ms delay means: if the loader resolves within 200ms, no spinner is shown at all. If it takes longer, the spinner appears and stays for at least 300ms (to avoid a jarring flash).
+  </div>
+
+  <h3>Option 3: Global loading indicator</h3>
+
+<pre><code><span class="cm">// In __root.tsx — show a top bar while any route is loading</span>
+<span class="kw">import</span> { <span class="fn">useRouterState</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">function</span> <span class="fn">RootComponent</span>() {
+  <span class="kw">const</span> isLoading = <span class="fn">useRouterState</span>({
+    <span class="prop">select</span>: (s) =&gt; s.isLoading,
+  })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      {isLoading &amp;&amp; <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"loading-bar"</span> <span class="tag">/&gt;</span>}
+      <span class="tag">&lt;Outlet /&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== ERROR HANDLING ===== -->
+  <h2>Error Handling in Loaders</h2>
+
+  <p>When a loader throws, the route's <code>errorComponent</code> renders instead of the regular component. This is similar to a try/except around your Flask view function.</p>
+
+<pre><code><span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/$userId'</span>)({
+  <span class="prop">loader</span>: <span class="kw">async</span> ({ <span class="prop">params</span> }) =&gt; {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/users/${params.userId}`</span>)
+
+    <span class="kw">if</span> (res.status === <span class="num">404</span>) {
+      <span class="kw">throw</span> <span class="fn">notFound</span>()  <span class="cm">// Shows notFoundComponent</span>
+    }
+
+    <span class="kw">if</span> (!res.ok) {
+      <span class="kw">throw</span> <span class="kw">new</span> <span class="fn">Error</span>(<span class="str">`Failed to fetch user: ${res.status}`</span>)
+    }
+
+    <span class="kw">return</span> { <span class="prop">user</span>: <span class="kw">await</span> res.<span class="fn">json</span>() }
+  },
+
+  <span class="prop">errorComponent</span>: ({ <span class="prop">error</span> }) =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>Something went wrong<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{error.message}<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/users"</span><span class="tag">&gt;</span>Back to users<span class="tag">&lt;/Link&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+
+  <span class="prop">notFoundComponent</span>: () =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>User not found<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/users"</span><span class="tag">&gt;</span>Browse all users<span class="tag">&lt;/Link&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})</code></pre>
+
+  <h3>Redirect on auth failure</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">redirect</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/dashboard'</span>)({
+  <span class="prop">loader</span>: <span class="kw">async</span> ({ <span class="prop">context</span> }) =&gt; {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/me'</span>)
+
+    <span class="kw">if</span> (res.status === <span class="num">401</span>) {
+      <span class="cm">// Redirect to login — throw, don't return</span>
+      <span class="kw">throw</span> <span class="fn">redirect</span>({
+        <span class="prop">to</span>: <span class="str">'/login'</span>,
+        <span class="prop">search</span>: { <span class="prop">redirect</span>: <span class="str">'/dashboard'</span> },
+      })
+    }
+
+    <span class="kw">return</span> { <span class="prop">user</span>: <span class="kw">await</span> res.<span class="fn">json</span>() }
+  },
+})</code></pre>
+
+  <!-- ===== PRELOADING ===== -->
+  <h2>Preloading</h2>
+
+  <p>Preloading fetches route data before the user actually navigates — typically on link hover or link visibility. When the user finally clicks, the page appears instantly because the data is already cached.</p>
+
+<pre><code><span class="cm">// Enable preloading globally</span>
+<span class="kw">const</span> router = <span class="fn">createRouter</span>({
+  <span class="prop">routeTree</span>,
+  <span class="prop">defaultPreload</span>: <span class="str">'intent'</span>,       <span class="cm">// Preload on hover/focus</span>
+  <span class="prop">defaultPreloadStaleTime</span>: <span class="num">5000</span>,  <span class="cm">// Cache preloaded data for 5s</span>
+})
+
+<span class="cm">// Or per-link:</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users/$userId"</span>
+  <span class="attr">params</span>={{ <span class="prop">userId</span>: <span class="str">'42'</span> }}
+  <span class="attr">preload</span>=<span class="str">"intent"</span>        <span class="cm">{/* hover/focus triggers preload */}</span>
+<span class="tag">&gt;</span>
+  View User
+<span class="tag">&lt;/Link&gt;</span>
+
+<span class="cm">// preload options:</span>
+<span class="cm">// "intent"   — preload on hover/focus (most common)</span>
+<span class="cm">// "viewport" — preload when link is visible</span>
+<span class="cm">// "render"   — preload immediately when link renders</span>
+<span class="cm">// false      — disable preloading</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">The full data loading flow</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">User hovers link</div>
+        <div class="desc">preload="intent"</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Loader fires</div>
+        <div class="desc">Data fetches in background</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Data cached</div>
+        <div class="desc">TanStack Query stores it</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">User clicks</div>
+        <div class="desc">Navigation starts</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">5</div>
+        <div class="label">Instant render</div>
+        <div class="desc">Data already available</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PATTERNS COMPARISON ===== -->
+  <h2>Data Loading Patterns Compared</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>When data loads</th><th>Re-fetching</th><th>Caching</th><th>Best for</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>useEffect</code> + <code>useState</code></td>
+        <td>After component mounts</td>
+        <td>Manual</td>
+        <td>None</td>
+        <td>Never (avoid this)</td>
+      </tr>
+      <tr>
+        <td>Loader only</td>
+        <td>Before component renders</td>
+        <td>On every navigation</td>
+        <td>None</td>
+        <td>Simple, small apps</td>
+      </tr>
+      <tr>
+        <td>Loader + TanStack Query</td>
+        <td>Before render, cached</td>
+        <td>Automatic (stale-while-revalidate)</td>
+        <td>Full</td>
+        <td>Most apps (recommended)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Python analogy:</strong> The loader pattern is like FastAPI's dependency injection: data is resolved before your handler (component) runs. <code>ensureQueryData</code> is like a caching layer in front of your database — if the data is fresh in Redis, skip the DB query; otherwise, fetch and cache it.
+  </div>
+
+  <!-- ===== FULL EXAMPLE ===== -->
+  <h2>Full Example: Posts with Loader + Query</h2>
+
+<pre><code><span class="cm">// src/lib/queries/posts.ts</span>
+<span class="kw">import</span> { <span class="fn">queryOptions</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+
+<span class="kw">export const</span> <span class="fn">postsQueryOptions</span> = (page: <span class="type">number</span>) =&gt;
+  <span class="fn">queryOptions</span>({
+    <span class="prop">queryKey</span>: [<span class="str">'posts'</span>, { page }],
+    <span class="prop">queryFn</span>: <span class="kw">async</span> () =&gt; {
+      <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/posts?page=${page}`</span>)
+      <span class="kw">if</span> (!res.ok) <span class="kw">throw</span> <span class="kw">new</span> <span class="fn">Error</span>(<span class="str">'Failed to fetch posts'</span>)
+      <span class="kw">return</span> res.<span class="fn">json</span>() <span class="kw">as</span> <span class="type">Promise</span>&lt;<span class="type">Post</span>[]&gt;
+    },
+  })
+
+<span class="kw">export const</span> <span class="fn">postQueryOptions</span> = (postId: <span class="type">string</span>) =&gt;
+  <span class="fn">queryOptions</span>({
+    <span class="prop">queryKey</span>: [<span class="str">'posts'</span>, postId],
+    <span class="prop">queryFn</span>: <span class="kw">async</span> () =&gt; {
+      <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/posts/${postId}`</span>)
+      <span class="kw">if</span> (!res.ok) <span class="kw">throw</span> <span class="kw">new</span> <span class="fn">Error</span>(<span class="str">'Post not found'</span>)
+      <span class="kw">return</span> res.<span class="fn">json</span>() <span class="kw">as</span> <span class="type">Promise</span>&lt;<span class="type">Post</span>&gt;
+    },
+  })</code></pre>
+
+<pre><code><span class="cm">// src/routes/posts/$postId.tsx</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="fn">useSuspenseQuery</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+<span class="kw">import</span> { <span class="fn">postQueryOptions</span> } <span class="kw">from</span> <span class="str">'../../lib/queries/posts'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/posts/$postId'</span>)({
+  <span class="prop">loader</span>: ({ <span class="prop">context</span>, <span class="prop">params</span> }) =&gt;
+    context.queryClient.<span class="fn">ensureQueryData</span>(
+      <span class="fn">postQueryOptions</span>(params.postId)
+    ),
+
+  <span class="prop">pendingComponent</span>: () =&gt; <span class="tag">&lt;div&gt;</span>Loading post...<span class="tag">&lt;/div&gt;</span>,
+
+  <span class="prop">errorComponent</span>: ({ <span class="prop">error</span> }) =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>Error loading post<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{error.message}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+
+  <span class="prop">component</span>: <span class="fn">PostDetail</span>,
+})
+
+<span class="kw">function</span> <span class="fn">PostDetail</span>() {
+  <span class="kw">const</span> { postId } = <span class="fn">Route</span>.<span class="fn">useParams</span>()
+  <span class="kw">const</span> { <span class="prop">data</span>: post } = <span class="fn">useSuspenseQuery</span>(<span class="fn">postQueryOptions</span>(postId))
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;article&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>{post.title}<span class="tag">&lt;/h1&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{post.body}<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;small&gt;</span>By {post.author} on {post.date}<span class="tag">&lt;/small&gt;</span>
+    <span class="tag">&lt;/article&gt;</span>
+  )
+}</code></pre>
+
+</body>
+</html>

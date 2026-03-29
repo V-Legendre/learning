@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>12 — Error Boundaries</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>12 — Error Boundaries</h1>
+  <p class="subtitle">Catching render errors gracefully instead of crashing the entire app.</p>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <h2>The Problem</h2>
+
+  <p>In React, an <strong>unhandled error during rendering</strong> crashes the <em>entire component tree</em>. The user sees a white screen with nothing. No error message, no way to recover, no navigation.</p>
+
+  <div class="panel">
+    <div class="panel-title">What happens without error boundaries</div>
+<pre><code><span class="cm">// One buggy component...</span>
+<span class="kw">const</span> <span class="fn">UserProfile</span> = ({ user }: { user: <span class="type">User</span> }) => {
+  <span class="cm">// Oops: user.address might be null</span>
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>{user.address.street}<span class="tag">&lt;/p&gt;</span>
+  <span class="cm">//          ^^^ TypeError: Cannot read property 'street' of null</span>
+}
+
+<span class="cm">// ...crashes EVERYTHING</span>
+<span class="kw">const</span> <span class="fn">App</span> = () => (
+  <span class="tag">&lt;div&gt;</span>
+    <span class="tag">&lt;Navbar /&gt;</span>        <span class="cm">{/* gone */}</span>
+    <span class="tag">&lt;Sidebar /&gt;</span>       <span class="cm">{/* gone */}</span>
+    <span class="tag">&lt;UserProfile /&gt;</span>   <span class="cm">{/* the offender */}</span>
+    <span class="tag">&lt;Footer /&gt;</span>        <span class="cm">{/* gone */}</span>
+  <span class="tag">&lt;/div&gt;</span>
+)
+<span class="cm">// Result: white screen of death</span></code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Imagine if an exception in <em>one endpoint handler</em> killed your entire Flask/FastAPI server:</p>
+<pre><code><span class="cm"># If Flask worked like React without</span>
+<span class="cm"># error boundaries:</span>
+
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/profile"</span>)
+<span class="kw">def</span> <span class="fn">profile</span>():
+    <span class="kw">raise</span> <span class="type">ValueError</span>(<span class="str">"oops"</span>)
+    <span class="cm"># Entire server goes down</span>
+    <span class="cm"># All routes stop working</span></code></pre>
+        <p style="margin-top: 8px; color: #999; font-size: 13px;">Error boundaries are like <code>try/except</code> but for the React render tree. They isolate failures.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">With error boundaries</div>
+      <div class="comp-body">
+<pre><code><span class="cm">{/* Navbar and Sidebar keep working */}</span>
+<span class="tag">&lt;Navbar /&gt;</span>
+<span class="tag">&lt;Sidebar /&gt;</span>
+
+<span class="cm">{/* Only this section shows the error */}</span>
+<span class="tag">&lt;ErrorBoundary</span> <span class="attr">fallback</span>={<span class="tag">&lt;p&gt;</span>Error<span class="tag">&lt;/p&gt;</span>}<span class="tag">&gt;</span>
+  <span class="tag">&lt;UserProfile /&gt;</span>
+<span class="tag">&lt;/ErrorBoundary&gt;</span>
+
+<span class="tag">&lt;Footer /&gt;</span></code></pre>
+        <p style="margin-top: 8px; color: #999; font-size: 13px;">The error is contained. The user can still navigate, use the sidebar, etc.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REACT-ERROR-BOUNDARY ===== -->
+  <h2>react-error-boundary Library</h2>
+
+  <p>React's built-in error boundary API requires <strong>class components</strong> (the only remaining use case for them). The <code>react-error-boundary</code> library wraps this in a clean functional API.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add react-error-boundary
+  </div>
+
+  <h3>Basic Usage</h3>
+
+<pre><code><span class="kw">import</span> { <span class="type">ErrorBoundary</span> } <span class="kw">from</span> <span class="str">'react-error-boundary'</span>
+
+<span class="kw">const</span> <span class="fn">App</span> = () => (
+  <span class="tag">&lt;ErrorBoundary</span>
+    <span class="attr">fallbackRender</span>={({ error, resetErrorBoundary }) => (
+      <span class="tag">&lt;div</span> <span class="attr">role</span>=<span class="str">"alert"</span><span class="tag">&gt;</span>
+        <span class="tag">&lt;h2&gt;</span>Something went wrong<span class="tag">&lt;/h2&gt;</span>
+        <span class="tag">&lt;p</span> <span class="attr">style</span>={{ color: <span class="str">'red'</span> }}<span class="tag">&gt;</span>
+          {error.message}
+        <span class="tag">&lt;/p&gt;</span>
+        <span class="tag">&lt;button</span> <span class="attr">onClick</span>={resetErrorBoundary}<span class="tag">&gt;</span>
+          Try again
+        <span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;/div&gt;</span>
+    )}
+  <span class="tag">&gt;</span>
+    <span class="tag">&lt;MyComponent /&gt;</span>
+  <span class="tag">&lt;/ErrorBoundary&gt;</span>
+)</code></pre>
+
+  <h3>API Options</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Prop</th>
+        <th>Type</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>fallbackRender</code></td>
+        <td><code>({ error, resetErrorBoundary }) => ReactNode</code></td>
+        <td>Render function for error UI (most flexible)</td>
+      </tr>
+      <tr>
+        <td><code>fallback</code></td>
+        <td><code>ReactNode</code></td>
+        <td>Static fallback JSX (simplest)</td>
+      </tr>
+      <tr>
+        <td><code>FallbackComponent</code></td>
+        <td><code>ComponentType</code></td>
+        <td>Component that receives <code>error</code> and <code>resetErrorBoundary</code> as props</td>
+      </tr>
+      <tr>
+        <td><code>onError</code></td>
+        <td><code>(error, info) => void</code></td>
+        <td>Called when error is caught — use for logging</td>
+      </tr>
+      <tr>
+        <td><code>onReset</code></td>
+        <td><code>() => void</code></td>
+        <td>Called when <code>resetErrorBoundary</code> is invoked — clear state</td>
+      </tr>
+      <tr>
+        <td><code>resetKeys</code></td>
+        <td><code>any[]</code></td>
+        <td>Auto-reset when these values change (like a dependency array)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== GRANULAR BOUNDARIES ===== -->
+  <h2>Granular Boundaries</h2>
+
+  <p>Don't wrap the entire app in one boundary. Place boundaries around <strong>independent sections</strong> so a failure in one area doesn't destroy the rest.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">One boundary (everything fails together)</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;ErrorBoundary&gt;</span>
+  <span class="tag">&lt;App&gt;</span>
+    <span class="tag">&lt;Navbar /&gt;</span>
+    <span class="tag">&lt;Sidebar /&gt;</span>
+    <span class="tag">&lt;MainContent /&gt;</span>
+    <span class="tag">&lt;ChatWidget /&gt;</span>
+  <span class="tag">&lt;/App&gt;</span>
+<span class="tag">&lt;/ErrorBoundary&gt;</span>
+<span class="cm">{/* Any error = entire app replaced
+    with error fallback */}</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Granular boundaries</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;ErrorBoundary</span> <span class="attr">fallback</span>={<span class="tag">&lt;FullPageError /&gt;</span>}<span class="tag">&gt;</span>
+  <span class="tag">&lt;Navbar /&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"layout"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;ErrorBoundary</span> <span class="attr">fallback</span>={<span class="tag">&lt;SidebarError /&gt;</span>}<span class="tag">&gt;</span>
+      <span class="tag">&lt;Sidebar /&gt;</span>
+    <span class="tag">&lt;/ErrorBoundary&gt;</span>
+    <span class="tag">&lt;ErrorBoundary</span> <span class="attr">fallback</span>={<span class="tag">&lt;ContentError /&gt;</span>}<span class="tag">&gt;</span>
+      <span class="tag">&lt;MainContent /&gt;</span>
+    <span class="tag">&lt;/ErrorBoundary&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;ErrorBoundary</span> <span class="attr">fallback</span>={<span class="kw">null</span>}<span class="tag">&gt;</span>
+    <span class="tag">&lt;ChatWidget /&gt;</span>
+  <span class="tag">&lt;/ErrorBoundary&gt;</span>
+<span class="tag">&lt;/ErrorBoundary&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Strategy:</strong> Think of error boundaries like <code>try/except</code> blocks in Python. Catch at the right level:
+    <ul>
+      <li><strong>Outermost:</strong> Full-page error with "reload" button (safety net)</li>
+      <li><strong>Section level:</strong> Replace broken section with error message</li>
+      <li><strong>Card/widget level:</strong> Replace individual card, others still work</li>
+      <li><strong>Non-critical:</strong> Silently hide broken widget (<code>fallback={null}</code>)</li>
+    </ul>
+  </div>
+
+  <!-- ===== RESET PATTERNS ===== -->
+  <h2>Reset Patterns</h2>
+
+  <p>After an error, you often want to let the user <strong>try again</strong>. The <code>resetErrorBoundary</code> function re-mounts the children.</p>
+
+  <h3>Manual Reset (button click)</h3>
+
+<pre><code><span class="tag">&lt;ErrorBoundary</span>
+  <span class="attr">fallbackRender</span>={({ error, resetErrorBoundary }) => (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;p&gt;</span>Failed to load: {error.message}<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={resetErrorBoundary}<span class="tag">&gt;</span>
+        Retry
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )}
+  <span class="attr">onReset</span>={() => {
+    <span class="cm">// Clear any state that might have caused the error</span>
+    queryClient.<span class="fn">clear</span>()
+  }}
+<span class="tag">&gt;</span>
+  <span class="tag">&lt;DataComponent /&gt;</span>
+<span class="tag">&lt;/ErrorBoundary&gt;</span></code></pre>
+
+  <h3>Auto-Reset (on prop/state change)</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">UserPage</span> = () => {
+  <span class="kw">const</span> { userId } = <span class="fn">useParams</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ErrorBoundary</span>
+      <span class="attr">resetKeys</span>={[userId]}
+      <span class="cm">{/* Auto-resets when userId changes */}</span>
+      <span class="cm">{/* e.g. navigating to a different user */}</span>
+      <span class="attr">fallbackRender</span>={({ error }) => (
+        <span class="tag">&lt;p&gt;</span>Couldn't load user: {error.message}<span class="tag">&lt;/p&gt;</span>
+      )}
+    <span class="tag">&gt;</span>
+      <span class="tag">&lt;UserProfile</span> <span class="attr">userId</span>={userId} <span class="tag">/&gt;</span>
+    <span class="tag">&lt;/ErrorBoundary&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== WHAT THEY DON'T CATCH ===== -->
+  <h2>What Error Boundaries DON'T Catch</h2>
+
+  <p>Error boundaries only catch errors <strong>during rendering</strong> (in the component function body and lifecycle). They do NOT catch:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Scenario</th>
+        <th>Caught?</th>
+        <th>Solution</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Error during render (JSX / component body)</td>
+        <td style="color: #34d399;">Yes</td>
+        <td>Error boundary handles it</td>
+      </tr>
+      <tr>
+        <td>Error in <code>useEffect</code></td>
+        <td style="color: #34d399;">Yes</td>
+        <td>Error boundary handles it</td>
+      </tr>
+      <tr>
+        <td>Error in event handlers (<code>onClick</code>, etc.)</td>
+        <td style="color: #f87171;">No</td>
+        <td><code>try/catch</code> + local error state</td>
+      </tr>
+      <tr>
+        <td>Async code (<code>setTimeout</code>, Promises)</td>
+        <td style="color: #f87171;">No</td>
+        <td><code>try/catch</code> in async functions</td>
+      </tr>
+      <tr>
+        <td>Server-side rendering</td>
+        <td style="color: #f87171;">No</td>
+        <td>Server-side error handling</td>
+      </tr>
+      <tr>
+        <td>Errors in the error boundary itself</td>
+        <td style="color: #f87171;">No</td>
+        <td>Wrap in another boundary (parent)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Handling event handler errors (try/catch)</div>
+<pre><code><span class="kw">const</span> <span class="fn">DeleteButton</span> = ({ id }: { id: <span class="type">string</span> }) => {
+  <span class="kw">const</span> [error, setError] = <span class="fn">useState</span>&lt;<span class="type">string</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">const</span> <span class="fn">handleDelete</span> = <span class="kw">async</span> () => {
+    <span class="kw">try</span> {
+      <span class="fn">setError</span>(<span class="kw">null</span>)
+      <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/items/${id}`</span>, { method: <span class="str">'DELETE'</span> })
+    } <span class="kw">catch</span> (err) {
+      <span class="fn">setError</span>(err <span class="kw">instanceof</span> <span class="type">Error</span> ? err.message : <span class="str">'Delete failed'</span>)
+    }
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={handleDelete}<span class="tag">&gt;</span>Delete<span class="tag">&lt;/button&gt;</span>
+      {error && <span class="tag">&lt;p</span> <span class="attr">style</span>={{ color: <span class="str">'red'</span> }}<span class="tag">&gt;</span>{error}<span class="tag">&lt;/p&gt;</span>}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <!-- ===== REUSABLE ERROR FALLBACK ===== -->
+  <h2>Reusable Error Fallback Components</h2>
+
+  <p>Create reusable fallback components for different error contexts.</p>
+
+  <div class="panel">
+    <div class="panel-title">Three levels of error fallbacks</div>
+<pre><code><span class="cm">// Full page error — outermost boundary</span>
+<span class="kw">const</span> <span class="fn">FullPageError</span> = ({
+  error,
+  resetErrorBoundary,
+}: {
+  error: <span class="type">Error</span>
+  resetErrorBoundary: () => <span class="type">void</span>
+}) => (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{ textAlign: <span class="str">'center'</span>, padding: <span class="str">'60px'</span> }}<span class="tag">&gt;</span>
+    <span class="tag">&lt;h1&gt;</span>Something went wrong<span class="tag">&lt;/h1&gt;</span>
+    <span class="tag">&lt;p&gt;</span>{error.message}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => window.location.<span class="fn">reload</span>()}<span class="tag">&gt;</span>
+      Reload page
+    <span class="tag">&lt;/button&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Section error — around a major section</span>
+<span class="kw">const</span> <span class="fn">SectionError</span> = ({
+  error,
+  resetErrorBoundary,
+}: {
+  error: <span class="type">Error</span>
+  resetErrorBoundary: () => <span class="type">void</span>
+}) => (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{ padding: <span class="str">'20px'</span>, border: <span class="str">'1px solid red'</span> }}<span class="tag">&gt;</span>
+    <span class="tag">&lt;p&gt;</span>This section encountered an error.<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={resetErrorBoundary}<span class="tag">&gt;</span>Retry<span class="tag">&lt;/button&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Inline error — around a card or widget</span>
+<span class="kw">const</span> <span class="fn">InlineError</span> = ({ error }: { error: <span class="type">Error</span> }) => (
+  <span class="tag">&lt;span</span> <span class="attr">style</span>={{ color: <span class="str">'red'</span>, fontSize: <span class="str">'12px'</span> }}<span class="tag">&gt;</span>
+    Failed to load
+  <span class="tag">&lt;/span&gt;</span>
+)</code></pre>
+  </div>
+
+  <h3>Using Them Together</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">App</span> = () => (
+  <span class="cm">{/* Safety net — catches anything that escapes */}</span>
+  <span class="tag">&lt;ErrorBoundary</span> <span class="attr">FallbackComponent</span>={<span class="fn">FullPageError</span>}<span class="tag">&gt;</span>
+    <span class="tag">&lt;Layout&gt;</span>
+      <span class="cm">{/* Section boundary — sidebar can fail independently */}</span>
+      <span class="tag">&lt;ErrorBoundary</span> <span class="attr">FallbackComponent</span>={<span class="fn">SectionError</span>}<span class="tag">&gt;</span>
+        <span class="tag">&lt;Sidebar /&gt;</span>
+      <span class="tag">&lt;/ErrorBoundary&gt;</span>
+
+      <span class="cm">{/* Main content boundary */}</span>
+      <span class="tag">&lt;ErrorBoundary</span> <span class="attr">FallbackComponent</span>={<span class="fn">SectionError</span>}<span class="tag">&gt;</span>
+        <span class="tag">&lt;main&gt;</span>
+          <span class="cm">{/* Each card can fail independently */}</span>
+          {cards.<span class="fn">map</span>((card) => (
+            <span class="tag">&lt;ErrorBoundary</span> <span class="attr">key</span>={card.id}
+              <span class="attr">FallbackComponent</span>={<span class="fn">InlineError</span>}<span class="tag">&gt;</span>
+              <span class="tag">&lt;Card</span> <span class="attr">data</span>={card} <span class="tag">/&gt;</span>
+            <span class="tag">&lt;/ErrorBoundary&gt;</span>
+          ))}
+        <span class="tag">&lt;/main&gt;</span>
+      <span class="tag">&lt;/ErrorBoundary&gt;</span>
+    <span class="tag">&lt;/Layout&gt;</span>
+  <span class="tag">&lt;/ErrorBoundary&gt;</span>
+)</code></pre>
+
+  <!-- ===== LOGGING ===== -->
+  <h2>Error Logging</h2>
+
+  <p>Use the <code>onError</code> prop to log errors. In development, log to console. In production, send to an error monitoring service.</p>
+
+<pre><code><span class="kw">const</span> <span class="fn">logError</span> = (error: <span class="type">Error</span>, info: { componentStack?: <span class="type">string</span> | <span class="kw">null</span> }) => {
+  <span class="cm">// Development: console</span>
+  console.<span class="fn">error</span>(<span class="str">'Error boundary caught:'</span>, error)
+  console.<span class="fn">error</span>(<span class="str">'Component stack:'</span>, info.componentStack)
+
+  <span class="cm">// Production: send to monitoring service</span>
+  <span class="kw">if</span> (<span class="kw">import</span>.meta.env.PROD) {
+    <span class="cm">// Sentry.captureException(error, { extra: info })</span>
+  }
+}
+
+<span class="tag">&lt;ErrorBoundary</span>
+  <span class="attr">onError</span>={logError}
+  <span class="attr">FallbackComponent</span>={<span class="fn">SectionError</span>}
+<span class="tag">&gt;</span>
+  <span class="tag">&lt;MyComponent /&gt;</span>
+<span class="tag">&lt;/ErrorBoundary&gt;</span></code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">Error boundary rules</div>
+    <ul>
+      <li>Use <code>react-error-boundary</code> (not raw class components)</li>
+      <li>Place boundaries around <strong>independent sections</strong>, not just the whole app</li>
+      <li>Use <code>fallbackRender</code> for dynamic error UI with reset buttons</li>
+      <li>Use <code>resetKeys</code> to auto-reset on navigation or prop changes</li>
+      <li>Use <code>onError</code> to log to monitoring services</li>
+      <li>Error boundaries <strong>don't catch</strong> event handlers or async code — use <code>try/catch</code> for those</li>
+      <li>Keep fallback UIs simple — a broken fallback gives you nothing</li>
+    </ul>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>10 — Form Basics</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>10 — Form Basics</h1>
+  <p class="subtitle">Controlled vs uncontrolled inputs, React Hook Form, register, handleSubmit, formState, and TypeScript integration.</p>
+
+  <!-- ===== CONTROLLED VS UNCONTROLLED ===== -->
+  <h2>Controlled vs Uncontrolled Inputs</h2>
+
+  <p>In React, there are two ways to handle form inputs. This distinction doesn't exist in backend development — it's a DOM/browser concept. Understanding it is critical for choosing the right form library.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Controlled (React manages value)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> [email, setEmail] = <span class="fn">useState</span>(<span class="str">''</span>)
+
+<span class="tag">&lt;input</span>
+  <span class="attr">value</span>={email}           <span class="cm">{/* React controls the value */}</span>
+  <span class="attr">onChange</span>={(e) =&gt;
+    <span class="fn">setEmail</span>(e.target.value)
+  }
+<span class="tag">/&gt;</span>
+
+<span class="cm">// Every keystroke:</span>
+<span class="cm">// 1. onChange fires</span>
+<span class="cm">// 2. setState called</span>
+<span class="cm">// 3. Component re-renders</span>
+<span class="cm">// 4. Input shows new value</span></code></pre>
+        <p>Full control. You can validate, transform, or reject input on every keystroke. But every keystroke causes a re-render.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Uncontrolled (DOM manages value)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> inputRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLInputElement</span>&gt;(<span class="kw">null</span>)
+
+<span class="tag">&lt;input</span>
+  <span class="attr">ref</span>={inputRef}         <span class="cm">{/* DOM manages the value */}</span>
+  <span class="attr">defaultValue</span>=<span class="str">""</span>
+<span class="tag">/&gt;</span>
+
+<span class="cm">// On submit:</span>
+<span class="kw">const</span> value = inputRef.current?.value
+<span class="cm">// No re-renders on keystroke!</span></code></pre>
+        <p>DOM handles input natively. React reads the value only when needed (on submit). Zero re-renders while typing.</p>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>Controlled</th><th>Uncontrolled</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Who manages value</td><td>React state (<code>useState</code>)</td><td>The DOM / browser</td></tr>
+      <tr><td>Re-renders on keystroke</td><td>Yes (every character)</td><td>No</td></tr>
+      <tr><td>When to read value</td><td>Anytime (it's in state)</td><td>On submit (via ref)</td></tr>
+      <tr><td>Performance (large forms)</td><td>Can be slow (many re-renders)</td><td>Fast</td></tr>
+      <tr><td>Real-time validation</td><td>Easy (validate in onChange)</td><td>Need extra wiring</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Think of controlled inputs like a Python <code>@property</code> setter that intercepts every assignment. Uncontrolled is like directly writing to an attribute and only validating when you need the final value.
+  </div>
+
+  <!-- ===== WHY REACT HOOK FORM ===== -->
+  <h2>Why React Hook Form?</h2>
+
+  <p>Writing forms with raw React is tedious. For every field you need: state, onChange handler, validation logic, error messages, submit handling. For 10 fields, that's 10 <code>useState</code> calls and 10 handlers. React Hook Form (RHF) solves all of this.</p>
+
+  <div class="panel">
+    <div class="panel-title">What React Hook Form gives you</div>
+    <ul>
+      <li><strong>Performance</strong>: Uses uncontrolled inputs internally — minimal re-renders</li>
+      <li><strong>Less boilerplate</strong>: One <code>useForm()</code> replaces all your useState/onChange pairs</li>
+      <li><strong>Validation</strong>: Built-in rules or Zod integration (next page)</li>
+      <li><strong>TypeScript support</strong>: Form values fully typed, field names autocompleted</li>
+      <li><strong>Small bundle</strong>: ~9 KB gzipped, no dependencies</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without React Hook Form</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> [email, setEmail] = <span class="fn">useState</span>(<span class="str">''</span>)
+<span class="kw">const</span> [password, setPw] = <span class="fn">useState</span>(<span class="str">''</span>)
+<span class="kw">const</span> [errors, setErrors] = <span class="fn">useState</span>({})
+<span class="kw">const</span> [submitting, setSub] = <span class="fn">useState</span>(<span class="kw">false</span>)
+
+<span class="kw">const</span> <span class="fn">validate</span> = () =&gt; {
+  <span class="kw">const</span> errs: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">string</span>&gt; = {}
+  <span class="kw">if</span> (!email) errs.email = <span class="str">'Required'</span>
+  <span class="kw">if</span> (!password) errs.password = <span class="str">'Required'</span>
+  <span class="kw">return</span> errs
+}
+
+<span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (e) =&gt; {
+  e.<span class="fn">preventDefault</span>()
+  <span class="kw">const</span> errs = <span class="fn">validate</span>()
+  <span class="kw">if</span> (Object.<span class="fn">keys</span>(errs).length) {
+    <span class="fn">setErrors</span>(errs); <span class="kw">return</span>
+  }
+  <span class="fn">setSub</span>(<span class="kw">true</span>)
+  <span class="kw">await</span> <span class="fn">login</span>({ email, password })
+  <span class="fn">setSub</span>(<span class="kw">false</span>)
+}
+<span class="cm">// + all the JSX wiring...</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With React Hook Form</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> { register, handleSubmit,
+        formState: { errors, isSubmitting }
+      } = <span class="fn">useForm</span>&lt;<span class="type">LoginForm</span>&gt;()
+
+<span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (
+  data: <span class="type">LoginForm</span>
+) =&gt; {
+  <span class="kw">await</span> <span class="fn">login</span>(data)
+}
+
+<span class="cm">// That's it. register() handles</span>
+<span class="cm">// all the input wiring.</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Python analogy:</strong> React Hook Form is to React forms what WTForms is to Flask forms, or what Pydantic is to FastAPI request bodies. You declare the schema/type, and the library handles parsing, validation, and error reporting.
+  </div>
+
+  <!-- ===== INSTALLATION ===== -->
+  <h2>Installation</h2>
+
+  <div class="terminal">
+    <span class="prompt">$</span> pnpm add react-hook-form
+  </div>
+
+  <!-- ===== CORE API ===== -->
+  <h2>Core API</h2>
+
+  <h3><code>useForm&lt;T&gt;()</code></h3>
+
+  <p>The main hook. Returns everything you need to manage a form. Type parameter <code>T</code> defines the shape of your form values.</p>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useForm</span> } <span class="kw">from</span> <span class="str">'react-hook-form'</span>
+
+<span class="cm">// Define the shape of your form data</span>
+<span class="kw">type</span> <span class="type">LoginForm</span> = {
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">password</span>: <span class="type">string</span>
+}
+
+<span class="kw">const</span> {
+  <span class="prop">register</span>,       <span class="cm">// Connect an input to the form</span>
+  <span class="prop">handleSubmit</span>,   <span class="cm">// Wraps your submit handler (validates first)</span>
+  <span class="prop">formState</span>,      <span class="cm">// { errors, isSubmitting, isDirty, isValid, ... }</span>
+  <span class="prop">watch</span>,          <span class="cm">// Subscribe to field value changes</span>
+  <span class="prop">setValue</span>,       <span class="cm">// Programmatically set a field value</span>
+  <span class="prop">reset</span>,          <span class="cm">// Reset form to default values</span>
+  <span class="prop">getValues</span>,      <span class="cm">// Get current form values without subscribing</span>
+} = <span class="fn">useForm</span>&lt;<span class="type">LoginForm</span>&gt;({
+  <span class="prop">defaultValues</span>: {         <span class="cm">// Initial values (optional)</span>
+    <span class="prop">email</span>: <span class="str">''</span>,
+    <span class="prop">password</span>: <span class="str">''</span>,
+  },
+})</code></pre>
+
+  <h3><code>register("fieldName")</code></h3>
+
+  <p>Returns props to spread onto an <code>&lt;input&gt;</code>. It sets up <code>name</code>, <code>ref</code>, <code>onChange</code>, and <code>onBlur</code> — everything the form needs to track that field.</p>
+
+<pre><code><span class="cm">// register returns: { name, ref, onChange, onBlur }</span>
+<span class="cm">// You spread it onto the input:</span>
+
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">'email'</span>)} <span class="tag">/&gt;</span>
+
+<span class="cm">// Equivalent to writing:</span>
+<span class="tag">&lt;input</span>
+  <span class="attr">name</span>=<span class="str">"email"</span>
+  <span class="attr">ref</span>={emailRef}
+  <span class="attr">onChange</span>={handleEmailChange}
+  <span class="attr">onBlur</span>={handleEmailBlur}
+<span class="tag">/&gt;</span>
+
+<span class="cm">// register with validation rules (built-in):</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">'email'</span>, {
+  <span class="prop">required</span>: <span class="str">'Email is required'</span>,
+  <span class="prop">pattern</span>: {
+    <span class="prop">value</span>: <span class="val">/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i</span>,
+    <span class="prop">message</span>: <span class="str">'Invalid email address'</span>,
+  },
+})} <span class="tag">/&gt;</span></code></pre>
+
+  <div class="note">
+    <strong>The <code>...</code> spread is essential.</strong> <code>register()</code> returns an object with multiple props. The spread syntax <code>{...register('email')}</code> puts all those props onto the input element. Without the spread, nothing works.
+  </div>
+
+  <h3><code>handleSubmit(onSubmit)</code></h3>
+
+  <p>Wraps your submit handler. It validates the form first — your handler only runs if validation passes.</p>
+
+<pre><code><span class="cm">// handleSubmit validates, THEN calls your function</span>
+<span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+
+<span class="cm">// Your onSubmit receives validated, typed data:</span>
+<span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (data: <span class="type">LoginForm</span>) =&gt; {
+  <span class="cm">// data.email is string (guaranteed by validation)</span>
+  <span class="cm">// data.password is string</span>
+  console.<span class="fn">log</span>(data)
+  <span class="kw">await</span> <span class="fn">loginApi</span>(data)
+}
+
+<span class="cm">// Optional error handler (for failed validation):</span>
+<span class="kw">const</span> <span class="fn">onError</span> = (errors: <span class="type">FieldErrors</span>&lt;<span class="type">LoginForm</span>&gt;) =&gt; {
+  console.<span class="fn">log</span>(<span class="str">'Validation failed:'</span>, errors)
+}
+
+<span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit, onError)}<span class="tag">&gt;</span></code></pre>
+
+  <h3><code>formState</code></h3>
+
+  <p>Object containing the current state of the form. Key properties:</p>
+
+  <table>
+    <thead>
+      <tr><th>Property</th><th>Type</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>errors</code></td><td><code>FieldErrors&lt;T&gt;</code></td><td>Validation errors, keyed by field name</td></tr>
+      <tr><td><code>isSubmitting</code></td><td><code>boolean</code></td><td><code>true</code> while your async <code>onSubmit</code> runs</td></tr>
+      <tr><td><code>isDirty</code></td><td><code>boolean</code></td><td><code>true</code> if any field has changed from default</td></tr>
+      <tr><td><code>isValid</code></td><td><code>boolean</code></td><td><code>true</code> if all validation rules pass</td></tr>
+      <tr><td><code>dirtyFields</code></td><td><code>Record&lt;string, boolean&gt;</code></td><td>Which specific fields have been modified</td></tr>
+      <tr><td><code>touchedFields</code></td><td><code>Record&lt;string, boolean&gt;</code></td><td>Which fields the user has interacted with</td></tr>
+      <tr><td><code>submitCount</code></td><td><code>number</code></td><td>How many times the form has been submitted</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== BASIC LOGIN FORM ===== -->
+  <h2>Complete Example: Login Form</h2>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useForm</span> } <span class="kw">from</span> <span class="str">'react-hook-form'</span>
+
+<span class="kw">type</span> <span class="type">LoginForm</span> = {
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">password</span>: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">LoginPage</span> = () =&gt; {
+  <span class="kw">const</span> {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = <span class="fn">useForm</span>&lt;<span class="type">LoginForm</span>&gt;({
+    <span class="prop">defaultValues</span>: {
+      <span class="prop">email</span>: <span class="str">''</span>,
+      <span class="prop">password</span>: <span class="str">''</span>,
+    },
+  })
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (data: <span class="type">LoginForm</span>) =&gt; {
+    <span class="cm">// data is fully typed and validated</span>
+    <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/login'</span>, {
+      <span class="prop">method</span>: <span class="str">'POST'</span>,
+      <span class="prop">body</span>: <span class="fn">JSON.stringify</span>(data),
+    })
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label</span> <span class="attr">htmlFor</span>=<span class="str">"email"</span><span class="tag">&gt;</span>Email<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span>
+          <span class="attr">id</span>=<span class="str">"email"</span>
+          <span class="attr">type</span>=<span class="str">"email"</span>
+          {...<span class="fn">register</span>(<span class="str">'email'</span>, {
+            <span class="prop">required</span>: <span class="str">'Email is required'</span>,
+          })}
+        <span class="tag">/&gt;</span>
+        {errors.email &amp;&amp; (
+          <span class="tag">&lt;span</span> <span class="attr">className</span>=<span class="str">"error"</span><span class="tag">&gt;</span>
+            {errors.email.message}
+          <span class="tag">&lt;/span&gt;</span>
+        )}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;div&gt;</span>
+        <span class="tag">&lt;label</span> <span class="attr">htmlFor</span>=<span class="str">"password"</span><span class="tag">&gt;</span>Password<span class="tag">&lt;/label&gt;</span>
+        <span class="tag">&lt;input</span>
+          <span class="attr">id</span>=<span class="str">"password"</span>
+          <span class="attr">type</span>=<span class="str">"password"</span>
+          {...<span class="fn">register</span>(<span class="str">'password'</span>, {
+            <span class="prop">required</span>: <span class="str">'Password is required'</span>,
+            <span class="prop">minLength</span>: {
+              <span class="prop">value</span>: <span class="num">8</span>,
+              <span class="prop">message</span>: <span class="str">'At least 8 characters'</span>,
+            },
+          })}
+        <span class="tag">/&gt;</span>
+        {errors.password &amp;&amp; (
+          <span class="tag">&lt;span</span> <span class="attr">className</span>=<span class="str">"error"</span><span class="tag">&gt;</span>
+            {errors.password.message}
+          <span class="tag">&lt;/span&gt;</span>
+        )}
+      <span class="tag">&lt;/div&gt;</span>
+
+      <span class="tag">&lt;button</span>
+        <span class="attr">type</span>=<span class="str">"submit"</span>
+        <span class="attr">disabled</span>={isSubmitting}
+      <span class="tag">&gt;</span>
+        {isSubmitting ? <span class="str">'Logging in...'</span> : <span class="str">'Log in'</span>}
+      <span class="tag">&lt;/button&gt;</span>
+
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== TYPESCRIPT INTEGRATION ===== -->
+  <h2>TypeScript Integration</h2>
+
+  <p>When you pass a type parameter to <code>useForm&lt;LoginForm&gt;()</code>, everything becomes type-safe:</p>
+
+  <div class="panel">
+    <div class="panel-title">What the type parameter gives you</div>
+    <ul>
+      <li><code>register('email')</code> — TypeScript autocompletes field names, errors on typos</li>
+      <li><code>register('emal')</code> — TypeScript ERROR (field doesn't exist in LoginForm)</li>
+      <li><code>errors.email?.message</code> — Typed error access</li>
+      <li><code>onSubmit(data: LoginForm)</code> — Submit handler receives typed, validated data</li>
+      <li><code>watch('email')</code> — Returns <code>string</code> (inferred from the type)</li>
+    </ul>
+  </div>
+
+<pre><code><span class="cm">// TypeScript catches mistakes at compile time:</span>
+
+<span class="kw">type</span> <span class="type">SignupForm</span> = {
+  <span class="prop">username</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">age</span>: <span class="type">number</span>
+}
+
+<span class="kw">const</span> { register } = <span class="fn">useForm</span>&lt;<span class="type">SignupForm</span>&gt;()
+
+<span class="fn">register</span>(<span class="str">'username'</span>)  <span class="cm">// OK</span>
+<span class="fn">register</span>(<span class="str">'email'</span>)     <span class="cm">// OK</span>
+<span class="fn">register</span>(<span class="str">'age'</span>)       <span class="cm">// OK</span>
+<span class="fn">register</span>(<span class="str">'name'</span>)      <span class="cm">// ERROR: 'name' is not in SignupForm</span></code></pre>
+
+  <!-- ===== DIFFERENT INPUT TYPES ===== -->
+  <h2>Different Input Types</h2>
+
+  <p>React Hook Form works with all standard HTML inputs. Here's how each type is registered:</p>
+
+<pre><code><span class="kw">type</span> <span class="type">ProfileForm</span> = {
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">bio</span>: <span class="type">string</span>
+  <span class="prop">role</span>: <span class="str">'developer'</span> | <span class="str">'designer'</span> | <span class="str">'manager'</span>
+  <span class="prop">newsletter</span>: <span class="type">boolean</span>
+}
+
+<span class="cm">// Text input</span>
+<span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"text"</span> {...<span class="fn">register</span>(<span class="str">'name'</span>)} <span class="tag">/&gt;</span>
+
+<span class="cm">// Textarea</span>
+<span class="tag">&lt;textarea</span> {...<span class="fn">register</span>(<span class="str">'bio'</span>)} <span class="tag">/&gt;</span>
+
+<span class="cm">// Select dropdown</span>
+<span class="tag">&lt;select</span> {...<span class="fn">register</span>(<span class="str">'role'</span>)}<span class="tag">&gt;</span>
+  <span class="tag">&lt;option</span> <span class="attr">value</span>=<span class="str">"developer"</span><span class="tag">&gt;</span>Developer<span class="tag">&lt;/option&gt;</span>
+  <span class="tag">&lt;option</span> <span class="attr">value</span>=<span class="str">"designer"</span><span class="tag">&gt;</span>Designer<span class="tag">&lt;/option&gt;</span>
+  <span class="tag">&lt;option</span> <span class="attr">value</span>=<span class="str">"manager"</span><span class="tag">&gt;</span>Manager<span class="tag">&lt;/option&gt;</span>
+<span class="tag">&lt;/select&gt;</span>
+
+<span class="cm">// Checkbox</span>
+<span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"checkbox"</span> {...<span class="fn">register</span>(<span class="str">'newsletter'</span>)} <span class="tag">/&gt;</span></code></pre>
+
+  <!-- ===== VALIDATION MODES ===== -->
+  <h2>Validation Modes</h2>
+
+  <p>By default, validation runs on submit. You can change when validation triggers:</p>
+
+<pre><code><span class="kw">const</span> form = <span class="fn">useForm</span>&lt;<span class="type">LoginForm</span>&gt;({
+  <span class="prop">mode</span>: <span class="str">'onSubmit'</span>,      <span class="cm">// Default: validate on submit</span>
+  <span class="cm">// mode: 'onBlur',      // Validate when field loses focus</span>
+  <span class="cm">// mode: 'onChange',    // Validate on every keystroke (expensive)</span>
+  <span class="cm">// mode: 'onTouched',  // Validate on blur, then on change after first error</span>
+  <span class="cm">// mode: 'all',        // All of the above</span>
+})</code></pre>
+
+  <div class="tip">
+    <strong>Recommendation:</strong> Start with <code>'onSubmit'</code> (default). If you want inline validation feedback, use <code>'onBlur'</code> — it validates when the user tabs away from a field, which feels natural. Avoid <code>'onChange'</code> unless you have a specific real-time validation need, as it triggers on every keystroke.
+  </div>
+
+  <!-- ===== FORM FLOW SUMMARY ===== -->
+  <h2>The React Hook Form Flow</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">useForm()</div>
+      <div class="desc">Create form instance with type + defaults</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">register()</div>
+      <div class="desc">Spread onto each input element</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">User types</div>
+      <div class="desc">DOM handles input (no re-renders)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">handleSubmit</div>
+      <div class="desc">Validates, then calls your handler</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">onSubmit(data)</div>
+      <div class="desc">Typed, validated data</div>
+    </div>
+  </div>
+
+</body>
+</html>

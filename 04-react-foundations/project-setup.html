@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 — Project Setup</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>04 — Project Setup</h1>
+  <p class="subtitle">Creating a React + TypeScript project with Vite and pnpm.</p>
+
+  <!-- ===== WHAT IS VITE ===== -->
+  <h2>What Is Vite?</h2>
+
+  <p>Vite (French for "fast") is a <strong>build tool and dev server</strong> for modern frontend projects. It replaced older tools like webpack and Create React App (CRA), which are now effectively deprecated.</p>
+
+  <div class="panel">
+    <div class="panel-title">What Vite does</div>
+    <ul>
+      <li><strong>Dev server</strong> — serves your files with instant Hot Module Replacement (HMR)</li>
+      <li><strong>Bundler</strong> — compiles TypeScript, bundles for production (uses Rollup under the hood)</li>
+      <li><strong>Config</strong> — minimal config needed, sensible defaults</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+        <p><code>uvicorn --reload</code> watches for file changes and restarts your FastAPI server.</p>
+        <p><code>pyproject.toml</code> defines dependencies and build config.</p>
+        <p><code>pip install</code> / <code>poetry install</code> manages packages.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Vite equivalent</div>
+      <div class="comp-body">
+        <p><code>vite dev</code> watches for file changes and hot-reloads your components <strong>without a full page refresh</strong>.</p>
+        <p><code>vite.config.ts</code> defines build config.</p>
+        <p><code>pnpm install</code> manages packages via <code>package.json</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Why Vite over webpack?</strong> Webpack bundles your entire app before serving anything (slow). Vite serves files as native ES modules — the browser loads only what it needs. Dev startup is nearly instant regardless of project size.
+  </div>
+
+  <!-- ===== CREATE A PROJECT ===== -->
+  <h2>Creating the Project</h2>
+
+  <h3>Step 1: Scaffold with pnpm</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm create vite@latest my-app --template react-ts<br>
+    <br>
+    <span class="output">Scaffolding project in ./my-app...</span><br>
+    <span class="output">Done. Now run:</span><br>
+    <br>
+    <span class="output">  cd my-app</span><br>
+    <span class="output">  pnpm install</span><br>
+    <span class="output">  pnpm dev</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Breaking down the command</div>
+    <table>
+      <thead>
+        <tr><th>Part</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>pnpm create</code></td><td>Run a package's <code>create-*</code> binary (like <code>npx</code>)</td></tr>
+        <tr><td><code>vite@latest</code></td><td>Use the latest version of Vite's scaffolding tool</td></tr>
+        <tr><td><code>my-app</code></td><td>Project directory name</td></tr>
+        <tr><td><code>--template react-ts</code></td><td>React + TypeScript template (not plain JS)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Step 2: Install dependencies</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cd my-app<br>
+    <span class="prompt">$ </span>pnpm install<br>
+    <br>
+    <span class="output">Packages: +213</span><br>
+    <span class="output">++++++++++++++++++++++++++++++++++++</span><br>
+    <span class="output">Progress: resolved 213, reused 210, downloaded 3, added 213, done</span>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> <code>pnpm install</code> reads <code>package.json</code> (like <code>pyproject.toml</code>) and installs into <code>node_modules/</code> (like <code>.venv/lib/</code>). The lockfile <code>pnpm-lock.yaml</code> is like <code>poetry.lock</code>.
+  </div>
+
+  <h3>Step 3: Start the dev server</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm dev<br>
+    <br>
+    <span class="output">  VITE v6.x.x  ready in 200 ms</span><br>
+    <br>
+    <span class="output">  -> Local:   http://localhost:5173/</span><br>
+    <span class="output">  -> Network: http://192.168.1.10:5173/</span><br>
+    <span class="output">  -> press h + enter to show help</span>
+  </div>
+
+  <!-- ===== PROJECT STRUCTURE ===== -->
+  <h2>Project Structure</h2>
+
+  <div class="file-tree">
+    <span class="dir">my-app/</span><br>
+    &nbsp;&nbsp;<span class="highlight">index.html</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># The single HTML page (entry point)</span><br>
+    &nbsp;&nbsp;<span class="highlight">vite.config.ts</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Vite configuration</span><br>
+    &nbsp;&nbsp;<span class="highlight">tsconfig.json</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># TypeScript compiler options</span><br>
+    &nbsp;&nbsp;<span class="file">tsconfig.app.json</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># TS config for app source code</span><br>
+    &nbsp;&nbsp;<span class="file">tsconfig.node.json</span>&nbsp;&nbsp;&nbsp;<span class="cm"># TS config for Node tooling (vite.config)</span><br>
+    &nbsp;&nbsp;<span class="highlight">package.json</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Dependencies & scripts</span><br>
+    &nbsp;&nbsp;<span class="file">pnpm-lock.yaml</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Lockfile (commit this)</span><br>
+    &nbsp;&nbsp;<span class="dir">node_modules/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Installed packages (gitignored)</span><br>
+    &nbsp;&nbsp;<span class="dir">public/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Static assets (favicon, images)</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">vite.svg</span><br>
+    &nbsp;&nbsp;<span class="dir">src/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Your code lives here</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">main.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Entry point: mounts React to DOM</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">App.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Root component</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">App.css</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Styles for App component</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.css</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Global styles</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">vite-env.d.ts</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># TypeScript type declarations for Vite</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">assets/</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Images/fonts processed by Vite</span>
+  </div>
+
+  <h3>Key files explained</h3>
+
+  <div class="panel">
+    <div class="panel-title">index.html — The single page</div>
+    <p>This is the <strong>only HTML file</strong> in a React SPA (Single-Page Application). The entire app lives inside one <code>&lt;div id="root"&gt;</code>.</p>
+<pre><code><span class="tag">&lt;!DOCTYPE html&gt;</span>
+<span class="tag">&lt;html</span> <span class="attr">lang</span>=<span class="str">"en"</span><span class="tag">&gt;</span>
+<span class="tag">&lt;head&gt;</span>
+  <span class="tag">&lt;meta</span> <span class="attr">charset</span>=<span class="str">"UTF-8"</span> <span class="tag">/&gt;</span>
+  <span class="tag">&lt;meta</span> <span class="attr">name</span>=<span class="str">"viewport"</span> <span class="attr">content</span>=<span class="str">"width=device-width, initial-scale=1.0"</span> <span class="tag">/&gt;</span>
+  <span class="tag">&lt;title&gt;</span>Vite + React + TS<span class="tag">&lt;/title&gt;</span>
+<span class="tag">&lt;/head&gt;</span>
+<span class="tag">&lt;body&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">id</span>=<span class="str">"root"</span><span class="tag">&gt;&lt;/div&gt;</span>       <span class="cm">&lt;!-- React mounts here --&gt;</span>
+  <span class="tag">&lt;script</span> <span class="attr">type</span>=<span class="str">"module"</span> <span class="attr">src</span>=<span class="str">"/src/main.tsx"</span><span class="tag">&gt;&lt;/script&gt;</span>
+<span class="tag">&lt;/body&gt;</span>
+<span class="tag">&lt;/html&gt;</span></code></pre>
+    <p>Notice the <code>&lt;script type="module"&gt;</code> — Vite uses native ES modules. No bundling in dev mode.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">src/main.tsx — Entry point</div>
+    <p>This file bridges the DOM and React. It finds the <code>#root</code> div and mounts your app into it.</p>
+<pre><code><span class="kw">import</span> React <span class="kw">from</span> <span class="str">'react'</span>
+<span class="kw">import</span> ReactDOM <span class="kw">from</span> <span class="str">'react-dom/client'</span>
+<span class="kw">import</span> { App } <span class="kw">from</span> <span class="str">'./App'</span>
+<span class="kw">import</span> <span class="str">'./index.css'</span>
+
+ReactDOM.<span class="fn">createRoot</span>(
+  document.<span class="fn">getElementById</span>(<span class="str">'root'</span>)!   <span class="cm">// ! = non-null assertion (we know it exists)</span>
+).<span class="fn">render</span>(
+  <span class="tag">&lt;React.StrictMode&gt;</span>
+    <span class="tag">&lt;App /&gt;</span>
+  <span class="tag">&lt;/React.StrictMode&gt;</span>
+)</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>React.StrictMode</strong> is a development-only wrapper that helps find bugs. It intentionally double-renders components to catch side effects, warns about deprecated patterns, and adds extra checks. Has zero effect in production builds.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">src/App.tsx — Root component</div>
+    <p>Your top-level component. Everything you build will be composed under this.</p>
+<pre><code><span class="kw">const</span> <span class="fn">App</span> = () => {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>Hello, React!<span class="tag">&lt;/h1&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="kw">export</span> { App }</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">vite.config.ts — Build configuration</div>
+<pre><code><span class="kw">import</span> { <span class="fn">defineConfig</span> } <span class="kw">from</span> <span class="str">'vite'</span>
+<span class="kw">import</span> react <span class="kw">from</span> <span class="str">'@vitejs/plugin-react'</span>
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  <span class="prop">plugins</span>: [<span class="fn">react</span>()],         <span class="cm">// Enables JSX transform, Fast Refresh</span>
+})</code></pre>
+    <p>Minimal config. The React plugin handles JSX compilation and HMR. You can add more plugins for things like path aliases, CSS modules, etc.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">package.json — Dependencies & scripts</div>
+<pre><code>{
+  <span class="prop">"name"</span>: <span class="str">"my-app"</span>,
+  <span class="prop">"private"</span>: <span class="val">true</span>,
+  <span class="prop">"type"</span>: <span class="str">"module"</span>,
+  <span class="prop">"scripts"</span>: {
+    <span class="prop">"dev"</span>: <span class="str">"vite"</span>,                 <span class="cm">// Start dev server</span>
+    <span class="prop">"build"</span>: <span class="str">"tsc -b && vite build"</span>,  <span class="cm">// Type-check then bundle</span>
+    <span class="prop">"preview"</span>: <span class="str">"vite preview"</span>       <span class="cm">// Serve production build locally</span>
+  },
+  <span class="prop">"dependencies"</span>: {
+    <span class="prop">"react"</span>: <span class="str">"^19.0.0"</span>,
+    <span class="prop">"react-dom"</span>: <span class="str">"^19.0.0"</span>
+  },
+  <span class="prop">"devDependencies"</span>: {
+    <span class="prop">"@types/react"</span>: <span class="str">"^19.0.0"</span>,       <span class="cm">// TypeScript types for React</span>
+    <span class="prop">"@types/react-dom"</span>: <span class="str">"^19.0.0"</span>,   <span class="cm">// TypeScript types for ReactDOM</span>
+    <span class="prop">"@vitejs/plugin-react"</span>: <span class="str">"^4.x"</span>,  <span class="cm">// Vite's React plugin</span>
+    <span class="prop">"typescript"</span>: <span class="str">"~5.x"</span>,            <span class="cm">// TypeScript compiler</span>
+    <span class="prop">"vite"</span>: <span class="str">"^6.x"</span>                   <span class="cm">// Build tool</span>
+  }
+}</code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+        <table>
+          <tbody>
+            <tr><td><code>pyproject.toml</code></td><td>Project metadata + deps</td></tr>
+            <tr><td><code>poetry.lock</code></td><td>Lockfile</td></tr>
+            <tr><td><code>.venv/</code></td><td>Installed packages</td></tr>
+            <tr><td><code>poetry run pytest</code></td><td>Run scripts</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Node/pnpm equivalent</div>
+      <div class="comp-body">
+        <table>
+          <tbody>
+            <tr><td><code>package.json</code></td><td>Project metadata + deps</td></tr>
+            <tr><td><code>pnpm-lock.yaml</code></td><td>Lockfile</td></tr>
+            <tr><td><code>node_modules/</code></td><td>Installed packages</td></tr>
+            <tr><td><code>pnpm dev</code></td><td>Run scripts</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DEV COMMANDS ===== -->
+  <h2>Dev Commands</h2>
+
+  <table>
+    <thead>
+      <tr><th>Command</th><th>What it does</th><th>Python analogy</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>pnpm dev</code></td>
+        <td>Start dev server with HMR on <code>localhost:5173</code></td>
+        <td><code>uvicorn main:app --reload</code></td>
+      </tr>
+      <tr>
+        <td><code>pnpm build</code></td>
+        <td>Type-check + bundle for production into <code>dist/</code></td>
+        <td><code>python -m build</code> / <code>docker build</code></td>
+      </tr>
+      <tr>
+        <td><code>pnpm preview</code></td>
+        <td>Serve the production build locally (test before deploy)</td>
+        <td>Running your Docker image locally</td>
+      </tr>
+      <tr>
+        <td><code>pnpm install</code></td>
+        <td>Install dependencies from <code>package.json</code></td>
+        <td><code>pip install -r requirements.txt</code></td>
+      </tr>
+      <tr>
+        <td><code>pnpm add &lt;pkg&gt;</code></td>
+        <td>Add a new dependency</td>
+        <td><code>pip install &lt;pkg&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>pnpm add -D &lt;pkg&gt;</code></td>
+        <td>Add a dev-only dependency</td>
+        <td><code>pip install --dev &lt;pkg&gt;</code> (poetry)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== HMR ===== -->
+  <h2>Hot Module Replacement (HMR)</h2>
+
+  <p>HMR means when you save a file, the browser <strong>updates only the changed module</strong> without a full page reload. Your component state is preserved.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Save file</div>
+      <div class="desc">You edit App.tsx and save</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Vite detects change</div>
+      <div class="desc">File watcher triggers (via WebSocket)</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Compiles module</div>
+      <div class="desc">Only the changed file, not the whole app</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Browser swaps module</div>
+      <div class="desc">React re-renders component, state preserved</div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Without HMR (old tools)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Full page reload on every change</li>
+          <li>All component state is lost</li>
+          <li>You have to navigate back to the page you were testing</li>
+          <li>Slow for large projects</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">With Vite HMR</div>
+      <div class="comp-body">
+        <ul>
+          <li>Sub-second updates</li>
+          <li>Component state preserved (form inputs, scroll position)</li>
+          <li>Only the changed module reloads</li>
+          <li>Speed is independent of project size</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>How Vite achieves this:</strong> In dev mode, Vite serves each file as a native ES module (via <code>&lt;script type="module"&gt;</code>). The browser's native module system handles dependency loading. No bundling step in dev. This is why Vite starts instantly even on huge projects.
+  </div>
+
+  <!-- ===== TSCONFIG ===== -->
+  <h2>TypeScript Strict Mode</h2>
+
+  <p>The Vite template enables <code>"strict": true</code> in <code>tsconfig.json</code>. This turns on a collection of stricter type-checking flags that catch bugs at compile time.</p>
+
+  <div class="panel">
+    <div class="panel-title">What "strict" enables</div>
+    <table>
+      <thead>
+        <tr><th>Flag</th><th>What it does</th><th>Why it matters</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>strictNullChecks</code></td>
+          <td><code>null</code> and <code>undefined</code> are not assignable to other types</td>
+          <td>Forces you to handle the "no value" case</td>
+        </tr>
+        <tr>
+          <td><code>noImplicitAny</code></td>
+          <td>Error if TS can't infer a type and you didn't annotate</td>
+          <td>No silent <code>any</code> types sneaking in</td>
+        </tr>
+        <tr>
+          <td><code>strictFunctionTypes</code></td>
+          <td>Stricter checking of function parameter types</td>
+          <td>Prevents unsound callback typing</td>
+        </tr>
+        <tr>
+          <td><code>strictPropertyInitialization</code></td>
+          <td>Class properties must be initialized</td>
+          <td>Prevents undefined property access</td>
+        </tr>
+        <tr>
+          <td><code>noImplicitThis</code></td>
+          <td>Error on <code>this</code> with implicit <code>any</code> type</td>
+          <td>Catches <code>this</code> context bugs</td>
+        </tr>
+        <tr>
+          <td><code>alwaysStrict</code></td>
+          <td>Emit <code>"use strict"</code> in every file</td>
+          <td>Enables JS strict mode</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Strict mode is like running <code>mypy --strict</code> on your Python code. Without it, TypeScript is more lenient — like running mypy in its default mode where many things are untyped. Always use strict mode for new projects.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Quick Reference</h2>
+
+  <div class="panel">
+    <div class="panel-title">From zero to running app</div>
+    <div class="terminal">
+      <span class="prompt">$ </span>pnpm create vite@latest my-app --template react-ts<br>
+      <span class="prompt">$ </span>cd my-app<br>
+      <span class="prompt">$ </span>pnpm install<br>
+      <span class="prompt">$ </span>pnpm dev<br>
+      <br>
+      <span class="output">  VITE v6.x.x  ready in 200 ms</span><br>
+      <span class="output">  -> Local:   http://localhost:5173/</span>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Common mistake:</strong> Running <code>npx create-react-app</code> — that's the old way (CRA). It's unmaintained, slow, and uses webpack. Always use <code>pnpm create vite@latest</code> for new React projects.
+  </div>
+
+</body>
+</html>

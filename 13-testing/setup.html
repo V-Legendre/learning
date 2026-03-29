@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>13 — Testing Setup</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>13 — Testing Setup</h1>
+  <p class="subtitle">Setting up Vitest and Testing Library for a Vite + React + TypeScript project.</p>
+
+  <!-- ===== WHY VITEST ===== -->
+  <h2>Why Vitest Over Jest?</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Vitest is to React what <strong>pytest</strong> is to Python:</p>
+        <ul>
+          <li>Fast, modern, opinionated</li>
+          <li>Compatible with the old standard (Jest) but better DX</li>
+          <li>Auto-discovery of test files</li>
+          <li>Watch mode by default</li>
+          <li>Rich assertion library</li>
+        </ul>
+        <p style="color: #999; font-size: 13px; margin-top: 8px;">Testing Library is like testing the behavior users see, rather than internal implementation. Think of it as testing your web app the way a QA person would.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Vitest advantages</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Same config</strong> as Vite — no separate build pipeline for tests</li>
+          <li><strong>Native ESM</strong> — no transpilation issues, import/export just works</li>
+          <li><strong>Faster</strong> — reuses Vite's module resolution and transform pipeline</li>
+          <li><strong>Compatible API</strong> — drop-in replacement for Jest (<code>describe</code>, <code>it</code>, <code>expect</code>)</li>
+          <li><strong>TypeScript</strong> out of the box — no <code>ts-jest</code> needed</li>
+          <li><strong>Watch mode</strong> — only re-runs tests for changed files</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Jest</th>
+        <th>Vitest</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Config</td>
+        <td>Separate <code>jest.config.ts</code></td>
+        <td>Inside <code>vite.config.ts</code></td>
+      </tr>
+      <tr>
+        <td>TypeScript</td>
+        <td>Needs <code>ts-jest</code> or <code>@swc/jest</code></td>
+        <td>Built-in</td>
+      </tr>
+      <tr>
+        <td>ESM</td>
+        <td>Experimental, buggy</td>
+        <td>Native</td>
+      </tr>
+      <tr>
+        <td>Speed</td>
+        <td>Moderate</td>
+        <td>Fast (reuses Vite pipeline)</td>
+      </tr>
+      <tr>
+        <td>API</td>
+        <td><code>jest.fn()</code>, <code>jest.mock()</code></td>
+        <td><code>vi.fn()</code>, <code>vi.mock()</code></td>
+      </tr>
+      <tr>
+        <td>Watch mode</td>
+        <td><code>--watch</code></td>
+        <td>Default</td>
+      </tr>
+      <tr>
+        <td>IDE support</td>
+        <td>Excellent</td>
+        <td>Excellent (VS Code extension)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== INSTALLATION ===== -->
+  <h2>Installation</h2>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add -D vitest @testing-library/react @testing-library/jest-dom @testing-library/user-event happy-dom
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Package</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>vitest</code></td>
+        <td>Test runner (like pytest)</td>
+      </tr>
+      <tr>
+        <td><code>@testing-library/react</code></td>
+        <td>Render React components in tests, query the DOM</td>
+      </tr>
+      <tr>
+        <td><code>@testing-library/jest-dom</code></td>
+        <td>Extended DOM matchers (<code>toBeInTheDocument</code>, <code>toHaveTextContent</code>)</td>
+      </tr>
+      <tr>
+        <td><code>@testing-library/user-event</code></td>
+        <td>Simulate realistic user interactions (click, type, etc.)</td>
+      </tr>
+      <tr>
+        <td><code>happy-dom</code></td>
+        <td>Fast DOM implementation for tests (replaces browser)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== CONFIG ===== -->
+  <h2>Configuration</h2>
+
+  <h3>vite.config.ts</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">defineConfig</span> } <span class="kw">from</span> <span class="str">'vite'</span>
+<span class="kw">import</span> react <span class="kw">from</span> <span class="str">'@vitejs/plugin-react'</span>
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  plugins: [<span class="fn">react</span>()],
+  test: {
+    <span class="cm">// DOM environment for component tests</span>
+    environment: <span class="str">'happy-dom'</span>,
+
+    <span class="cm">// Make describe, it, expect globally available</span>
+    <span class="cm">// (no need to import from 'vitest' in every test file)</span>
+    globals: <span class="kw">true</span>,
+
+    <span class="cm">// Run this file before all tests</span>
+    setupFiles: <span class="str">'./src/test/setup.ts'</span>,
+
+    <span class="cm">// CSS handling (don't process CSS in tests)</span>
+    css: <span class="kw">false</span>,
+  },
+})</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> The <code>test</code> field is part of Vitest's config, which extends Vite's config. This means one config file for both building and testing.
+  </div>
+
+  <h3>tsconfig.json — Add Vitest types</h3>
+
+<pre><code>{
+  <span class="str">"compilerOptions"</span>: {
+    <span class="cm">// ... existing options</span>
+    <span class="str">"types"</span>: [<span class="str">"vitest/globals"</span>]
+  }
+}</code></pre>
+
+  <p>This gives you TypeScript autocompletion for <code>describe</code>, <code>it</code>, <code>expect</code>, <code>vi</code>, etc. without imports.</p>
+
+  <!-- ===== SETUP FILE ===== -->
+  <h2>Setup File</h2>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">test/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">setup.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.test.tsx</span> <span class="cm">&larr; co-located</span>
+  </div>
+
+  <h3>src/test/setup.ts</h3>
+
+<pre><code><span class="cm">// Adds custom DOM matchers like:</span>
+<span class="cm">// - toBeInTheDocument()</span>
+<span class="cm">// - toHaveTextContent()</span>
+<span class="cm">// - toBeDisabled()</span>
+<span class="cm">// - toHaveClass()</span>
+<span class="cm">// - toBeVisible()</span>
+<span class="kw">import</span> <span class="str">'@testing-library/jest-dom'</span>
+
+<span class="cm">// Optional: clean up after each test</span>
+<span class="cm">// (Testing Library does this automatically since v14)</span>
+<span class="cm">// import { cleanup } from '@testing-library/react'</span>
+<span class="cm">// afterEach(cleanup)</span></code></pre>
+
+  <!-- ===== TEST FILE CONVENTIONS ===== -->
+  <h2>Test File Conventions</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Convention</th>
+        <th>Example</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>File pattern</td>
+        <td><code>*.test.ts</code>, <code>*.test.tsx</code></td>
+        <td>Vitest auto-discovers these</td>
+      </tr>
+      <tr>
+        <td>Location</td>
+        <td>Next to the file being tested</td>
+        <td>Co-locate: <code>Button.tsx</code> + <code>Button.test.tsx</code></td>
+      </tr>
+      <tr>
+        <td>Helpers/fixtures</td>
+        <td><code>src/test/</code> folder</td>
+        <td>Shared test utilities, mocks, factories</td>
+      </tr>
+      <tr>
+        <td>Extension</td>
+        <td><code>.test.tsx</code> (not <code>.spec.tsx</code>)</td>
+        <td>Convention in Vite ecosystem</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python (pytest)</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># test_calculator.py</span>
+<span class="kw">def</span> <span class="fn">test_add</span>():
+    <span class="kw">assert</span> <span class="fn">add</span>(<span class="num">1</span>, <span class="num">2</span>) == <span class="num">3</span>
+
+<span class="kw">def</span> <span class="fn">test_subtract</span>():
+    <span class="kw">assert</span> <span class="fn">subtract</span>(<span class="num">5</span>, <span class="num">3</span>) == <span class="num">2</span>
+
+<span class="kw">class</span> <span class="type">TestCalculator</span>:
+    <span class="kw">def</span> <span class="fn">test_multiply</span>(self):
+        <span class="kw">assert</span> <span class="fn">multiply</span>(<span class="num">3</span>, <span class="num">4</span>) == <span class="num">12</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Vitest equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// calculator.test.ts</span>
+<span class="fn">describe</span>(<span class="str">'Calculator'</span>, () => {
+  <span class="fn">it</span>(<span class="str">'adds numbers'</span>, () => {
+    <span class="fn">expect</span>(<span class="fn">add</span>(<span class="num">1</span>, <span class="num">2</span>)).<span class="fn">toBe</span>(<span class="num">3</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">'subtracts numbers'</span>, () => {
+    <span class="fn">expect</span>(<span class="fn">subtract</span>(<span class="num">5</span>, <span class="num">3</span>)).<span class="fn">toBe</span>(<span class="num">2</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">'multiplies numbers'</span>, () => {
+    <span class="fn">expect</span>(<span class="fn">multiply</span>(<span class="num">3</span>, <span class="num">4</span>)).<span class="fn">toBe</span>(<span class="num">12</span>)
+  })
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RUNNING TESTS ===== -->
+  <h2>Running Tests</h2>
+
+  <h3>package.json scripts</h3>
+
+<pre><code>{
+  <span class="str">"scripts"</span>: {
+    <span class="str">"test"</span>: <span class="str">"vitest"</span>,
+    <span class="str">"test:run"</span>: <span class="str">"vitest run"</span>,
+    <span class="str">"test:coverage"</span>: <span class="str">"vitest run --coverage"</span>,
+    <span class="str">"test:ui"</span>: <span class="str">"vitest --ui"</span>
+  }
+}</code></pre>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm test<br>
+    <span class="output"><br> DEV  v1.6.0 /Users/you/project<br><br> &#10003; src/components/Button.test.tsx (3 tests) 12ms<br> &#10003; src/hooks/useCounter.test.ts (2 tests) 5ms<br><br> Test Files  2 passed (2)<br>      Tests  5 passed (5)<br>   Start at  14:32:01<br>   Duration  890ms</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Command</th>
+        <th>Purpose</th>
+        <th>When to use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>pnpm test</code></td>
+        <td>Watch mode — re-runs on file changes</td>
+        <td>During development</td>
+      </tr>
+      <tr>
+        <td><code>pnpm test:run</code></td>
+        <td>Run once and exit</td>
+        <td>CI/CD pipelines</td>
+      </tr>
+      <tr>
+        <td><code>pnpm test:coverage</code></td>
+        <td>Run with code coverage report</td>
+        <td>Measuring test coverage</td>
+      </tr>
+      <tr>
+        <td><code>pnpm test:ui</code></td>
+        <td>Open browser UI for tests</td>
+        <td>Visual test exploration (needs <code>@vitest/ui</code>)</td>
+      </tr>
+      <tr>
+        <td><code>pnpm vitest Button</code></td>
+        <td>Run tests matching "Button"</td>
+        <td>Testing a specific file</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== HAPPY-DOM vs JSDOM ===== -->
+  <h2>happy-dom vs jsdom</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>happy-dom</th>
+        <th>jsdom</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Speed</td>
+        <td style="color: #34d399;">2-3x faster</td>
+        <td>Baseline</td>
+      </tr>
+      <tr>
+        <td>API completeness</td>
+        <td>Most common APIs</td>
+        <td style="color: #34d399;">More complete</td>
+      </tr>
+      <tr>
+        <td>Recommended for</td>
+        <td>Default choice, most projects</td>
+        <td>Complex DOM operations, edge cases</td>
+      </tr>
+      <tr>
+        <td>Install</td>
+        <td><code>pnpm add -D happy-dom</code></td>
+        <td><code>pnpm add -D jsdom</code></td>
+      </tr>
+      <tr>
+        <td>Config</td>
+        <td><code>environment: 'happy-dom'</code></td>
+        <td><code>environment: 'jsdom'</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Recommendation:</strong> Start with <code>happy-dom</code>. It's faster and works for 95% of tests. Switch to <code>jsdom</code> only if you encounter a missing DOM API.
+  </div>
+
+  <!-- ===== FIRST TEST ===== -->
+  <h2>Your First Test</h2>
+
+  <p>Let's verify the setup works with a minimal test.</p>
+
+  <div class="panel">
+    <div class="panel-title">src/components/Greeting.tsx</div>
+<pre><code><span class="kw">interface</span> <span class="type">GreetingProps</span> {
+  name: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Greeting</span> = ({ name }: <span class="type">GreetingProps</span>) => {
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>Hello, {name}!<span class="tag">&lt;/h1&gt;</span>
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">src/components/Greeting.test.tsx</div>
+<pre><code><span class="kw">import</span> { <span class="fn">render</span>, screen } <span class="kw">from</span> <span class="str">'@testing-library/react'</span>
+<span class="kw">import</span> { <span class="fn">Greeting</span> } <span class="kw">from</span> <span class="str">'./Greeting'</span>
+
+<span class="fn">describe</span>(<span class="str">'Greeting'</span>, () => {
+  <span class="fn">it</span>(<span class="str">'renders a greeting with the given name'</span>, () => {
+    <span class="fn">render</span>(<span class="tag">&lt;Greeting</span> <span class="attr">name</span>=<span class="str">"Alice"</span> <span class="tag">/&gt;</span>)
+
+    <span class="fn">expect</span>(
+      screen.<span class="fn">getByText</span>(<span class="str">'Hello, Alice!'</span>)
+    ).<span class="fn">toBeInTheDocument</span>()
+  })
+})</code></pre>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm test<br>
+    <span class="output"><br> &#10003; src/components/Greeting.test.tsx (1 test) 8ms<br><br> Test Files  1 passed (1)<br>      Tests  1 passed (1)</span>
+  </div>
+
+  <!-- ===== COMMON MATCHERS ===== -->
+  <h2>Common Assertion Matchers</h2>
+
+  <h3>Vitest built-in (from <code>expect</code>)</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Matcher</th>
+        <th>Python equivalent</th>
+        <th>Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>.toBe(value)</code></td>
+        <td><code>assert x == y</code></td>
+        <td><code>expect(1 + 1).toBe(2)</code></td>
+      </tr>
+      <tr>
+        <td><code>.toEqual(obj)</code></td>
+        <td><code>assert x == y</code> (deep)</td>
+        <td><code>expect({a: 1}).toEqual({a: 1})</code></td>
+      </tr>
+      <tr>
+        <td><code>.toBeTruthy()</code></td>
+        <td><code>assert x</code></td>
+        <td><code>expect(result).toBeTruthy()</code></td>
+      </tr>
+      <tr>
+        <td><code>.toHaveLength(n)</code></td>
+        <td><code>assert len(x) == n</code></td>
+        <td><code>expect([1,2]).toHaveLength(2)</code></td>
+      </tr>
+      <tr>
+        <td><code>.toThrow()</code></td>
+        <td><code>with pytest.raises()</code></td>
+        <td><code>expect(() => fn()).toThrow('msg')</code></td>
+      </tr>
+      <tr>
+        <td><code>.toContain(item)</code></td>
+        <td><code>assert x in y</code></td>
+        <td><code>expect([1,2,3]).toContain(2)</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>DOM matchers (from <code>@testing-library/jest-dom</code>)</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Matcher</th>
+        <th>What it checks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>.toBeInTheDocument()</code></td>
+        <td>Element exists in the DOM</td>
+      </tr>
+      <tr>
+        <td><code>.toHaveTextContent('text')</code></td>
+        <td>Element contains text</td>
+      </tr>
+      <tr>
+        <td><code>.toBeDisabled()</code></td>
+        <td>Input/button is disabled</td>
+      </tr>
+      <tr>
+        <td><code>.toBeVisible()</code></td>
+        <td>Element is visible (not hidden)</td>
+      </tr>
+      <tr>
+        <td><code>.toHaveClass('name')</code></td>
+        <td>Element has CSS class</td>
+      </tr>
+      <tr>
+        <td><code>.toHaveValue('val')</code></td>
+        <td>Input has specific value</td>
+      </tr>
+      <tr>
+        <td><code>.toHaveAttribute('attr', 'val')</code></td>
+        <td>Element has HTML attribute with value</td>
+      </tr>
+      <tr>
+        <td><code>.toBeChecked()</code></td>
+        <td>Checkbox/radio is checked</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== PROJECT STRUCTURE ===== -->
+  <h2>Recommended Test File Structure</h2>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Button.test.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">UserCard.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">UserCard.test.tsx</span><br>
+    &nbsp;&nbsp;<span class="dir">hooks/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useCounter.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useCounter.test.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">stores/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useCartStore.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">useCartStore.test.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">test/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">setup.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">&larr; global setup</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">test-utils.tsx</span> &nbsp;<span class="cm">&larr; custom render with providers</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">mocks/</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">&larr; MSW handlers, fixtures</span>
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">Setup checklist</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Install: <code>pnpm add -D vitest @testing-library/react @testing-library/jest-dom @testing-library/user-event happy-dom</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Add <code>test</code> config to <code>vite.config.ts</code> (environment, globals, setupFiles)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Create <code>src/test/setup.ts</code> with <code>import '@testing-library/jest-dom'</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>Add <code>"types": ["vitest/globals"]</code> to <code>tsconfig.json</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>Add test scripts to <code>package.json</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div>Write tests co-located with components: <code>Component.test.tsx</code></div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

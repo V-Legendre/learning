@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 — useState</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>05 — useState</h1>
+  <p class="subtitle">React's state management primitive: data that changes over time and triggers re-renders.</p>
+
+  <!-- ===== WHAT IS STATE? ===== -->
+  <h2>What Is State?</h2>
+
+  <p>State is data owned by a component that, when changed, causes the component to <strong>re-render</strong> (re-execute its function and update the DOM). Regular variables declared with <code>const</code> or <code>let</code> inside a component get destroyed and re-created on every render. State persists between renders.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Regular variable (broken)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Counter</span> = () => {
+  <span class="kw">let</span> count = <span class="num">0</span>  <span class="cm">// reset to 0 every render</span>
+
+  <span class="kw">const</span> <span class="fn">increment</span> = () => {
+    count += <span class="num">1</span>  <span class="cm">// mutates, but no re-render</span>
+    console.<span class="fn">log</span>(count) <span class="cm">// logs 1, but UI stays 0</span>
+  }
+
+  <span class="kw">return</span> <span class="tag">&lt;button</span> <span class="attr">onClick</span>={increment}<span class="tag">&gt;</span>
+    {count}
+  <span class="tag">&lt;/button&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">useState (correct)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Counter</span> = () => {
+  <span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="kw">const</span> <span class="fn">increment</span> = () => {
+    <span class="fn">setCount</span>(prev => prev + <span class="num">1</span>)
+    <span class="cm">// triggers re-render, UI updates</span>
+  }
+
+  <span class="kw">return</span> <span class="tag">&lt;button</span> <span class="attr">onClick</span>={increment}<span class="tag">&gt;</span>
+    {count}
+  <span class="tag">&lt;/button&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="kw">class</span> <span class="type">Counter</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self.count = <span class="num">0</span>  <span class="cm"># persists between method calls</span>
+
+    <span class="kw">def</span> <span class="fn">increment</span>(self):
+        self.count += <span class="num">1</span>
+        self.<span class="fn">render</span>()  <span class="cm"># manually trigger UI update</span></code></pre>
+        <p style="margin-top: 10px; color: #999;">In React, <code>useState</code> is like a class attribute, except changing it <em>automatically</em> triggers a re-render. You never call "render" yourself.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// useState replaces class attributes</span>
+<span class="cm">// setCount replaces self.count = x + self.render()</span>
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+<span class="cm">// Calling setCount does two things:</span>
+<span class="cm">// 1. Updates the stored value</span>
+<span class="cm">// 2. Schedules a re-render</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BASIC USAGE ===== -->
+  <h2>Basic Usage &amp; Array Destructuring</h2>
+
+  <p><code>useState</code> returns an array of exactly two elements: the current value and a setter function. Array destructuring gives you both at once.</p>
+
+<pre><code><span class="cm">// Syntax: const [value, setValue] = useState(initialValue)</span>
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+<span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [isOpen, setIsOpen] = <span class="fn">useState</span>(<span class="kw">false</span>)
+<span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>&lt;<span class="type">string[]</span>&gt;([])
+
+<span class="cm">// Without destructuring (never do this, but helps you understand):</span>
+<span class="kw">const</span> stateArray = <span class="fn">useState</span>(<span class="num">0</span>)
+<span class="kw">const</span> count = stateArray[<span class="num">0</span>]    <span class="cm">// current value</span>
+<span class="kw">const</span> setCount = stateArray[<span class="num">1</span>] <span class="cm">// setter function</span></code></pre>
+
+  <div class="note">
+    <strong>Naming convention:</strong> Always name the pair <code>[thing, setThing]</code>. The setter is <code>set</code> + capitalized variable name. This is a universal React convention, not enforced by the language.
+  </div>
+
+  <!-- ===== TYPE PARAMETER ===== -->
+  <h2>TypeScript Type Parameter</h2>
+
+  <p>TypeScript infers the type from the initial value. When it can't (e.g., the initial value is <code>null</code> or an empty array), provide the type explicitly using the generic parameter.</p>
+
+  <table>
+    <thead>
+      <tr><th>Code</th><th>Inferred Type</th><th>Needs Generic?</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>useState(0)</code></td><td><code>number</code></td><td>No</td></tr>
+      <tr><td><code>useState("")</code></td><td><code>string</code></td><td>No</td></tr>
+      <tr><td><code>useState(false)</code></td><td><code>boolean</code></td><td>No</td></tr>
+      <tr><td><code>useState([])</code></td><td><code>never[]</code></td><td>Yes</td></tr>
+      <tr><td><code>useState(null)</code></td><td><code>null</code></td><td>Yes</td></tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">// When inference works fine:</span>
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)         <span class="cm">// number</span>
+<span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">"Alice"</span>)   <span class="cm">// string</span>
+
+<span class="cm">// When you NEED the generic type parameter:</span>
+<span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>&lt;<span class="type">string[]</span>&gt;([])
+<span class="kw">const</span> [user, setUser] = <span class="fn">useState</span>&lt;<span class="type">User</span> | <span class="type">null</span>&gt;(<span class="kw">null</span>)
+
+<span class="cm">// Interface for the User type:</span>
+<span class="kw">interface</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">number</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+}
+
+<span class="kw">const</span> [user, setUser] = <span class="fn">useState</span>&lt;<span class="type">User</span> | <span class="type">null</span>&gt;(<span class="kw">null</span>)
+<span class="cm">// Now TypeScript knows user is User | null</span>
+<span class="cm">// You must null-check before accessing user.name</span></code></pre>
+
+  <!-- ===== UPDATER FUNCTIONS ===== -->
+  <h2>Updater Functions (Critical Pattern)</h2>
+
+  <p>When the new state depends on the previous state, <strong>always</strong> pass a function to the setter. This avoids the "stale closure" trap.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Direct value (stale closure bug)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">handleClick</span> = () => {
+  <span class="fn">setCount</span>(count + <span class="num">1</span>)
+  <span class="fn">setCount</span>(count + <span class="num">1</span>)
+  <span class="fn">setCount</span>(count + <span class="num">1</span>)
+  <span class="cm">// Result: count increases by 1, not 3!</span>
+  <span class="cm">// All three read the SAME stale `count`</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Updater function (correct)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">handleClick</span> = () => {
+  <span class="fn">setCount</span>(prev => prev + <span class="num">1</span>)
+  <span class="fn">setCount</span>(prev => prev + <span class="num">1</span>)
+  <span class="fn">setCount</span>(prev => prev + <span class="num">1</span>)
+  <span class="cm">// Result: count increases by 3</span>
+  <span class="cm">// Each reads the LATEST pending value</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Stale closure trap:</strong> Inside an event handler, <code>count</code> is captured at the time the handler was created. It does not update mid-function. The updater pattern (<code>prev => prev + 1</code>) always receives the most recent pending value from React's internal queue.
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">count = 0</div>
+      <div class="desc">Component renders</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">setCount(prev => prev + 1)</div>
+      <div class="desc">Queues: 0 + 1 = 1</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">setCount(prev => prev + 1)</div>
+      <div class="desc">Queues: 1 + 1 = 2</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Re-render</div>
+      <div class="desc">count = 2</div>
+    </div>
+  </div>
+
+  <!-- ===== IMMUTABLE UPDATES ===== -->
+  <h2>Immutable Updates (Objects &amp; Arrays)</h2>
+
+  <p>React uses <strong>reference equality</strong> to detect changes. If you mutate an object/array in place, the reference stays the same and React sees no change. You must create a <em>new</em> object/array every time.</p>
+
+  <div class="note">
+    <strong>Python analogy:</strong> This is like creating a new dict with <code>{**old_dict, "key": "new_value"}</code> instead of <code>old_dict["key"] = "new_value"</code>. Same concept, different syntax.
+  </div>
+
+  <h3>Updating Objects</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Mutating (broken, no re-render)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// NEVER do this</span>
+user.name = <span class="str">"Bob"</span>
+<span class="fn">setUser</span>(user)
+<span class="cm">// Same reference! React ignores it.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Spread operator (new object)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Create a new object with one field changed</span>
+<span class="fn">setUser</span>({ ...user, <span class="prop">name</span>: <span class="str">"Bob"</span> })
+<span class="cm">// New reference, React re-renders</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Updating Arrays</h3>
+
+  <table>
+    <thead>
+      <tr><th>Operation</th><th>Avoid (mutates)</th><th>Use instead (new array)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Add item</td>
+        <td><code>arr.push(item)</code></td>
+        <td><code>[...arr, item]</code></td>
+      </tr>
+      <tr>
+        <td>Remove item</td>
+        <td><code>arr.splice(i, 1)</code></td>
+        <td><code>arr.filter(x => x.id !== id)</code></td>
+      </tr>
+      <tr>
+        <td>Update item</td>
+        <td><code>arr[i].done = true</code></td>
+        <td><code>arr.map(x => x.id === id ? {...x, done: true} : x)</code></td>
+      </tr>
+      <tr>
+        <td>Sort</td>
+        <td><code>arr.sort()</code></td>
+        <td><code>[...arr].sort()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="kw">interface</span> <span class="type">Todo</span> {
+  <span class="prop">id</span>: <span class="type">number</span>
+  <span class="prop">text</span>: <span class="type">string</span>
+  <span class="prop">done</span>: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> [todos, setTodos] = <span class="fn">useState</span>&lt;<span class="type">Todo[]</span>&gt;([])
+
+<span class="cm">// Add</span>
+<span class="kw">const</span> <span class="fn">addTodo</span> = (text: <span class="type">string</span>) => {
+  <span class="fn">setTodos</span>(prev => [...prev, { <span class="prop">id</span>: Date.<span class="fn">now</span>(), text, <span class="prop">done</span>: <span class="kw">false</span> }])
+}
+
+<span class="cm">// Remove</span>
+<span class="kw">const</span> <span class="fn">removeTodo</span> = (id: <span class="type">number</span>) => {
+  <span class="fn">setTodos</span>(prev => prev.<span class="fn">filter</span>(t => t.id !== id))
+}
+
+<span class="cm">// Toggle done</span>
+<span class="kw">const</span> <span class="fn">toggleTodo</span> = (id: <span class="type">number</span>) => {
+  <span class="fn">setTodos</span>(prev => prev.<span class="fn">map</span>(t =>
+    t.id === id ? { ...t, <span class="prop">done</span>: !t.done } : t
+  ))
+}</code></pre>
+
+  <!-- ===== BATCHING ===== -->
+  <h2>State Batching</h2>
+
+  <p>React <strong>batches</strong> multiple <code>setState</code> calls within the same event handler into a single re-render. This is a performance optimization — you don't pay for intermediate renders.</p>
+
+<pre><code><span class="kw">const</span> <span class="fn">handleSubmit</span> = () => {
+  <span class="fn">setName</span>(<span class="str">"Alice"</span>)       <span class="cm">// queued</span>
+  <span class="fn">setAge</span>(<span class="num">25</span>)             <span class="cm">// queued</span>
+  <span class="fn">setIsValid</span>(<span class="kw">true</span>)       <span class="cm">// queued</span>
+  <span class="cm">// All three are batched into ONE re-render</span>
+}</code></pre>
+
+  <div class="tip">
+    <strong>React 18+:</strong> Batching now works everywhere — event handlers, promises, setTimeout, native events. In React 17 and earlier, batching only happened in React event handlers. One less thing to worry about.
+  </div>
+
+  <!-- ===== COMMON MISTAKES ===== -->
+  <h2>Common Mistakes</h2>
+
+  <div class="panel">
+    <div class="panel-title">Mistake 1: Reading state right after setting it</div>
+<pre><code><span class="kw">const</span> <span class="fn">handleClick</span> = () => {
+  <span class="fn">setCount</span>(prev => prev + <span class="num">1</span>)
+  console.<span class="fn">log</span>(count)  <span class="cm">// Still the OLD value!</span>
+  <span class="cm">// State updates are applied on the NEXT render.</span>
+  <span class="cm">// `count` in this closure is a snapshot from THIS render.</span>
+}</code></pre>
+    <p>If you need the new value, compute it first:</p>
+<pre><code><span class="kw">const</span> <span class="fn">handleClick</span> = () => {
+  <span class="kw">const</span> nextCount = count + <span class="num">1</span>
+  <span class="fn">setCount</span>(nextCount)
+  console.<span class="fn">log</span>(nextCount)  <span class="cm">// Use the computed value</span>
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Mistake 2: Too many separate useState calls</div>
+<pre><code><span class="cm">// When you have 5+ related state variables, consider grouping:</span>
+
+<span class="cm">// Instead of this:</span>
+<span class="kw">const</span> [firstName, setFirstName] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [lastName, setLastName] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [email, setEmail] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [age, setAge] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+<span class="cm">// Consider grouping into one object:</span>
+<span class="kw">const</span> [form, setForm] = <span class="fn">useState</span>({
+  <span class="prop">firstName</span>: <span class="str">""</span>,
+  <span class="prop">lastName</span>: <span class="str">""</span>,
+  <span class="prop">email</span>: <span class="str">""</span>,
+  <span class="prop">age</span>: <span class="num">0</span>,
+})
+
+<span class="cm">// Or use useReducer for complex state logic (covered later)</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Mistake 3: Initializing with expensive computation</div>
+<pre><code><span class="cm">// BAD: createExpensiveData() runs on EVERY render</span>
+<span class="kw">const</span> [data, setData] = <span class="fn">useState</span>(<span class="fn">createExpensiveData</span>())
+
+<span class="cm">// GOOD: Pass a function — React calls it only on first render</span>
+<span class="kw">const</span> [data, setData] = <span class="fn">useState</span>(() => <span class="fn">createExpensiveData</span>())
+<span class="cm">// This is called a "lazy initializer"</span></code></pre>
+  </div>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When to Use useState</h2>
+
+  <table>
+    <thead>
+      <tr><th>Use Case</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Simple values</td><td>Counters, toggles, selected tab index</td></tr>
+      <tr><td>Form inputs</td><td>Text fields, checkboxes, dropdowns</td></tr>
+      <tr><td>UI state</td><td>Modal open/closed, sidebar expanded, loading spinner</td></tr>
+      <tr><td>Lists</td><td>Todo items, cart items, search results</td></tr>
+      <tr><td>Nullable objects</td><td>Currently selected user, fetched data before it arrives</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> If it's a simple value or a flat object and the update logic is straightforward (just replace the value), use <code>useState</code>. If you have complex state transitions (multiple fields that must change together based on action types), consider <code>useReducer</code> instead.
+  </div>
+
+  <!-- ===== COMPLETE EXAMPLE ===== -->
+  <h2>Complete Example: Todo List</h2>
+
+<pre><code><span class="kw">import</span> { useState } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">interface</span> <span class="type">Todo</span> {
+  <span class="prop">id</span>: <span class="type">number</span>
+  <span class="prop">text</span>: <span class="type">string</span>
+  <span class="prop">done</span>: <span class="type">boolean</span>
+}
+
+<span class="kw">export const</span> <span class="fn">TodoList</span> = () => {
+  <span class="kw">const</span> [todos, setTodos] = <span class="fn">useState</span>&lt;<span class="type">Todo[]</span>&gt;([])
+  <span class="kw">const</span> [input, setInput] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+  <span class="kw">const</span> <span class="fn">addTodo</span> = () => {
+    <span class="kw">if</span> (!input.<span class="fn">trim</span>()) <span class="kw">return</span>
+    <span class="fn">setTodos</span>(prev => [
+      ...prev,
+      { <span class="prop">id</span>: Date.<span class="fn">now</span>(), <span class="prop">text</span>: input, <span class="prop">done</span>: <span class="kw">false</span> }
+    ])
+    <span class="fn">setInput</span>(<span class="str">""</span>)
+  }
+
+  <span class="kw">const</span> <span class="fn">toggleTodo</span> = (id: <span class="type">number</span>) => {
+    <span class="fn">setTodos</span>(prev =>
+      prev.<span class="fn">map</span>(t => t.id === id ? { ...t, <span class="prop">done</span>: !t.done } : t)
+    )
+  }
+
+  <span class="kw">const</span> <span class="fn">removeTodo</span> = (id: <span class="type">number</span>) => {
+    <span class="fn">setTodos</span>(prev => prev.<span class="fn">filter</span>(t => t.id !== id))
+  }
+
+  <span class="cm">// Derived state — no need for another useState</span>
+  <span class="kw">const</span> remaining = todos.<span class="fn">filter</span>(t => !t.done).length
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>Todos ({remaining} remaining)<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;input</span>
+        <span class="attr">value</span>={input}
+        <span class="attr">onChange</span>={e => <span class="fn">setInput</span>(e.target.value)}
+        <span class="attr">onKeyDown</span>={e => e.key === <span class="str">"Enter"</span> &amp;&amp; <span class="fn">addTodo</span>()}
+      <span class="tag">/&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={addTodo}<span class="tag">&gt;</span>Add<span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;ul&gt;</span>
+        {todos.<span class="fn">map</span>(todo => (
+          <span class="tag">&lt;li</span> <span class="attr">key</span>={todo.id}<span class="tag">&gt;</span>
+            <span class="tag">&lt;span</span>
+              <span class="attr">onClick</span>={() => <span class="fn">toggleTodo</span>(todo.id)}
+              <span class="attr">style</span>={{ textDecoration: todo.done ? <span class="str">"line-through"</span> : <span class="str">"none"</span> }}
+            <span class="tag">&gt;</span>
+              {todo.text}
+            <span class="tag">&lt;/span&gt;</span>
+            <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => <span class="fn">removeTodo</span>(todo.id)}<span class="tag">&gt;</span>x<span class="tag">&lt;/button&gt;</span>
+          <span class="tag">&lt;/li&gt;</span>
+        ))}
+      <span class="tag">&lt;/ul&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Key takeaway:</strong> <code>remaining</code> is derived from <code>todos</code> — it's computed during render, not stored in its own <code>useState</code>. This is the correct pattern. Never store state that can be computed from other state.
+  </div>
+
+</body>
+</html>

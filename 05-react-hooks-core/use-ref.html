@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 — useRef</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>05 — useRef</h1>
+  <p class="subtitle">Mutable container for values that persist between renders without triggering re-renders.</p>
+
+  <!-- ===== TWO USE CASES ===== -->
+  <h2>Two Distinct Use Cases</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">1. Access DOM elements</div>
+      <p>Get a direct reference to a DOM node. Use it to focus inputs, scroll to elements, measure dimensions, or integrate with non-React libraries.</p>
+<pre><code><span class="kw">const</span> inputRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLInputElement</span>&gt;(<span class="kw">null</span>)
+
+<span class="cm">// Attach to element</span>
+<span class="tag">&lt;input</span> <span class="attr">ref</span>={inputRef} <span class="tag">/&gt;</span>
+
+<span class="cm">// Use the DOM node</span>
+inputRef.current?.<span class="fn">focus</span>()</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">2. Mutable values without re-render</div>
+      <p>Store values that persist across renders but don't need to update the UI when they change. Like instance variables on a class.</p>
+<pre><code><span class="kw">const</span> renderCount = <span class="fn">useRef</span>(<span class="num">0</span>)
+renderCount.current += <span class="num">1</span>
+<span class="cm">// No re-render when .current changes</span>
+
+<span class="kw">const</span> timerId = <span class="fn">useRef</span>&lt;<span class="type">number</span> | <span class="type">null</span>&gt;(<span class="kw">null</span>)
+timerId.current = <span class="fn">setInterval</span>(tick, <span class="num">1000</span>)</code></pre>
+    </div>
+  </div>
+
+  <!-- ===== PYTHON ANALOGY ===== -->
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="kw">class</span> <span class="type">MyComponent</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        <span class="cm"># Instance variable — persists between</span>
+        <span class="cm"># method calls, no "re-render" on change</span>
+        self.timer_id = <span class="kw">None</span>
+        self.render_count = <span class="num">0</span>
+        self.input_element = <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">render</span>(self):
+        self.render_count += <span class="num">1</span>
+        <span class="cm"># No automatic UI update from this</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">MyComponent</span> = () => {
+  <span class="cm">// useRef = self.something</span>
+  <span class="cm">// Persists between renders,</span>
+  <span class="cm">// no re-render when .current changes</span>
+  <span class="kw">const</span> timerId = <span class="fn">useRef</span>&lt;<span class="type">number</span> | <span class="type">null</span>&gt;(<span class="kw">null</span>)
+  <span class="kw">const</span> renderCount = <span class="fn">useRef</span>(<span class="num">0</span>)
+  <span class="kw">const</span> inputRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLInputElement</span>&gt;(<span class="kw">null</span>)
+
+  renderCount.current += <span class="num">1</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REF VS STATE ===== -->
+  <h2>Ref vs State</h2>
+
+  <table>
+    <thead>
+      <tr><th>Feature</th><th><code>useRef</code></th><th><code>useState</code></th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Persists between renders</td><td>Yes</td><td>Yes</td></tr>
+      <tr><td>Triggers re-render on change</td><td>No</td><td>Yes</td></tr>
+      <tr><td>Mutable</td><td>Yes (<code>.current = x</code>)</td><td>No (must use setter)</td></tr>
+      <tr><td>Available immediately</td><td>Yes (sync)</td><td>No (next render)</td></tr>
+      <tr><td>Can hold DOM references</td><td>Yes</td><td>No</td></tr>
+      <tr><td>Use for displayed values</td><td>No</td><td>Yes</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Decision rule:</strong> If the value is displayed in the UI, use state. If you need to track something internally (timer IDs, previous values, DOM nodes), use a ref.
+  </div>
+
+  <!-- ===== DOM ACCESS ===== -->
+  <h2>DOM Access Patterns</h2>
+
+  <h3>Focus an input</h3>
+
+<pre><code><span class="kw">import</span> { useRef } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">SearchBar</span> = () => {
+  <span class="kw">const</span> inputRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLInputElement</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">const</span> <span class="fn">handleClick</span> = () => {
+    inputRef.current?.<span class="fn">focus</span>()
+    <span class="cm">// Optional chaining (?.) because ref is null before mount</span>
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;input</span> <span class="attr">ref</span>={inputRef} <span class="attr">placeholder</span>=<span class="str">"Search..."</span> <span class="tag">/&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={handleClick}<span class="tag">&gt;</span>Focus<span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <h3>Scroll to element</h3>
+
+<pre><code><span class="kw">const</span> sectionRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>)
+
+<span class="kw">const</span> <span class="fn">scrollToSection</span> = () => {
+  sectionRef.current?.<span class="fn">scrollIntoView</span>({
+    <span class="prop">behavior</span>: <span class="str">"smooth"</span>,
+    <span class="prop">block</span>: <span class="str">"start"</span>,
+  })
+}
+
+<span class="cm">// In JSX:</span>
+<span class="tag">&lt;div</span> <span class="attr">ref</span>={sectionRef}<span class="tag">&gt;</span>Target section<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <h3>Measure element dimensions</h3>
+
+<pre><code><span class="kw">const</span> boxRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>)
+
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">if</span> (boxRef.current) {
+    <span class="kw">const</span> rect = boxRef.current.<span class="fn">getBoundingClientRect</span>()
+    console.<span class="fn">log</span>(<span class="str">`Width: ${rect.width}, Height: ${rect.height}`</span>)
+  }
+}, [])</code></pre>
+
+  <h3>Common DOM element types</h3>
+
+  <table>
+    <thead>
+      <tr><th>HTML Element</th><th>TypeScript Type</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;input&gt;</code></td><td><code>HTMLInputElement</code></td></tr>
+      <tr><td><code>&lt;div&gt;</code></td><td><code>HTMLDivElement</code></td></tr>
+      <tr><td><code>&lt;button&gt;</code></td><td><code>HTMLButtonElement</code></td></tr>
+      <tr><td><code>&lt;form&gt;</code></td><td><code>HTMLFormElement</code></td></tr>
+      <tr><td><code>&lt;canvas&gt;</code></td><td><code>HTMLCanvasElement</code></td></tr>
+      <tr><td><code>&lt;video&gt;</code></td><td><code>HTMLVideoElement</code></td></tr>
+      <tr><td><code>&lt;textarea&gt;</code></td><td><code>HTMLTextAreaElement</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== MUTABLE VALUES ===== -->
+  <h2>Mutable Value Patterns</h2>
+
+  <h3>Track previous value</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">usePrevious</span> = &lt;<span class="type">T</span>&gt;(value: <span class="type">T</span>): <span class="type">T</span> | <span class="type">undefined</span> => {
+  <span class="kw">const</span> ref = <span class="fn">useRef</span>&lt;<span class="type">T</span>&gt;()
+
+  <span class="fn">useEffect</span>(() => {
+    ref.current = value
+  }, [value])
+
+  <span class="kw">return</span> ref.current <span class="cm">// returns old value (before effect runs)</span>
+}
+
+<span class="cm">// Usage:</span>
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+<span class="kw">const</span> prevCount = <span class="fn">usePrevious</span>(count)
+<span class="cm">// prevCount is the value from the LAST render</span></code></pre>
+
+  <h3>Store timer / interval IDs</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">Stopwatch</span> = () => {
+  <span class="kw">const</span> [seconds, setSeconds] = <span class="fn">useState</span>(<span class="num">0</span>)
+  <span class="kw">const</span> [running, setRunning] = <span class="fn">useState</span>(<span class="kw">false</span>)
+  <span class="kw">const</span> intervalRef = <span class="fn">useRef</span>&lt;<span class="type">number</span> | <span class="type">null</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">const</span> <span class="fn">start</span> = () => {
+    <span class="fn">setRunning</span>(<span class="kw">true</span>)
+    intervalRef.current = <span class="fn">setInterval</span>(() => {
+      <span class="fn">setSeconds</span>(s => s + <span class="num">1</span>)
+    }, <span class="num">1000</span>)
+  }
+
+  <span class="kw">const</span> <span class="fn">stop</span> = () => {
+    <span class="fn">setRunning</span>(<span class="kw">false</span>)
+    <span class="kw">if</span> (intervalRef.current) {
+      <span class="fn">clearInterval</span>(intervalRef.current)
+    }
+  }
+
+  <span class="cm">// Cleanup on unmount</span>
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">return</span> () => {
+      <span class="kw">if</span> (intervalRef.current) <span class="fn">clearInterval</span>(intervalRef.current)
+    }
+  }, [])
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{seconds}s<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={running ? stop : start}<span class="tag">&gt;</span>
+        {running ? <span class="str">"Stop"</span> : <span class="str">"Start"</span>}
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Why ref for the interval ID?</strong> We need to access <code>intervalRef.current</code> in the <code>stop</code> function to clear the interval. If we used state, changing the timer ID would cause an unnecessary re-render. We need to <em>track</em> it, not <em>display</em> it.
+  </div>
+
+  <!-- ===== FORWARDREF ===== -->
+  <h2>forwardRef &mdash; Passing Refs to Child Components</h2>
+
+  <p>By default, you can't pass a <code>ref</code> to a custom component. React doesn't know which DOM element inside the child you want. Use <code>forwardRef</code> to forward the ref to a specific element inside the child.</p>
+
+<pre><code><span class="kw">import</span> { forwardRef, useRef } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="cm">// Child component: accepts a ref and forwards it to its input</span>
+<span class="kw">interface</span> <span class="type">FancyInputProps</span> {
+  <span class="prop">label</span>: <span class="type">string</span>
+  <span class="prop">placeholder</span>?: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">FancyInput</span> = <span class="fn">forwardRef</span>&lt;<span class="type">HTMLInputElement</span>, <span class="type">FancyInputProps</span>&gt;(
+  ({ label, placeholder }, ref) => (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;label&gt;</span>{label}<span class="tag">&lt;/label&gt;</span>
+      <span class="tag">&lt;input</span> <span class="attr">ref</span>={ref} <span class="attr">placeholder</span>={placeholder} <span class="tag">/&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+)
+
+<span class="cm">// Parent component: creates a ref and passes it to child</span>
+<span class="kw">const</span> <span class="fn">Form</span> = () => {
+  <span class="kw">const</span> inputRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLInputElement</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;FancyInput</span> <span class="attr">ref</span>={inputRef} <span class="attr">label</span>=<span class="str">"Name"</span> <span class="tag">/&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => inputRef.current?.<span class="fn">focus</span>()}<span class="tag">&gt;</span>
+        Focus Input
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>TypeScript generics order:</strong> <code>forwardRef&lt;RefType, PropsType&gt;</code>. The ref type comes <em>first</em> (opposite of what you'd expect). This is a common gotcha.
+  </div>
+
+  <div class="tip">
+    <strong>React 19 update:</strong> In React 19, <code>forwardRef</code> is no longer needed. You can accept <code>ref</code> as a regular prop. But if you're on React 18 or earlier, <code>forwardRef</code> is still required.
+  </div>
+
+  <!-- ===== SUMMARY TABLE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>Code</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>DOM reference</td>
+        <td><code>const ref = useRef&lt;HTMLDivElement&gt;(null)</code></td>
+      </tr>
+      <tr>
+        <td>Mutable value</td>
+        <td><code>const count = useRef(0)</code></td>
+      </tr>
+      <tr>
+        <td>Timer ID</td>
+        <td><code>const id = useRef&lt;number | null&gt;(null)</code></td>
+      </tr>
+      <tr>
+        <td>Previous value</td>
+        <td><code>const prev = useRef(value)</code> + effect to update</td>
+      </tr>
+      <tr>
+        <td>Read current value</td>
+        <td><code>ref.current</code></td>
+      </tr>
+      <tr>
+        <td>Write value</td>
+        <td><code>ref.current = newValue</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Don't read or write <code>ref.current</code> during rendering</strong> (i.e., in the component body outside of event handlers or effects). Refs are an "escape hatch" from React's data flow. Reading them during render makes your component's output unpredictable. Use them in event handlers and effects only.
+  </div>
+
+</body>
+</html>

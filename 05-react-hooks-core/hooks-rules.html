@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 — Rules of Hooks</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>05 — Rules of Hooks</h1>
+  <p class="subtitle">Why hooks have strict rules and what breaks if you violate them.</p>
+
+  <!-- ===== THE TWO RULES ===== -->
+  <h2>The Two Rules</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Rule 1: Top level only</div>
+      <p>Never call hooks inside <code>if</code>/<code>else</code>, loops, nested functions, or after early returns. Hooks must always be called in the <strong>same order</strong> on every render.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Rule 2: Only in React functions</div>
+      <p>Call hooks only from React function components or custom hooks. Never from regular JavaScript/TypeScript functions, classes, or module scope.</p>
+    </div>
+  </div>
+
+  <!-- ===== WHY: THE LINKED LIST ===== -->
+  <h2>Why: React Tracks Hooks by Call Order</h2>
+
+  <p>React doesn't use the variable names you give to hooks. Internally, it maintains an ordered list (like a linked list) of hook values for each component instance. On each render, React walks through this list in order, matching each <code>useState</code>/<code>useEffect</code>/etc. call to its stored state.</p>
+
+  <h3>Normal render (hooks in consistent order)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">useState(0)</div>
+      <div class="desc">Slot 0: count = 0</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">useState("")</div>
+      <div class="desc">Slot 1: name = ""</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">useEffect(fn)</div>
+      <div class="desc">Slot 2: effect</div>
+    </div>
+  </div>
+
+  <p>On re-render, React expects the same order: slot 0 &rarr; slot 1 &rarr; slot 2.</p>
+
+  <h3>Broken render (conditional hook)</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Conditional hook (BROKEN)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Profile</span> = ({ user }: <span class="type">Props</span>) => {
+  <span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+  <span class="cm">// WRONG: hook inside a condition</span>
+  <span class="kw">if</span> (user.isAdmin) {
+    <span class="kw">const</span> [role, setRole] = <span class="fn">useState</span>(<span class="str">"admin"</span>)
+  }
+
+  <span class="kw">const</span> [email, setEmail] = <span class="fn">useState</span>(<span class="str">""</span>)
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">What React sees</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Render 1 (isAdmin = true):</span>
+<span class="cm">// Slot 0: name</span>
+<span class="cm">// Slot 1: role    &lt;-- exists</span>
+<span class="cm">// Slot 2: email</span>
+
+<span class="cm">// Render 2 (isAdmin = false):</span>
+<span class="cm">// Slot 0: name</span>
+<span class="cm">// Slot 1: email   &lt;-- WRONG!</span>
+<span class="cm">//   React gives email the value of role</span>
+<span class="cm">//   Everything after is shifted &amp; corrupted</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The result:</strong> State gets mixed up between different hooks. Your <code>email</code> variable receives the value stored for <code>role</code>. Effects run with wrong dependencies. The component behaves unpredictably.
+  </div>
+
+  <!-- ===== HOW TO WORK AROUND ===== -->
+  <h2>How to Work Around It</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Wrong: hook after condition</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Profile</span> = ({ show }: <span class="type">Props</span>) => {
+  <span class="kw">if</span> (!show) <span class="kw">return null</span>
+  <span class="cm">// WRONG: hooks below an early return</span>
+  <span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+  <span class="cm">// ...</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Right: hooks first, then conditions</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Profile</span> = ({ show }: <span class="type">Props</span>) => {
+  <span class="cm">// ALL hooks first, unconditionally</span>
+  <span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+  <span class="cm">// THEN conditionally return</span>
+  <span class="kw">if</span> (!show) <span class="kw">return null</span>
+
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>{name}<span class="tag">&lt;/p&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Wrong: conditional hook call</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Form</span> = ({ advanced }: <span class="type">Props</span>) => {
+  <span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+  <span class="kw">if</span> (advanced) {
+    <span class="cm">// WRONG: conditional useEffect</span>
+    <span class="fn">useEffect</span>(() => { <span class="fn">validate</span>() }, [name])
+  }
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Right: condition inside hook</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Form</span> = ({ advanced }: <span class="type">Props</span>) => {
+  <span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+  <span class="cm">// Always call the hook, condition inside</span>
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">if</span> (advanced) <span class="fn">validate</span>()
+  }, [name, advanced])
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Pattern:</strong> Always call all hooks unconditionally at the top of your component. Put conditional logic <em>inside</em> the hook body, never around the hook call itself.
+  </div>
+
+  <!-- ===== VALID LOCATIONS ===== -->
+  <h2>Where Hooks Are Valid</h2>
+
+  <table>
+    <thead>
+      <tr><th>Location</th><th>Valid?</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Top level of a function component</td><td>Yes</td><td>This is the intended location</td></tr>
+      <tr><td>Top level of a custom hook</td><td>Yes</td><td>Custom hooks are just functions that call hooks</td></tr>
+      <tr><td>Inside an <code>if</code> block</td><td>No</td><td>Call order may change between renders</td></tr>
+      <tr><td>Inside a <code>for</code> loop</td><td>No</td><td>Number of calls may change</td></tr>
+      <tr><td>Inside a callback / nested function</td><td>No</td><td>May not run on every render</td></tr>
+      <tr><td>Inside a regular (non-React) function</td><td>No</td><td>No component instance to attach to</td></tr>
+      <tr><td>Inside a class component</td><td>No</td><td>Hooks are for function components only</td></tr>
+      <tr><td>After an early <code>return</code></td><td>No</td><td>Won't execute when condition is met</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== ESLINT ===== -->
+  <h2>ESLint Enforcement</h2>
+
+  <p>Don't rely on memory for these rules. The <code>eslint-plugin-react-hooks</code> package catches violations automatically.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add -D eslint-plugin-react-hooks<br>
+  </div>
+
+<pre><code><span class="cm">// eslint.config.js (flat config)</span>
+<span class="kw">import</span> reactHooks <span class="kw">from</span> <span class="str">"eslint-plugin-react-hooks"</span>
+
+<span class="kw">export default</span> [
+  {
+    <span class="prop">plugins</span>: { <span class="str">"react-hooks"</span>: reactHooks },
+    <span class="prop">rules</span>: {
+      <span class="str">"react-hooks/rules-of-hooks"</span>: <span class="str">"error"</span>,        <span class="cm">// Checks Rules of Hooks</span>
+      <span class="str">"react-hooks/exhaustive-deps"</span>: <span class="str">"warn"</span>,        <span class="cm">// Checks useEffect deps</span>
+    },
+  },
+]</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> If you set up your project with <code>create-vite</code> or any modern React template, this plugin is usually pre-configured. Verify it's active by intentionally writing a conditional hook and checking that your editor flags it.
+  </div>
+
+  <!-- ===== CUSTOM HOOKS ===== -->
+  <h2>Custom Hooks Follow the Same Rules</h2>
+
+  <p>Custom hooks are just functions whose names start with <code>use</code>. They can call other hooks, and the same ordering rules apply.</p>
+
+<pre><code><span class="cm">// Custom hook — valid because it starts with "use"</span>
+<span class="kw">const</span> <span class="fn">useWindowWidth</span> = (): <span class="type">number</span> => {
+  <span class="kw">const</span> [width, setWidth] = <span class="fn">useState</span>(window.innerWidth)
+
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">const</span> <span class="fn">handler</span> = () => <span class="fn">setWidth</span>(window.innerWidth)
+    window.<span class="fn">addEventListener</span>(<span class="str">"resize"</span>, handler)
+    <span class="kw">return</span> () => window.<span class="fn">removeEventListener</span>(<span class="str">"resize"</span>, handler)
+  }, [])
+
+  <span class="kw">return</span> width
+}
+
+<span class="cm">// Usage in a component:</span>
+<span class="kw">const</span> <span class="fn">Header</span> = () => {
+  <span class="kw">const</span> width = <span class="fn">useWindowWidth</span>()  <span class="cm">// calls hooks internally, same rules apply</span>
+  <span class="kw">return</span> <span class="tag">&lt;header&gt;</span>Width: {width}px<span class="tag">&lt;/header&gt;</span>
+}</code></pre>
+
+  <div class="warn">
+    <strong>Naming matters:</strong> If your function's name starts with <code>use</code>, React (and the ESLint plugin) treats it as a hook. It must follow hook rules. If a helper function does NOT call hooks, don't prefix it with <code>use</code>.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>14 — Auth Pattern</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>14 — Authentication Pattern</h1>
+  <p class="subtitle">JWT-based auth for React SPAs: token management, protected routes, and managed auth options.</p>
+
+  <!-- ===== JWT FLOW ===== -->
+  <h2>The JWT Authentication Flow</h2>
+
+  <p>JWT (JSON Web Token) auth is the standard pattern for SPAs. It's the same flow you'd use from any HTTP client &mdash; the frontend just adds UI state management on top.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Login</div>
+      <div class="desc">POST /auth/login with credentials</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Receive Tokens</div>
+      <div class="desc">Access token + refresh token</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Store Tokens</div>
+      <div class="desc">Access: memory. Refresh: httpOnly cookie</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Attach to Requests</div>
+      <div class="desc">Authorization: Bearer &lt;token&gt;</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Refresh on Expiry</div>
+      <div class="desc">Auto-refresh when 401 received</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> This is the exact same JWT flow you'd implement with Flask-JWT-Extended or FastAPI's OAuth2 password bearer. The only difference: on the frontend, you manage where to store tokens and how to attach them to requests.
+  </div>
+
+  <!-- ===== TOKEN STORAGE ===== -->
+  <h2>Where to Store Tokens</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Storage</th>
+        <th>Access Token</th>
+        <th>Refresh Token</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>localStorage</code></td>
+        <td style="color: #f87171;">Never</td>
+        <td style="color: #f87171;">Never</td>
+        <td>Accessible to any JS on the page (XSS attack vector)</td>
+      </tr>
+      <tr>
+        <td>JavaScript variable (memory)</td>
+        <td style="color: #34d399;">Yes</td>
+        <td style="color: #f87171;">No</td>
+        <td>Lost on page refresh, but that's OK &mdash; refresh token restores it</td>
+      </tr>
+      <tr>
+        <td>httpOnly cookie</td>
+        <td style="color: #f87171;">No</td>
+        <td style="color: #34d399;">Yes</td>
+        <td>Not accessible to JS, sent automatically by browser</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Security rule:</strong> NEVER store tokens in <code>localStorage</code> or <code>sessionStorage</code>. Any JavaScript on the page (including third-party scripts and XSS payloads) can read them. The access token lives in a JavaScript variable (Zustand store), and the refresh token goes in an httpOnly cookie set by your backend.
+  </div>
+
+  <!-- ===== AUTH STORE ===== -->
+  <h2>Auth Store with Zustand</h2>
+
+  <p>The auth store holds the current user, access token, and provides login/logout actions.</p>
+
+<pre><code><span class="cm">// features/auth/types.ts</span>
+
+<span class="kw">export interface</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">role</span>: <span class="str">'admin'</span> | <span class="str">'user'</span>
+}
+
+<span class="kw">export interface</span> <span class="type">LoginData</span> {
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">password</span>: <span class="type">string</span>
+}</code></pre>
+
+<pre><code><span class="cm">// features/auth/store.ts</span>
+
+<span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">User</span>, <span class="type">LoginData</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+<span class="kw">import</span> { <span class="fn">loginApi</span>, <span class="fn">logoutApi</span>, <span class="fn">refreshApi</span> } <span class="kw">from</span> <span class="str">'./api'</span>
+
+<span class="kw">interface</span> <span class="type">AuthState</span> {
+  <span class="prop">user</span>: <span class="type">User</span> | <span class="type">null</span>
+  <span class="prop">token</span>: <span class="type">string</span> | <span class="type">null</span>
+  <span class="prop">isAuthenticated</span>: <span class="type">boolean</span>
+  <span class="fn">login</span>: (<span class="prop">credentials</span>: <span class="type">LoginData</span>) =&gt; <span class="type">Promise</span>&lt;<span class="type">void</span>&gt;
+  <span class="fn">logout</span>: () =&gt; <span class="type">void</span>
+  <span class="fn">refresh</span>: () =&gt; <span class="type">Promise</span>&lt;<span class="type">void</span>&gt;
+  <span class="fn">setAuth</span>: (<span class="prop">user</span>: <span class="type">User</span>, <span class="prop">token</span>: <span class="type">string</span>) =&gt; <span class="type">void</span>
+  <span class="fn">clearAuth</span>: () =&gt; <span class="type">void</span>
+}
+
+<span class="kw">export const</span> <span class="fn">useAuthStore</span> = <span class="fn">create</span>&lt;<span class="type">AuthState</span>&gt;((<span class="prop">set</span>) =&gt; ({
+  <span class="prop">user</span>: <span class="kw">null</span>,
+  <span class="prop">token</span>: <span class="kw">null</span>,
+  <span class="prop">isAuthenticated</span>: <span class="kw">false</span>,
+
+  <span class="fn">login</span>: <span class="kw">async</span> (<span class="prop">credentials</span>) =&gt; {
+    <span class="kw">const</span> { <span class="prop">user</span>, <span class="prop">accessToken</span> } = <span class="kw">await</span> <span class="fn">loginApi</span>(credentials)
+    <span class="cm">// Refresh token is set as httpOnly cookie by the server</span>
+    <span class="fn">set</span>({ <span class="prop">user</span>, <span class="prop">token</span>: accessToken, <span class="prop">isAuthenticated</span>: <span class="kw">true</span> })
+  },
+
+  <span class="fn">logout</span>: () =&gt; {
+    <span class="fn">logoutApi</span>() <span class="cm">// clears httpOnly cookie on server</span>
+    <span class="fn">set</span>({ <span class="prop">user</span>: <span class="kw">null</span>, <span class="prop">token</span>: <span class="kw">null</span>, <span class="prop">isAuthenticated</span>: <span class="kw">false</span> })
+  },
+
+  <span class="fn">refresh</span>: <span class="kw">async</span> () =&gt; {
+    <span class="kw">const</span> { <span class="prop">user</span>, <span class="prop">accessToken</span> } = <span class="kw">await</span> <span class="fn">refreshApi</span>()
+    <span class="fn">set</span>({ <span class="prop">user</span>, <span class="prop">token</span>: accessToken, <span class="prop">isAuthenticated</span>: <span class="kw">true</span> })
+  },
+
+  <span class="fn">setAuth</span>: (<span class="prop">user</span>, <span class="prop">token</span>) =&gt;
+    <span class="fn">set</span>({ <span class="prop">user</span>, <span class="prop">token</span>, <span class="prop">isAuthenticated</span>: <span class="kw">true</span> }),
+
+  <span class="fn">clearAuth</span>: () =&gt;
+    <span class="fn">set</span>({ <span class="prop">user</span>: <span class="kw">null</span>, <span class="prop">token</span>: <span class="kw">null</span>, <span class="prop">isAuthenticated</span>: <span class="kw">false</span> }),
+}))</code></pre>
+
+  <!-- ===== API LAYER ===== -->
+  <h2>Auth API Layer</h2>
+
+<pre><code><span class="cm">// features/auth/api.ts</span>
+
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">User</span>, <span class="type">LoginData</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+
+<span class="kw">const</span> <span class="prop">API_URL</span> = <span class="kw">import</span>.meta.env.<span class="prop">VITE_API_URL</span>
+
+<span class="kw">interface</span> <span class="type">AuthResponse</span> {
+  <span class="prop">user</span>: <span class="type">User</span>
+  <span class="prop">accessToken</span>: <span class="type">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">loginApi</span> = <span class="kw">async</span> (<span class="prop">data</span>: <span class="type">LoginData</span>): <span class="type">Promise</span>&lt;<span class="type">AuthResponse</span>&gt; =&gt; {
+  <span class="kw">const</span> <span class="prop">res</span> = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`</span>${<span class="prop">API_URL</span>}<span class="str">/auth/login`</span>, {
+    <span class="prop">method</span>: <span class="str">'POST'</span>,
+    <span class="prop">headers</span>: { <span class="str">'Content-Type'</span>: <span class="str">'application/json'</span> },
+    <span class="prop">credentials</span>: <span class="str">'include'</span>, <span class="cm">// send/receive cookies</span>
+    <span class="prop">body</span>: <span class="type">JSON</span>.<span class="fn">stringify</span>(data),
+  })
+  <span class="kw">if</span> (!<span class="prop">res</span>.<span class="prop">ok</span>) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">'Login failed'</span>)
+  <span class="kw">return</span> <span class="prop">res</span>.<span class="fn">json</span>()
+}
+
+<span class="kw">export const</span> <span class="fn">refreshApi</span> = <span class="kw">async</span> (): <span class="type">Promise</span>&lt;<span class="type">AuthResponse</span>&gt; =&gt; {
+  <span class="kw">const</span> <span class="prop">res</span> = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`</span>${<span class="prop">API_URL</span>}<span class="str">/auth/refresh`</span>, {
+    <span class="prop">method</span>: <span class="str">'POST'</span>,
+    <span class="prop">credentials</span>: <span class="str">'include'</span>, <span class="cm">// sends httpOnly cookie</span>
+  })
+  <span class="kw">if</span> (!<span class="prop">res</span>.<span class="prop">ok</span>) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">'Refresh failed'</span>)
+  <span class="kw">return</span> <span class="prop">res</span>.<span class="fn">json</span>()
+}
+
+<span class="kw">export const</span> <span class="fn">logoutApi</span> = () =&gt;
+  <span class="fn">fetch</span>(<span class="str">`</span>${<span class="prop">API_URL</span>}<span class="str">/auth/logout`</span>, {
+    <span class="prop">method</span>: <span class="str">'POST'</span>,
+    <span class="prop">credentials</span>: <span class="str">'include'</span>,
+  })</code></pre>
+
+  <!-- ===== PROTECTED ROUTES ===== -->
+  <h2>Protected Routes</h2>
+
+  <p>With TanStack Router, you protect routes using <code>beforeLoad</code> &mdash; a function that runs before the route renders. If the user isn't authenticated, redirect to login.</p>
+
+<pre><code><span class="cm">// routes/_authenticated.tsx</span>
+<span class="cm">// Layout route &mdash; all child routes require auth</span>
+
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">redirect</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="fn">useAuthStore</span> } <span class="kw">from</span> <span class="str">'@features/auth'</span>
+
+<span class="kw">export const</span> <span class="prop">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/_authenticated'</span>)({
+  <span class="fn">beforeLoad</span>: () =&gt; {
+    <span class="kw">const</span> { <span class="prop">isAuthenticated</span> } = <span class="fn">useAuthStore</span>.<span class="fn">getState</span>()
+    <span class="kw">if</span> (!isAuthenticated) {
+      <span class="kw">throw</span> <span class="fn">redirect</span>({
+        <span class="prop">to</span>: <span class="str">'/login'</span>,
+        <span class="prop">search</span>: { <span class="prop">redirect</span>: location.<span class="prop">pathname</span> },
+      })
+    }
+  },
+})</code></pre>
+
+  <div class="file-tree">
+    <span class="dir">routes/</span><br>
+    &nbsp;&nbsp;<span class="file">__root.tsx</span><br>
+    &nbsp;&nbsp;<span class="file">login.tsx</span> <span class="file">&larr; public</span><br>
+    &nbsp;&nbsp;<span class="file">signup.tsx</span> <span class="file">&larr; public</span><br>
+    &nbsp;&nbsp;<span class="highlight">_authenticated.tsx</span> <span class="file">&larr; layout with auth check</span><br>
+    &nbsp;&nbsp;<span class="dir">_authenticated/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">dashboard.tsx</span> <span class="file">&larr; requires auth</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">settings.tsx</span> <span class="file">&larr; requires auth</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">profile.tsx</span> <span class="file">&larr; requires auth</span><br>
+  </div>
+
+  <!-- ===== LOGIN/LOGOUT FLOW ===== -->
+  <h2>Login / Logout Flow</h2>
+
+  <h3>Login component</h3>
+
+<pre><code><span class="cm">// features/auth/components/LoginForm.tsx</span>
+
+<span class="kw">import</span> { <span class="fn">useAuthStore</span> } <span class="kw">from</span> <span class="str">'../store'</span>
+<span class="kw">import</span> { <span class="fn">useNavigate</span>, <span class="fn">useSearch</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">LoginForm</span> = () =&gt; {
+  <span class="kw">const</span> <span class="prop">login</span> = <span class="fn">useAuthStore</span>((<span class="prop">s</span>) =&gt; <span class="prop">s</span>.<span class="prop">login</span>)
+  <span class="kw">const</span> <span class="prop">navigate</span> = <span class="fn">useNavigate</span>()
+  <span class="kw">const</span> { <span class="prop">redirect</span> } = <span class="fn">useSearch</span>({ <span class="prop">from</span>: <span class="str">'/login'</span> })
+
+  <span class="kw">const</span> <span class="fn">handleSubmit</span> = <span class="kw">async</span> (<span class="prop">e</span>: <span class="type">React.FormEvent</span>&lt;<span class="type">HTMLFormElement</span>&gt;) =&gt; {
+    <span class="prop">e</span>.<span class="fn">preventDefault</span>()
+    <span class="kw">const</span> <span class="prop">formData</span> = <span class="kw">new</span> <span class="type">FormData</span>(<span class="prop">e</span>.<span class="prop">currentTarget</span>)
+
+    <span class="kw">await</span> <span class="fn">login</span>({
+      <span class="prop">email</span>: <span class="prop">formData</span>.<span class="fn">get</span>(<span class="str">'email'</span>) <span class="kw">as</span> <span class="type">string</span>,
+      <span class="prop">password</span>: <span class="prop">formData</span>.<span class="fn">get</span>(<span class="str">'password'</span>) <span class="kw">as</span> <span class="type">string</span>,
+    })
+
+    <span class="cm">// Redirect to intended page or dashboard</span>
+    <span class="fn">navigate</span>({ <span class="prop">to</span>: redirect ?? <span class="str">'/dashboard'</span> })
+  }
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">form</span> <span class="attr">onSubmit</span>={<span class="prop">handleSubmit</span>}&gt;
+      &lt;<span class="tag">input</span> <span class="attr">name</span>=<span class="str">"email"</span> <span class="attr">type</span>=<span class="str">"email"</span> <span class="attr">required</span> /&gt;
+      &lt;<span class="tag">input</span> <span class="attr">name</span>=<span class="str">"password"</span> <span class="attr">type</span>=<span class="str">"password"</span> <span class="attr">required</span> /&gt;
+      &lt;<span class="tag">button</span> <span class="attr">type</span>=<span class="str">"submit"</span>&gt;Log in&lt;/<span class="tag">button</span>&gt;
+    &lt;/<span class="tag">form</span>&gt;
+  )
+}</code></pre>
+
+  <h3>Logout action</h3>
+
+<pre><code><span class="cm">// In a header or settings component</span>
+
+<span class="kw">import</span> { <span class="fn">useAuthStore</span> } <span class="kw">from</span> <span class="str">'@features/auth'</span>
+<span class="kw">import</span> { <span class="fn">useQueryClient</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+<span class="kw">import</span> { <span class="fn">useNavigate</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">const</span> <span class="fn">handleLogout</span> = () =&gt; {
+  <span class="fn">useAuthStore</span>.<span class="fn">getState</span>().<span class="fn">logout</span>()
+
+  <span class="cm">// Clear ALL cached data &mdash; it belongs to the old user</span>
+  <span class="fn">queryClient</span>.<span class="fn">clear</span>()
+
+  <span class="cm">// Redirect to login</span>
+  <span class="fn">navigate</span>({ <span class="prop">to</span>: <span class="str">'/login'</span> })
+}</code></pre>
+
+  <!-- ===== TOKEN REFRESH ===== -->
+  <h2>Token Refresh Interceptor</h2>
+
+  <p>When the access token expires, API requests return a 401. Instead of logging the user out, you silently refresh the token and retry the request.</p>
+
+<pre><code><span class="cm">// shared/utils/api.ts (enhanced version)</span>
+
+<span class="kw">import</span> { <span class="fn">useAuthStore</span> } <span class="kw">from</span> <span class="str">'@features/auth'</span>
+
+<span class="kw">let</span> <span class="prop">isRefreshing</span> = <span class="kw">false</span>
+<span class="kw">let</span> <span class="prop">refreshPromise</span>: <span class="type">Promise</span>&lt;<span class="type">void</span>&gt; | <span class="kw">null</span> = <span class="kw">null</span>
+
+<span class="kw">const</span> <span class="fn">fetchWithAuth</span> = <span class="kw">async</span> (
+  <span class="prop">url</span>: <span class="type">string</span>,
+  <span class="prop">options</span>: <span class="type">RequestInit</span> = {}
+): <span class="type">Promise</span>&lt;<span class="type">Response</span>&gt; =&gt; {
+  <span class="kw">const</span> { <span class="prop">token</span> } = <span class="fn">useAuthStore</span>.<span class="fn">getState</span>()
+
+  <span class="kw">const</span> <span class="prop">res</span> = <span class="kw">await</span> <span class="fn">fetch</span>(url, {
+    ...<span class="prop">options</span>,
+    <span class="prop">headers</span>: {
+      ...<span class="prop">options</span>.<span class="prop">headers</span>,
+      <span class="prop">Authorization</span>: <span class="str">`Bearer </span>${token}<span class="str">`</span>,
+    },
+    <span class="prop">credentials</span>: <span class="str">'include'</span>,
+  })
+
+  <span class="kw">if</span> (<span class="prop">res</span>.<span class="prop">status</span> === <span class="num">401</span>) {
+    <span class="cm">// Prevent multiple simultaneous refresh requests</span>
+    <span class="kw">if</span> (!<span class="prop">isRefreshing</span>) {
+      <span class="prop">isRefreshing</span> = <span class="kw">true</span>
+      <span class="prop">refreshPromise</span> = <span class="fn">useAuthStore</span>.<span class="fn">getState</span>().<span class="fn">refresh</span>()
+        .<span class="fn">finally</span>(() =&gt; { <span class="prop">isRefreshing</span> = <span class="kw">false</span> })
+    }
+    <span class="kw">await</span> <span class="prop">refreshPromise</span>
+
+    <span class="cm">// Retry original request with new token</span>
+    <span class="kw">const</span> { <span class="prop">token</span>: <span class="prop">newToken</span> } = <span class="fn">useAuthStore</span>.<span class="fn">getState</span>()
+    <span class="kw">return</span> <span class="fn">fetch</span>(url, {
+      ...<span class="prop">options</span>,
+      <span class="prop">headers</span>: { ...<span class="prop">options</span>.<span class="prop">headers</span>, <span class="prop">Authorization</span>: <span class="str">`Bearer </span>${newToken}<span class="str">`</span> },
+      <span class="prop">credentials</span>: <span class="str">'include'</span>,
+    })
+  }
+
+  <span class="kw">return</span> <span class="prop">res</span>
+}</code></pre>
+
+  <div class="note">
+    <strong>Key detail:</strong> The <code>isRefreshing</code> flag ensures that if 5 API calls fail simultaneously with 401, only ONE refresh request is made. All others wait for the same promise.
+  </div>
+
+  <!-- ===== MANAGED AUTH ===== -->
+  <h2>Managed Auth Options</h2>
+
+  <p>Building auth from scratch is complex and security-sensitive. For many projects, a managed auth provider handles the hard parts for you.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Best For</th>
+        <th>Pricing</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Supabase Auth</strong></td>
+        <td>Full-stack with Supabase DB</td>
+        <td>Free tier generous</td>
+        <td>Built-in to Supabase. Email, OAuth, magic link. Row-level security.</td>
+      </tr>
+      <tr>
+        <td><strong>Clerk</strong></td>
+        <td>Best DX, pre-built UI</td>
+        <td>Free up to 10K MAU</td>
+        <td>Drop-in components. Session management. Multi-factor. Great React SDK.</td>
+      </tr>
+      <tr>
+        <td><strong>Auth0</strong></td>
+        <td>Enterprise, complex requirements</td>
+        <td>Free tier, then expensive</td>
+        <td>Very configurable. RBAC, SSO, compliance features.</td>
+      </tr>
+      <tr>
+        <td><strong>Firebase Auth</strong></td>
+        <td>Google ecosystem</td>
+        <td>Free (generous)</td>
+        <td>Phone auth, email, OAuth. Tightly coupled to Firebase.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Use managed auth when...</div>
+      <div class="comp-body">
+        <ul>
+          <li>Building an MVP / shipping fast</li>
+          <li>You need OAuth (Google, GitHub login)</li>
+          <li>You don't want to handle password hashing, email verification, rate limiting</li>
+          <li>You need compliance features (SOC2, GDPR)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Roll your own when...</div>
+      <div class="comp-body">
+        <ul>
+          <li>You need full control over the auth flow</li>
+          <li>Cost at scale is a concern (managed auth charges per user)</li>
+          <li>Your backend already has auth (Django/FastAPI)</li>
+          <li>Regulatory requirements demand self-hosted auth</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SECURITY CHECKLIST ===== -->
+  <h2>Security Checklist</h2>
+
+  <div class="panel">
+    <div class="panel-title">Frontend auth security essentials</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Rule</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Never store tokens in <code>localStorage</code></td>
+          <td>XSS can read it. Any malicious script gets your token.</td>
+        </tr>
+        <tr>
+          <td>Use httpOnly cookies for refresh tokens</td>
+          <td>JavaScript cannot access httpOnly cookies.</td>
+        </tr>
+        <tr>
+          <td>Short-lived access tokens (15 min)</td>
+          <td>Limits damage window if token is leaked.</td>
+        </tr>
+        <tr>
+          <td>CSRF protection on cookie endpoints</td>
+          <td>Cookies are sent automatically &mdash; verify origin header or use CSRF tokens.</td>
+        </tr>
+        <tr>
+          <td>Always validate on the server</td>
+          <td>Frontend auth is UX. Backend auth is security. Never trust the client.</td>
+        </tr>
+        <tr>
+          <td>Clear query cache on logout</td>
+          <td>Cached data belongs to the previous user.</td>
+        </tr>
+        <tr>
+          <td>Use <code>credentials: 'include'</code> in fetch</td>
+          <td>Required for cookies to be sent cross-origin.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Python analogy:</strong> This is the same as Flask-Login's session management, just split differently. In Flask, the session cookie handles everything. In a SPA, you split into access token (for API calls) + refresh token (for session continuity). The security principles are identical: httpOnly, secure, short-lived, server-validated.
+  </div>
+
+</body>
+</html>

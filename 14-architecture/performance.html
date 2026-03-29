@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>14 — Performance</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>14 — React Performance</h1>
+  <p class="subtitle">Profiling, code splitting, memoization, and optimization strategies for React apps.</p>
+
+  <!-- ===== DON'T OPTIMIZE PREMATURELY ===== -->
+  <h2>React Is Fast by Default</h2>
+
+  <div class="panel">
+    <div class="panel-title">The golden rule of React performance</div>
+    <p>Don't optimize prematurely. React's virtual DOM diffing is efficient. Most apps never need performance work. The workflow is always:</p>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">Notice slowness</div>
+        <div class="desc">User-visible lag</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Measure</div>
+        <div class="desc">React DevTools Profiler</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Identify cause</div>
+        <div class="desc">Find the slow component</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">Optimize</div>
+        <div class="desc">Apply targeted fix</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">5</div>
+        <div class="label">Measure again</div>
+        <div class="desc">Verify improvement</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Anti-pattern:</strong> Wrapping everything in <code>React.memo</code> and <code>useCallback</code> "just in case." This adds complexity and can actually make things slower (memo comparison has a cost). Only optimize what you've <em>measured</em> to be slow.
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Same as profiling Python with <code>cProfile</code> or <code>py-spy</code>. You wouldn't rewrite a Python function in C without first proving it's the bottleneck. Same principle here.
+  </div>
+
+  <!-- ===== REACT DEVTOOLS PROFILER ===== -->
+  <h2>React DevTools Profiler</h2>
+
+  <p>The Profiler is built into the React DevTools browser extension. It records renders and shows you exactly what re-rendered and why.</p>
+
+  <h3>How to use it</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Install <strong>React DevTools</strong> browser extension (Chrome or Firefox)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>Open DevTools &rarr; <strong>Profiler</strong> tab (next to Components tab)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Click <strong>Record</strong>, interact with your app, click <strong>Stop</strong></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>Read the <strong>flamegraph</strong>: wide bars = slow renders, gray bars = didn't re-render</div>
+    </div>
+  </div>
+
+  <h3>What to look for</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Signal</th>
+        <th>Meaning</th>
+        <th>Fix</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Component renders on every keystroke</td>
+        <td>State is too high / lifting too much</td>
+        <td>Move state down, or use uncontrolled inputs</td>
+      </tr>
+      <tr>
+        <td>Large list re-renders completely</td>
+        <td>Parent re-renders, all children follow</td>
+        <td><code>React.memo</code> on list items, or virtualize</td>
+      </tr>
+      <tr>
+        <td>Expensive computation every render</td>
+        <td>Calculation not cached</td>
+        <td><code>useMemo</code> for expensive derivations</td>
+      </tr>
+      <tr>
+        <td>Callback causes child to re-render</td>
+        <td>New function reference each render</td>
+        <td><code>useCallback</code> to stabilize the reference</td>
+      </tr>
+      <tr>
+        <td>Context change re-renders everything</td>
+        <td>Too much in one context</td>
+        <td>Split contexts, or use Zustand instead</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== CODE SPLITTING ===== -->
+  <h2>Code Splitting with React.lazy</h2>
+
+  <p>By default, Vite bundles your entire app into a few JavaScript files. Code splitting lets you load parts of your app on demand, reducing the initial download.</p>
+
+  <h3>React.lazy + Suspense</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">lazy</span>, <span class="type">Suspense</span> } <span class="kw">from</span> <span class="str">'react'</span>
+
+<span class="cm">// Instead of: import { SettingsPage } from './features/settings/SettingsPage'</span>
+<span class="cm">// Lazy load &mdash; creates a separate chunk</span>
+<span class="kw">const</span> <span class="type">SettingsPage</span> = <span class="fn">lazy</span>(() =&gt; <span class="kw">import</span>(<span class="str">'./features/settings/SettingsPage'</span>))
+
+<span class="cm">// Must wrap in Suspense with a fallback</span>
+<span class="kw">const</span> <span class="fn">App</span> = () =&gt; (
+  &lt;<span class="tag">Suspense</span> <span class="attr">fallback</span>={&lt;<span class="tag">div</span>&gt;Loading...&lt;/<span class="tag">div</span>&gt;}&gt;
+    &lt;<span class="tag">SettingsPage</span> /&gt;
+  &lt;/<span class="tag">Suspense</span>&gt;
+)</code></pre>
+
+  <div class="note">
+    <strong>How it works:</strong> <code>React.lazy</code> tells the bundler (Vite/Rollup) to split this import into a separate file. When the component is first needed, React downloads the chunk, shows the fallback while loading, then renders the component.
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like lazy imports in Python (<code>importlib.import_module()</code> at call time instead of top-level). The module isn't loaded until you actually need it.
+  </div>
+
+  <h3>Route-based splitting (TanStack Router)</h3>
+
+  <p>The most impactful place to split is at the route level. Each page becomes its own chunk.</p>
+
+<pre><code><span class="cm">// routes/_authenticated/settings.lazy.tsx</span>
+<span class="cm">// The .lazy.tsx suffix tells TanStack Router to code-split this route</span>
+
+<span class="kw">import</span> { <span class="fn">createLazyFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="type">SettingsPage</span> } <span class="kw">from</span> <span class="str">'@features/settings'</span>
+
+<span class="kw">export const</span> <span class="prop">Route</span> = <span class="fn">createLazyFileRoute</span>(<span class="str">'/_authenticated/settings'</span>)({
+  <span class="prop">component</span>: <span class="type">SettingsPage</span>,
+})</code></pre>
+
+  <div class="tip">
+    <strong>Result:</strong> When a user visits <code>/dashboard</code>, they don't download the settings page code. It loads only when they navigate to <code>/settings</code>. This can cut initial bundle size by 50%+ for large apps.
+  </div>
+
+  <!-- ===== BUNDLE ANALYSIS ===== -->
+  <h2>Bundle Analysis</h2>
+
+  <p>Before optimizing, see what's in your bundle. Large dependencies you didn't expect are often the biggest win.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm add -D rollup-plugin-visualizer<br>
+  </div>
+
+<pre><code><span class="cm">// vite.config.ts</span>
+<span class="kw">import</span> { <span class="fn">visualizer</span> } <span class="kw">from</span> <span class="str">'rollup-plugin-visualizer'</span>
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  <span class="prop">plugins</span>: [
+    <span class="fn">react</span>(),
+    <span class="fn">visualizer</span>({
+      <span class="prop">open</span>: <span class="kw">true</span>,        <span class="cm">// auto-open in browser after build</span>
+      <span class="prop">gzipSize</span>: <span class="kw">true</span>,    <span class="cm">// show gzipped sizes</span>
+      <span class="prop">filename</span>: <span class="str">'stats.html'</span>,
+    }),
+  ],
+})</code></pre>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm build<br>
+    <span class="output"># Opens a treemap visualization showing every dependency and its size</span><br>
+    <span class="output"># Look for: unexpectedly large libraries, duplicate dependencies</span>
+  </div>
+
+  <h3>Common findings and fixes</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Finding</th>
+        <th>Fix</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>moment.js</code> (300KB+)</td>
+        <td>Replace with <code>date-fns</code> or <code>dayjs</code> (tree-shakeable)</td>
+      </tr>
+      <tr>
+        <td><code>lodash</code> (full library imported)</td>
+        <td>Use <code>lodash-es</code> or import individual functions</td>
+      </tr>
+      <tr>
+        <td>Icon library ships all icons</td>
+        <td>Use tree-shakeable imports: <code>import { Plus } from 'lucide-react'</code></td>
+      </tr>
+      <tr>
+        <td>Syntax highlighting library (200KB+)</td>
+        <td>Lazy-load it &mdash; only needed on specific pages</td>
+      </tr>
+      <tr>
+        <td>Entire UI library in bundle</td>
+        <td>shadcn/ui copies code, so you only have what you use</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== MEMOIZATION ===== -->
+  <h2>When to Memoize</h2>
+
+  <p>React provides three memoization tools. Use them <strong>only when the Profiler shows a problem</strong>.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>What It Does</th>
+        <th>Use When</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>React.memo(Component)</code></td>
+        <td>Skips re-render if props haven't changed</td>
+        <td>Component renders often with same props (list items)</td>
+      </tr>
+      <tr>
+        <td><code>useMemo(() =&gt; value, [deps])</code></td>
+        <td>Caches a computed value between renders</td>
+        <td>Expensive calculation (sorting, filtering large lists)</td>
+      </tr>
+      <tr>
+        <td><code>useCallback((args) =&gt; fn, [deps])</code></td>
+        <td>Caches a function reference between renders</td>
+        <td>Function passed as prop to a memoized child</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Example: Memoizing an expensive list</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Before (re-renders all items)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">UserList</span> = ({ <span class="prop">users</span>, <span class="prop">filter</span> }: <span class="type">Props</span>) =&gt; {
+  <span class="cm">// Runs on EVERY render</span>
+  <span class="kw">const</span> <span class="prop">filtered</span> = <span class="prop">users</span>
+    .<span class="fn">filter</span>((<span class="prop">u</span>) =&gt; <span class="prop">u</span>.<span class="prop">name</span>.<span class="fn">includes</span>(<span class="prop">filter</span>))
+    .<span class="fn">sort</span>((<span class="prop">a</span>, <span class="prop">b</span>) =&gt;
+      <span class="prop">a</span>.<span class="prop">name</span>.<span class="fn">localeCompare</span>(<span class="prop">b</span>.<span class="prop">name</span>))
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">ul</span>&gt;
+      {<span class="prop">filtered</span>.<span class="fn">map</span>((<span class="prop">u</span>) =&gt;
+        &lt;<span class="tag">UserCard</span> <span class="attr">key</span>={<span class="prop">u</span>.<span class="prop">id</span>} <span class="attr">user</span>={<span class="prop">u</span>} /&gt;
+      )}
+    &lt;/<span class="tag">ul</span>&gt;
+  )
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">After (memoized)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">UserList</span> = ({ <span class="prop">users</span>, <span class="prop">filter</span> }: <span class="type">Props</span>) =&gt; {
+  <span class="cm">// Only recalculates when users or</span>
+  <span class="cm">// filter actually change</span>
+  <span class="kw">const</span> <span class="prop">filtered</span> = <span class="fn">useMemo</span>(() =&gt;
+    <span class="prop">users</span>
+      .<span class="fn">filter</span>((<span class="prop">u</span>) =&gt; <span class="prop">u</span>.<span class="prop">name</span>.<span class="fn">includes</span>(<span class="prop">filter</span>))
+      .<span class="fn">sort</span>((<span class="prop">a</span>, <span class="prop">b</span>) =&gt;
+        <span class="prop">a</span>.<span class="prop">name</span>.<span class="fn">localeCompare</span>(<span class="prop">b</span>.<span class="prop">name</span>)),
+    [<span class="prop">users</span>, <span class="prop">filter</span>]
+  )
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">ul</span>&gt;
+      {<span class="prop">filtered</span>.<span class="fn">map</span>((<span class="prop">u</span>) =&gt;
+        &lt;<span class="tag">UserCard</span> <span class="attr">key</span>={<span class="prop">u</span>.<span class="prop">id</span>} <span class="attr">user</span>={<span class="prop">u</span>} /&gt;
+      )}
+    &lt;/<span class="tag">ul</span>&gt;
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>React.memo for list items</h3>
+
+<pre><code><span class="cm">// Wrap the child component so it skips re-render when props are the same</span>
+<span class="kw">import</span> { <span class="fn">memo</span> } <span class="kw">from</span> <span class="str">'react'</span>
+
+<span class="kw">interface</span> <span class="type">UserCardProps</span> {
+  <span class="prop">user</span>: <span class="type">User</span>
+  <span class="fn">onSelect</span>: (<span class="prop">id</span>: <span class="type">string</span>) =&gt; <span class="type">void</span>
+}
+
+<span class="kw">export const</span> <span class="type">UserCard</span> = <span class="fn">memo</span>(({ <span class="prop">user</span>, <span class="prop">onSelect</span> }: <span class="type">UserCardProps</span>) =&gt; {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">onSelect</span>(<span class="prop">user</span>.<span class="prop">id</span>)}&gt;
+      {<span class="prop">user</span>.<span class="prop">name</span>}
+    &lt;/<span class="tag">div</span>&gt;
+  )
+})
+
+<span class="cm">// In the parent, stabilize the callback with useCallback</span>
+<span class="kw">const</span> <span class="fn">handleSelect</span> = <span class="fn">useCallback</span>((<span class="prop">id</span>: <span class="type">string</span>) =&gt; {
+  <span class="fn">setSelectedId</span>(id)
+}, []) <span class="cm">// empty deps &mdash; function never changes</span></code></pre>
+
+  <!-- ===== IMAGE OPTIMIZATION ===== -->
+  <h2>Image Optimization</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Technique</th>
+        <th>Implementation</th>
+        <th>Impact</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Lazy loading</td>
+        <td><code>&lt;img loading="lazy" /&gt;</code></td>
+        <td>Images below the fold load only when scrolled to</td>
+      </tr>
+      <tr>
+        <td>Responsive images</td>
+        <td><code>srcset</code> + <code>sizes</code> attributes</td>
+        <td>Browser picks the right size for the screen</td>
+      </tr>
+      <tr>
+        <td>Modern formats</td>
+        <td>WebP, AVIF instead of PNG/JPEG</td>
+        <td>30-50% smaller files, same quality</td>
+      </tr>
+      <tr>
+        <td>Width/height attributes</td>
+        <td><code>&lt;img width="400" height="300" /&gt;</code></td>
+        <td>Prevents layout shift (CLS) while loading</td>
+      </tr>
+      <tr>
+        <td>CDN delivery</td>
+        <td>Cloudflare Images, Imgix, Cloudinary</td>
+        <td>On-the-fly resizing, format conversion, edge caching</td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">&lt;!-- Responsive image with lazy loading --&gt;</span>
+&lt;<span class="tag">img</span>
+  <span class="attr">src</span>=<span class="str">"photo-800.webp"</span>
+  <span class="attr">srcset</span>=<span class="str">"photo-400.webp 400w, photo-800.webp 800w, photo-1200.webp 1200w"</span>
+  <span class="attr">sizes</span>=<span class="str">"(max-width: 600px) 400px, 800px"</span>
+  <span class="attr">loading</span>=<span class="str">"lazy"</span>
+  <span class="attr">width</span>=<span class="str">"800"</span>
+  <span class="attr">height</span>=<span class="str">"600"</span>
+  <span class="attr">alt</span>=<span class="str">"User profile"</span>
+/&gt;</code></pre>
+
+  <!-- ===== VIRTUALIZATION ===== -->
+  <h2>Virtualization</h2>
+
+  <p>When rendering very long lists (1,000+ items), the DOM itself becomes the bottleneck. Virtualization renders only the visible items plus a small buffer.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without virtualization</div>
+      <div class="comp-body">
+        <p>10,000 items = 10,000 DOM nodes.</p>
+        <p>Browser struggles to layout, paint, and handle events for all of them. Scroll becomes janky.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With virtualization</div>
+      <div class="comp-body">
+        <p>10,000 items but only ~30 DOM nodes.</p>
+        <p>As you scroll, items are recycled. Only visible items exist in the DOM.</p>
+      </div>
+    </div>
+  </div>
+
+<pre><code><span class="cm">// Using @tanstack/react-virtual</span>
+<span class="kw">import</span> { <span class="fn">useVirtualizer</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-virtual'</span>
+<span class="kw">import</span> { <span class="fn">useRef</span> } <span class="kw">from</span> <span class="str">'react'</span>
+
+<span class="kw">const</span> <span class="fn">VirtualList</span> = ({ <span class="prop">items</span> }: { <span class="prop">items</span>: <span class="type">string</span>[] }) =&gt; {
+  <span class="kw">const</span> <span class="prop">parentRef</span> = <span class="fn">useRef</span>&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">const</span> <span class="prop">virtualizer</span> = <span class="fn">useVirtualizer</span>({
+    <span class="prop">count</span>: <span class="prop">items</span>.<span class="prop">length</span>,
+    <span class="fn">getScrollElement</span>: () =&gt; <span class="prop">parentRef</span>.<span class="prop">current</span>,
+    <span class="prop">estimateSize</span>: () =&gt; <span class="num">50</span>, <span class="cm">// estimated row height in px</span>
+  })
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span> <span class="attr">ref</span>={<span class="prop">parentRef</span>} <span class="attr">style</span>={{ <span class="prop">height</span>: <span class="str">'400px'</span>, <span class="prop">overflow</span>: <span class="str">'auto'</span> }}&gt;
+      &lt;<span class="tag">div</span> <span class="attr">style</span>={{ <span class="prop">height</span>: <span class="prop">virtualizer</span>.<span class="fn">getTotalSize</span>() }}&gt;
+        {<span class="prop">virtualizer</span>.<span class="fn">getVirtualItems</span>().<span class="fn">map</span>((<span class="prop">virtualRow</span>) =&gt; (
+          &lt;<span class="tag">div</span>
+            <span class="attr">key</span>={<span class="prop">virtualRow</span>.<span class="prop">key</span>}
+            <span class="attr">style</span>={{
+              <span class="prop">position</span>: <span class="str">'absolute'</span>,
+              <span class="prop">top</span>: <span class="prop">virtualRow</span>.<span class="prop">start</span>,
+              <span class="prop">height</span>: <span class="prop">virtualRow</span>.<span class="prop">size</span>,
+            }}
+          &gt;
+            {<span class="prop">items</span>[<span class="prop">virtualRow</span>.<span class="prop">index</span>]}
+          &lt;/<span class="tag">div</span>&gt;
+        ))}
+      &lt;/<span class="tag">div</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Virtualization is like pagination, but for the DOM. Instead of sending 10,000 rows from a database (you'd paginate with <code>LIMIT/OFFSET</code>), you're "paginating" DOM nodes to only render what's visible on screen.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Performance Optimization Cheat Sheet</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Problem</th>
+        <th>Tool / Technique</th>
+        <th>When to Apply</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Large initial bundle</td>
+        <td><code>React.lazy</code> / route splitting</td>
+        <td>Always for routes, lazy-load heavy features</td>
+      </tr>
+      <tr>
+        <td>Unknown bundle contents</td>
+        <td><code>rollup-plugin-visualizer</code></td>
+        <td>Before any optimization &mdash; see what you're working with</td>
+      </tr>
+      <tr>
+        <td>Unnecessary re-renders</td>
+        <td><code>React.memo</code> + <code>useCallback</code></td>
+        <td>Only when Profiler shows wasted renders</td>
+      </tr>
+      <tr>
+        <td>Expensive calculations</td>
+        <td><code>useMemo</code></td>
+        <td>Sorting/filtering large datasets on every render</td>
+      </tr>
+      <tr>
+        <td>Huge lists (1000+ items)</td>
+        <td><code>@tanstack/react-virtual</code></td>
+        <td>When scrolling becomes janky</td>
+      </tr>
+      <tr>
+        <td>Slow image loading</td>
+        <td><code>loading="lazy"</code>, WebP, responsive</td>
+        <td>Always for below-the-fold images</td>
+      </tr>
+      <tr>
+        <td>Identifying render issues</td>
+        <td>React DevTools Profiler</td>
+        <td>Step 1 of any performance investigation</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

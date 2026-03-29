@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 — Utility Types</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>03 — Utility Types</h1>
+  <p class="subtitle">Built-in type transformations that derive new types from existing ones. TypeScript's superpower over Python's type system.</p>
+
+  <!-- ===== OVERVIEW ===== -->
+  <h2>Why Utility Types?</h2>
+
+  <div class="panel">
+    <div class="panel-title">The DRY principle for types</div>
+    <p>Instead of duplicating type definitions with small variations, utility types let you <strong>derive</strong> new types from existing ones. Define a base type once, then create variants programmatically.</p>
+  </div>
+
+<pre><code><span class="cm">// Instead of defining these separately:</span>
+<span class="kw">type</span> <span class="type">User</span> = { id: <span class="type">number</span>; name: <span class="type">string</span>; email: <span class="type">string</span>; role: <span class="type">string</span> }
+<span class="kw">type</span> <span class="type">UserUpdate</span> = { id<span class="kw">?</span>: <span class="type">number</span>; name<span class="kw">?</span>: <span class="type">string</span>; email<span class="kw">?</span>: <span class="type">string</span>; role<span class="kw">?</span>: <span class="type">string</span> }  <span class="cm">// tedious duplication</span>
+
+<span class="cm">// Derive it:</span>
+<span class="kw">type</span> <span class="type">UserUpdate</span> = <span class="type">Partial</span>&lt;<span class="type">User</span>&gt;  <span class="cm">// same thing, zero duplication</span></code></pre>
+
+  <!-- ===== PARTIAL ===== -->
+  <h2>Partial&lt;T&gt;</h2>
+
+  <p>Makes all properties optional. Returns a type where every key from <code>T</code> has <code>?</code> added.</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+}
+
+<span class="kw">type</span> <span class="type">UserUpdate</span> = <span class="type">Partial</span>&lt;<span class="type">User</span>&gt;
+<span class="cm">// Equivalent to:</span>
+<span class="cm">// { id?: number; name?: string; email?: string }</span>
+
+<span class="cm">// Perfect for update functions — pass only fields that changed</span>
+<span class="kw">const</span> <span class="fn">updateUser</span> = (id: <span class="type">number</span>, changes: <span class="type">Partial</span>&lt;<span class="type">User</span>&gt;): <span class="type">User</span> => {
+  <span class="kw">const</span> existing = <span class="fn">getUser</span>(id)
+  <span class="kw">return</span> { ...existing, ...changes }
+}
+
+<span class="fn">updateUser</span>(<span class="num">1</span>, { name: <span class="str">"Bob"</span> })            <span class="cm">// only update name</span>
+<span class="fn">updateUser</span>(<span class="num">1</span>, { email: <span class="str">"bob@example.com"</span> }) <span class="cm">// only update email</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript — Partial</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Config</span> = {
+  host: <span class="type">string</span>
+  port: <span class="type">number</span>
+  debug: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">configure</span> = (
+  overrides: <span class="type">Partial</span>&lt;<span class="type">Config</span>&gt;
+): <span class="type">Config</span> => ({
+  host: <span class="str">"localhost"</span>,
+  port: <span class="num">3000</span>,
+  debug: <span class="kw">false</span>,
+  ...overrides
+})</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Python has no Partial — you'd use</span>
+<span class="cm"># TypedDict with total=False or Optional</span>
+
+<span class="kw">class</span> <span class="type">Config</span>(<span class="type">TypedDict</span>):
+    host: <span class="type">str</span>
+    port: <span class="type">int</span>
+    debug: <span class="type">bool</span>
+
+<span class="cm"># No easy way to make "all optional"</span>
+<span class="cm"># variant of a TypedDict</span>
+<span class="kw">class</span> <span class="type">ConfigUpdate</span>(<span class="type">TypedDict</span>, total=<span class="kw">False</span>):
+    host: <span class="type">str</span>
+    port: <span class="type">int</span>
+    debug: <span class="type">bool</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REQUIRED ===== -->
+  <h2>Required&lt;T&gt;</h2>
+
+  <p>Opposite of Partial. Makes all properties required (removes <code>?</code>).</p>
+
+<pre><code><span class="kw">type</span> <span class="type">FormData</span> = {
+  name<span class="kw">?</span>: <span class="type">string</span>
+  email<span class="kw">?</span>: <span class="type">string</span>
+  age<span class="kw">?</span>: <span class="type">number</span>
+}
+
+<span class="kw">type</span> <span class="type">CompleteForm</span> = <span class="type">Required</span>&lt;<span class="type">FormData</span>&gt;
+<span class="cm">// { name: string; email: string; age: number }</span>
+<span class="cm">// All fields are now required</span>
+
+<span class="cm">// Useful for validation: "after validation, all fields are guaranteed"</span>
+<span class="kw">const</span> <span class="fn">validateForm</span> = (data: <span class="type">FormData</span>): <span class="type">CompleteForm</span> | <span class="kw">null</span> => {
+  <span class="kw">if</span> (data.name && data.email && data.age) {
+    <span class="kw">return</span> data <span class="kw">as</span> <span class="type">CompleteForm</span>
+  }
+  <span class="kw">return null</span>
+}</code></pre>
+
+  <!-- ===== PICK ===== -->
+  <h2>Pick&lt;T, K&gt;</h2>
+
+  <p>Create a type with only the specified properties from <code>T</code>.</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+  role: <span class="type">string</span>
+  createdAt: <span class="type">Date</span>
+}
+
+<span class="cm">// Only pick what a profile card needs</span>
+<span class="kw">type</span> <span class="type">ProfileCardProps</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"name"</span> | <span class="str">"email"</span>&gt;
+<span class="cm">// { name: string; email: string }</span>
+
+<span class="cm">// Only pick what the login form returns</span>
+<span class="kw">type</span> <span class="type">LoginCredentials</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"email"</span>&gt; & { password: <span class="type">string</span> }
+<span class="cm">// { email: string; password: string }</span></code></pre>
+
+  <div class="tip">
+    <strong>React use case:</strong> When a component only needs a few props from a larger type, use <code>Pick</code> to create a focused prop type. This makes components more reusable and their dependencies explicit.
+  </div>
+
+  <!-- ===== OMIT ===== -->
+  <h2>Omit&lt;T, K&gt;</h2>
+
+  <p>Create a type with all properties from <code>T</code> <em>except</em> the specified ones. Inverse of Pick.</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+  role: <span class="type">string</span>
+  createdAt: <span class="type">Date</span>
+}
+
+<span class="cm">// For creating a new user — no id or createdAt yet</span>
+<span class="kw">type</span> <span class="type">CreateUserInput</span> = <span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"id"</span> | <span class="str">"createdAt"</span>&gt;
+<span class="cm">// { name: string; email: string; role: string }</span>
+
+<span class="cm">// For a public API — hide internal fields</span>
+<span class="kw">type</span> <span class="type">PublicUser</span> = <span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"role"</span>&gt;
+<span class="cm">// { id: number; name: string; email: string; createdAt: Date }</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Pick vs Omit — which to use?</div>
+    <ul>
+      <li><strong>Pick</strong> when you need a <em>few</em> properties from a <em>large</em> type</li>
+      <li><strong>Omit</strong> when you need <em>most</em> properties but want to <em>exclude</em> a few</li>
+    </ul>
+    <p>Rule of thumb: use whichever results in a shorter list of keys.</p>
+  </div>
+
+  <!-- ===== RECORD ===== -->
+  <h2>Record&lt;K, V&gt;</h2>
+
+  <p>Create an object type with keys of type <code>K</code> and values of type <code>V</code>. This is the TS version of Python's <code>Dict[KeyType, ValueType]</code>.</p>
+
+<pre><code><span class="cm">// Dictionary/map with string keys and number values</span>
+<span class="kw">type</span> <span class="type">ScoreBoard</span> = <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">number</span>&gt;
+<span class="cm">// Python: Dict[str, int]</span>
+
+<span class="kw">const</span> scores: <span class="type">ScoreBoard</span> = {
+  alice: <span class="num">95</span>,
+  bob: <span class="num">87</span>,
+  charlie: <span class="num">92</span>
+}
+
+<span class="cm">// Use a union type for keys — restricts allowed keys</span>
+<span class="kw">type</span> <span class="type">Theme</span> = <span class="str">"light"</span> | <span class="str">"dark"</span> | <span class="str">"system"</span>
+<span class="kw">type</span> <span class="type">ThemeColors</span> = <span class="type">Record</span>&lt;<span class="type">Theme</span>, { bg: <span class="type">string</span>; text: <span class="type">string</span> }&gt;
+
+<span class="kw">const</span> themes: <span class="type">ThemeColors</span> = {
+  light: { bg: <span class="str">"#fff"</span>, text: <span class="str">"#000"</span> },
+  dark: { bg: <span class="str">"#000"</span>, text: <span class="str">"#fff"</span> },
+  system: { bg: <span class="str">"auto"</span>, text: <span class="str">"auto"</span> },
+  <span class="cm">// missing any key or adding extra = compile error!</span>
+}</code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Cache</span> = <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">User</span>&gt;
+
+<span class="cm">// Equivalent to:</span>
+<span class="kw">type</span> <span class="type">Cache</span> = {
+  [key: <span class="type">string</span>]: <span class="type">User</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code>Cache = <span class="type">Dict</span>[<span class="type">str</span>, <span class="type">User</span>]
+
+<span class="cm"># Or with newer syntax:</span>
+cache: dict[str, User] = {}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== READONLY ===== -->
+  <h2>Readonly&lt;T&gt;</h2>
+
+  <p>Makes all properties readonly (can't be reassigned). Like <code>frozen</code> dataclasses in Python.</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+}
+
+<span class="kw">type</span> <span class="type">FrozenUser</span> = <span class="type">Readonly</span>&lt;<span class="type">User</span>&gt;
+<span class="cm">// { readonly id: number; readonly name: string }</span>
+
+<span class="kw">const</span> user: <span class="type">FrozenUser</span> = { id: <span class="num">1</span>, name: <span class="str">"Alice"</span> }
+user.name = <span class="str">"Bob"</span>  <span class="cm">// ERROR: Cannot assign to 'name' because it is a read-only property</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Config</span> = <span class="type">Readonly</span>&lt;{
+  host: <span class="type">string</span>
+  port: <span class="type">number</span>
+}&gt;
+
+<span class="cm">// Also works with arrays:</span>
+<span class="kw">type</span> <span class="type">IDs</span> = <span class="type">ReadonlyArray</span>&lt;<span class="type">number</span>&gt;
+<span class="cm">// or: readonly number[]</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+
+@<span class="fn">dataclass</span>(frozen=<span class="kw">True</span>)
+<span class="kw">class</span> <span class="type">Config</span>:
+    host: <span class="type">str</span>
+    port: <span class="type">int</span>
+
+<span class="cm"># Or: tuple for immutable sequence</span>
+ids: <span class="type">tuple</span>[<span class="type">int</span>, ...] = (<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Gotcha:</strong> <code>Readonly</code> is shallow — it only freezes the top level. Nested objects can still be mutated. There's no built-in <code>DeepReadonly</code>; libraries like <code>ts-essentials</code> provide one.
+  </div>
+
+  <!-- ===== KEYOF ===== -->
+  <h2>keyof T</h2>
+
+  <p>Extracts all property names of a type as a union. Essential for building generic utilities.</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+}
+
+<span class="kw">type</span> <span class="type">UserKeys</span> = <span class="kw">keyof</span> <span class="type">User</span>
+<span class="cm">// "id" | "name" | "email"</span>
+
+<span class="cm">// Use it to make type-safe property access functions</span>
+<span class="kw">const</span> <span class="fn">getValue</span> = &lt;<span class="type">T</span>, <span class="type">K</span> <span class="kw">extends keyof</span> <span class="type">T</span>&gt;(obj: <span class="type">T</span>, key: <span class="type">K</span>): <span class="type">T</span>[<span class="type">K</span>] => {
+  <span class="kw">return</span> obj[key]
+}
+
+<span class="kw">const</span> user: <span class="type">User</span> = { id: <span class="num">1</span>, name: <span class="str">"Alice"</span>, email: <span class="str">"a@b.com"</span> }
+
+<span class="kw">const</span> name = <span class="fn">getValue</span>(user, <span class="str">"name"</span>)    <span class="cm">// type: string</span>
+<span class="kw">const</span> id = <span class="fn">getValue</span>(user, <span class="str">"id"</span>)        <span class="cm">// type: number</span>
+<span class="fn">getValue</span>(user, <span class="str">"phone"</span>)                 <span class="cm">// ERROR: "phone" is not in keyof User</span></code></pre>
+
+  <div class="note">
+    <strong>Python comparison:</strong> Python has no <code>keyof</code>. The closest is <code>typing.Literal["id", "name", "email"]</code>, but you'd maintain it manually. TypeScript derives it automatically from the type.
+  </div>
+
+  <!-- ===== MAPPED TYPES ===== -->
+  <h2>Mapped Types</h2>
+
+  <p>Create new types by transforming each property of an existing type. This is how <code>Partial</code>, <code>Required</code>, and <code>Readonly</code> are actually implemented.</p>
+
+<pre><code><span class="cm">// This IS the implementation of Partial:</span>
+<span class="kw">type</span> <span class="type">MyPartial</span>&lt;<span class="type">T</span>&gt; = {
+  [<span class="type">K</span> <span class="kw">in keyof</span> <span class="type">T</span>]<span class="kw">?</span>: <span class="type">T</span>[<span class="type">K</span>]
+}
+
+<span class="cm">// This IS the implementation of Readonly:</span>
+<span class="kw">type</span> <span class="type">MyReadonly</span>&lt;<span class="type">T</span>&gt; = {
+  <span class="kw">readonly</span> [<span class="type">K</span> <span class="kw">in keyof</span> <span class="type">T</span>]: <span class="type">T</span>[<span class="type">K</span>]
+}
+
+<span class="cm">// Make all values nullable</span>
+<span class="kw">type</span> <span class="type">Nullable</span>&lt;<span class="type">T</span>&gt; = {
+  [<span class="type">K</span> <span class="kw">in keyof</span> <span class="type">T</span>]: <span class="type">T</span>[<span class="type">K</span>] | <span class="kw">null</span>
+}
+
+<span class="kw">type</span> <span class="type">User</span> = { name: <span class="type">string</span>; age: <span class="type">number</span> }
+<span class="kw">type</span> <span class="type">NullableUser</span> = <span class="type">Nullable</span>&lt;<span class="type">User</span>&gt;
+<span class="cm">// { name: string | null; age: number | null }</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">How to read mapped types</div>
+    <p><code>{ [K in keyof T]: ... }</code> means "for each key <code>K</code> in type <code>T</code>, create a property with this value type." Think of it as a type-level <code>for</code> loop:</p>
+<pre><code><span class="cm">// Pseudo-code mental model:</span>
+<span class="cm">// for K in keys_of(T):</span>
+<span class="cm">//     new_type[K] = transform(T[K])</span></code></pre>
+  </div>
+
+  <!-- ===== PRACTICAL REACT EXAMPLES ===== -->
+  <h2>Practical React Examples</h2>
+
+  <div class="panel">
+    <div class="panel-title">Form state management</div>
+<pre><code><span class="cm">// Base user type from your API</span>
+<span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+  role: <span class="str">"admin"</span> | <span class="str">"user"</span>
+  createdAt: <span class="type">Date</span>
+}
+
+<span class="cm">// Form only needs editable fields</span>
+<span class="kw">type</span> <span class="type">EditableFields</span> = <span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"id"</span> | <span class="str">"createdAt"</span>&gt;
+<span class="cm">// { name: string; email: string; role: "admin" | "user" }</span>
+
+<span class="cm">// Form state — all optional during editing</span>
+<span class="kw">type</span> <span class="type">FormState</span> = <span class="type">Partial</span>&lt;<span class="type">EditableFields</span>&gt;
+<span class="cm">// { name?: string; email?: string; role?: "admin" | "user" }</span>
+
+<span class="cm">// Error state — each field might have an error message</span>
+<span class="kw">type</span> <span class="type">FormErrors</span> = <span class="type">Partial</span>&lt;<span class="type">Record</span>&lt;<span class="kw">keyof</span> <span class="type">EditableFields</span>, <span class="type">string</span>&gt;&gt;
+<span class="cm">// { name?: string; email?: string; role?: string }</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Component prop subsets</div>
+<pre><code><span class="cm">// Full button config</span>
+<span class="kw">type</span> <span class="type">ButtonConfig</span> = {
+  label: <span class="type">string</span>
+  variant: <span class="str">"primary"</span> | <span class="str">"secondary"</span> | <span class="str">"danger"</span>
+  size: <span class="str">"sm"</span> | <span class="str">"md"</span> | <span class="str">"lg"</span>
+  disabled: <span class="type">boolean</span>
+  onClick: () => <span class="type">void</span>
+}
+
+<span class="cm">// Icon button only needs a subset</span>
+<span class="kw">type</span> <span class="type">IconButtonProps</span> = <span class="type">Pick</span>&lt;<span class="type">ButtonConfig</span>, <span class="str">"variant"</span> | <span class="str">"size"</span> | <span class="str">"onClick"</span>&gt; & {
+  icon: <span class="type">string</span>
+}
+
+<span class="cm">// Toolbar button — ButtonConfig but with optional size</span>
+<span class="kw">type</span> <span class="type">ToolbarButtonProps</span> = <span class="type">Omit</span>&lt;<span class="type">ButtonConfig</span>, <span class="str">"size"</span>&gt; & {
+  size<span class="kw">?</span>: <span class="type">ButtonConfig</span>[<span class="str">"size"</span>]
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">API response transformations</div>
+<pre><code><span class="cm">// API returns dates as strings</span>
+<span class="kw">type</span> <span class="type">ApiUser</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  createdAt: <span class="type">string</span>  <span class="cm">// ISO date string from JSON</span>
+  updatedAt: <span class="type">string</span>
+}
+
+<span class="cm">// App uses proper Date objects</span>
+<span class="kw">type</span> <span class="type">AppUser</span> = <span class="type">Omit</span>&lt;<span class="type">ApiUser</span>, <span class="str">"createdAt"</span> | <span class="str">"updatedAt"</span>&gt; & {
+  createdAt: <span class="type">Date</span>
+  updatedAt: <span class="type">Date</span>
+}
+
+<span class="cm">// Transform function with proper types</span>
+<span class="kw">const</span> <span class="fn">toAppUser</span> = (api: <span class="type">ApiUser</span>): <span class="type">AppUser</span> => ({
+  ...api,
+  createdAt: <span class="kw">new</span> <span class="type">Date</span>(api.createdAt),
+  updatedAt: <span class="kw">new</span> <span class="type">Date</span>(api.updatedAt),
+})</code></pre>
+  </div>
+
+  <!-- ===== LESS COMMON BUT USEFUL ===== -->
+  <h2>Other Useful Utility Types</h2>
+
+  <table>
+    <thead>
+      <tr><th>Type</th><th>What it does</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>Extract&lt;T, U&gt;</code></td>
+        <td>Keep members of union <code>T</code> that are assignable to <code>U</code></td>
+        <td><code>Extract&lt;"a" | "b" | "c", "a" | "c"&gt;</code> = <code>"a" | "c"</code></td>
+      </tr>
+      <tr>
+        <td><code>Exclude&lt;T, U&gt;</code></td>
+        <td>Remove members of union <code>T</code> that are assignable to <code>U</code></td>
+        <td><code>Exclude&lt;"a" | "b" | "c", "a"&gt;</code> = <code>"b" | "c"</code></td>
+      </tr>
+      <tr>
+        <td><code>NonNullable&lt;T&gt;</code></td>
+        <td>Remove <code>null</code> and <code>undefined</code> from <code>T</code></td>
+        <td><code>NonNullable&lt;string | null&gt;</code> = <code>string</code></td>
+      </tr>
+      <tr>
+        <td><code>ReturnType&lt;F&gt;</code></td>
+        <td>Extract return type of a function type</td>
+        <td><code>ReturnType&lt;typeof fetchUser&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>Parameters&lt;F&gt;</code></td>
+        <td>Extract parameter types as a tuple</td>
+        <td><code>Parameters&lt;typeof fn&gt;</code> = <code>[string, number]</code></td>
+      </tr>
+      <tr>
+        <td><code>Awaited&lt;T&gt;</code></td>
+        <td>Unwrap Promise type</td>
+        <td><code>Awaited&lt;Promise&lt;User&gt;&gt;</code> = <code>User</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">// ReturnType — extract type from function without duplicating</span>
+<span class="kw">const</span> <span class="fn">createUser</span> = (name: <span class="type">string</span>, age: <span class="type">number</span>) => ({
+  id: <span class="fn">crypto.randomUUID</span>(),
+  name,
+  age,
+  createdAt: <span class="kw">new</span> <span class="type">Date</span>()
+})
+
+<span class="kw">type</span> <span class="type">User</span> = <span class="type">ReturnType</span>&lt;<span class="kw">typeof</span> createUser&gt;
+<span class="cm">// { id: string; name: string; age: number; createdAt: Date }</span>
+<span class="cm">// No need to define the type separately!</span>
+
+<span class="cm">// Awaited — unwrap async return types</span>
+<span class="kw">const</span> <span class="fn">fetchUsers</span> = <span class="kw">async</span> (): <span class="type">Promise</span>&lt;<span class="type">User</span>[]&gt; => { ... }
+<span class="kw">type</span> <span class="type">Users</span> = <span class="type">Awaited</span>&lt;<span class="type">ReturnType</span>&lt;<span class="kw">typeof</span> fetchUsers&gt;&gt;
+<span class="cm">// User[]  (unwraps the Promise)</span></code></pre>
+
+  <!-- ===== COMBINING UTILITIES ===== -->
+  <h2>Combining Utility Types</h2>
+
+  <p>The real power comes from composing multiple utilities together:</p>
+
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+  role: <span class="str">"admin"</span> | <span class="str">"user"</span>
+  preferences: {
+    theme: <span class="type">string</span>
+    notifications: <span class="type">boolean</span>
+  }
+}
+
+<span class="cm">// Create a user (no id, all other fields required)</span>
+<span class="kw">type</span> <span class="type">CreateUserDTO</span> = <span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"id"</span>&gt;
+
+<span class="cm">// Update a user (id required, everything else optional)</span>
+<span class="kw">type</span> <span class="type">UpdateUserDTO</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"id"</span>&gt; & <span class="type">Partial</span>&lt;<span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"id"</span>&gt;&gt;
+
+<span class="cm">// Public-facing user (readonly, no role)</span>
+<span class="kw">type</span> <span class="type">PublicUser</span> = <span class="type">Readonly</span>&lt;<span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"role"</span>&gt;&gt;
+
+<span class="cm">// Settings page only needs preferences</span>
+<span class="kw">type</span> <span class="type">SettingsProps</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"preferences"</span>&gt;
+
+<span class="cm">// Status map for a list of users</span>
+<span class="kw">type</span> <span class="type">UserStatusMap</span> = <span class="type">Record</span>&lt;<span class="type">User</span>[<span class="str">"id"</span>], <span class="str">"online"</span> | <span class="str">"offline"</span>&gt;
+<span class="cm">// { [key: number]: "online" | "offline" }</span></code></pre>
+
+  <!-- ===== GOTCHAS ===== -->
+  <h2>Common Mistakes &amp; Gotchas</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Omit doesn't catch typos</div>
+<pre><code><span class="kw">type</span> <span class="type">User</span> = { name: <span class="type">string</span>; age: <span class="type">number</span> }
+
+<span class="cm">// No error! "nme" doesn't exist but Omit</span>
+<span class="cm">// doesn't validate keys</span>
+<span class="kw">type</span> <span class="type">Bad</span> = <span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"nme"</span>&gt;
+<span class="cm">// Still { name: string; age: number }</span>
+
+<span class="cm">// Pick DOES catch typos:</span>
+<span class="kw">type</span> <span class="type">Also</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"nme"</span>&gt; <span class="cm">// ERROR!</span></code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Readonly is shallow</div>
+<pre><code><span class="kw">type</span> <span class="type">State</span> = <span class="type">Readonly</span>&lt;{
+  user: { name: <span class="type">string</span> }
+}&gt;
+
+<span class="kw">const</span> s: <span class="type">State</span> = { user: { name: <span class="str">"A"</span> } }
+s.user = { name: <span class="str">"B"</span> }      <span class="cm">// ERROR (good)</span>
+s.user.name = <span class="str">"B"</span>           <span class="cm">// OK! (bad)</span>
+<span class="cm">// Nested objects are still mutable</span></code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Partial makes EVERYTHING optional</div>
+<pre><code><span class="cm">// If you only want SOME fields optional, don't use Partial on the whole type</span>
+<span class="kw">type</span> <span class="type">User</span> = { id: <span class="type">number</span>; name: <span class="type">string</span>; email: <span class="type">string</span> }
+
+<span class="cm">// WRONG if you still need id to be required:</span>
+<span class="kw">type</span> <span class="type">Update</span> = <span class="type">Partial</span>&lt;<span class="type">User</span>&gt;  <span class="cm">// id is now optional too!</span>
+
+<span class="cm">// RIGHT — combine Pick + Partial:</span>
+<span class="kw">type</span> <span class="type">Update</span> = <span class="type">Pick</span>&lt;<span class="type">User</span>, <span class="str">"id"</span>&gt; & <span class="type">Partial</span>&lt;<span class="type">Omit</span>&lt;<span class="type">User</span>, <span class="str">"id"</span>&gt;&gt;
+<span class="cm">// { id: number; name?: string; email?: string }</span></code></pre>
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Utility</th><th>Input</th><th>Output</th><th>Use case</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Partial&lt;T&gt;</code></td><td><code>{ a: string; b: number }</code></td><td><code>{ a?: string; b?: number }</code></td><td>Update/patch operations</td></tr>
+      <tr><td><code>Required&lt;T&gt;</code></td><td><code>{ a?: string; b?: number }</code></td><td><code>{ a: string; b: number }</code></td><td>After validation</td></tr>
+      <tr><td><code>Pick&lt;T, K&gt;</code></td><td><code>{ a; b; c }</code>, <code>"a" | "b"</code></td><td><code>{ a; b }</code></td><td>Subset of props</td></tr>
+      <tr><td><code>Omit&lt;T, K&gt;</code></td><td><code>{ a; b; c }</code>, <code>"c"</code></td><td><code>{ a; b }</code></td><td>Exclude fields</td></tr>
+      <tr><td><code>Record&lt;K, V&gt;</code></td><td><code>string</code>, <code>User</code></td><td><code>{ [k: string]: User }</code></td><td>Dictionaries</td></tr>
+      <tr><td><code>Readonly&lt;T&gt;</code></td><td><code>{ a: string }</code></td><td><code>{ readonly a: string }</code></td><td>Immutable data</td></tr>
+      <tr><td><code>keyof T</code></td><td><code>{ a; b; c }</code></td><td><code>"a" | "b" | "c"</code></td><td>Type-safe keys</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

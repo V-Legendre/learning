@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — Next.js, SSR &amp; RSC</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>16 — Next.js, SSR &amp; Server Components</h1>
+  <p class="subtitle">Server-side rendering, React Server Components, and when you actually need Next.js vs a Vite SPA.</p>
+
+  <!-- ===== THE PROBLEM WITH SPAs ===== -->
+  <h2>The Problem with SPAs</h2>
+
+  <p>Everything we've built so far is a <strong>Single Page Application (SPA)</strong>. The server sends an empty HTML shell, and JavaScript builds the entire page in the browser.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Request</div>
+      <div class="desc">Browser asks for myapp.com</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Empty HTML</div>
+      <div class="desc">&lt;div id="root"&gt;&lt;/div&gt;</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Download JS</div>
+      <div class="desc">150KB+ of JavaScript</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Execute JS</div>
+      <div class="desc">React renders to DOM</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Fetch data</div>
+      <div class="desc">API calls for content</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Page visible</div>
+      <div class="desc">User finally sees content</div>
+    </div>
+  </div>
+
+  <h3>Why this matters</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Problem</th>
+        <th>Impact</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>SEO</strong></td>
+        <td>Search engine crawlers see an empty <code>&lt;div&gt;</code>. Google can execute JS, but other crawlers (social media previews, etc.) often can't.</td>
+      </tr>
+      <tr>
+        <td><strong>First load</strong></td>
+        <td>Users on slow connections (mobile, developing countries) stare at a blank screen while JS downloads and executes.</td>
+      </tr>
+      <tr>
+        <td><strong>Time to interactive</strong></td>
+        <td>Even after HTML appears, the user has to wait for all JS to download before anything is clickable.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Python analogy:</strong> In Flask/Django, the server sends a fully rendered HTML page. The browser displays it immediately. That's what we want to get back to &mdash; but with React's interactivity.
+  </div>
+
+  <!-- ===== SSR ===== -->
+  <h2>Server-Side Rendering (SSR)</h2>
+
+  <p>SSR renders your React components to HTML on the server, sends that HTML to the browser, then React "hydrates" it (attaches event listeners to make it interactive).</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Request</div>
+      <div class="desc">Browser asks for /products</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Server renders</div>
+      <div class="desc">React runs on Node.js, generates HTML</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Full HTML</div>
+      <div class="desc">Complete page with content</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Visible instantly</div>
+      <div class="desc">User sees content</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Hydration</div>
+      <div class="desc">JS loads, makes it interactive</div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">SPA (Client-Side Rendering)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Server sends empty HTML</li>
+          <li>Browser downloads JS (150KB+)</li>
+          <li>JS renders the page</li>
+          <li>Then JS fetches data</li>
+          <li>Then page is visible</li>
+        </ul>
+        <p><strong>Time to content:</strong> 2-5 seconds on slow connections</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">SSR (Server-Side Rendering)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Server fetches data + renders HTML</li>
+          <li>Browser receives complete page</li>
+          <li>Content is visible immediately</li>
+          <li>JS downloads in background</li>
+          <li>Hydration makes it interactive</li>
+        </ul>
+        <p><strong>Time to content:</strong> &lt;1 second (server is fast)</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RSC ===== -->
+  <h2>React Server Components (RSC)</h2>
+
+  <p>RSC is React's newest paradigm (and its future direction). Components that run <strong>only on the server</strong> &mdash; their JavaScript is never sent to the browser.</p>
+
+  <div class="panel">
+    <div class="panel-title">Server Components vs Client Components</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>Server Component</th>
+          <th>Client Component</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Where it runs</td>
+          <td>Server only</td>
+          <td>Server (SSR) + Browser (hydration)</td>
+        </tr>
+        <tr>
+          <td>JS sent to browser</td>
+          <td>No (zero JS)</td>
+          <td>Yes (component code shipped)</td>
+        </tr>
+        <tr>
+          <td>Can use hooks</td>
+          <td>No (useState, useEffect, etc.)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Can use event handlers</td>
+          <td>No (onClick, onChange, etc.)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>Can access database</td>
+          <td>Yes (directly, like Python)</td>
+          <td>No (must go through API)</td>
+        </tr>
+        <tr>
+          <td>Can use env secrets</td>
+          <td>Yes (server-only)</td>
+          <td>No (would expose to browser)</td>
+        </tr>
+        <tr>
+          <td>Async component</td>
+          <td>Yes (<code>async function Component()</code>)</td>
+          <td>No</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+<pre><code><span class="cm">// Server Component (default in Next.js App Router)</span>
+<span class="cm">// This JavaScript NEVER reaches the browser</span>
+
+<span class="kw">import</span> { <span class="fn">db</span> } <span class="kw">from</span> <span class="str">'./database'</span> <span class="cm">// Direct database access!</span>
+
+<span class="kw">export default async function</span> <span class="fn">ProductList</span>() {
+  <span class="cm">// This runs on the server &mdash; like a Django view</span>
+  <span class="kw">const</span> <span class="prop">products</span> = <span class="kw">await</span> <span class="prop">db</span>.<span class="prop">product</span>.<span class="fn">findMany</span>()
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">ul</span>&gt;
+      {<span class="prop">products</span>.<span class="fn">map</span>((<span class="prop">p</span>) =&gt; (
+        &lt;<span class="tag">li</span> <span class="attr">key</span>={<span class="prop">p</span>.<span class="prop">id</span>}&gt;{<span class="prop">p</span>.<span class="prop">name</span>} &mdash; ${<span class="prop">p</span>.<span class="prop">price</span>}&lt;/<span class="tag">li</span>&gt;
+      ))}
+    &lt;/<span class="tag">ul</span>&gt;
+  )
+}</code></pre>
+
+<pre><code><span class="cm">// Client Component &mdash; add 'use client' directive</span>
+<span class="str">'use client'</span>
+
+<span class="kw">import</span> { <span class="fn">useState</span> } <span class="kw">from</span> <span class="str">'react'</span>
+
+<span class="kw">export const</span> <span class="fn">AddToCart</span> = ({ <span class="prop">productId</span> }: { <span class="prop">productId</span>: <span class="type">string</span> }) =&gt; {
+  <span class="kw">const</span> [<span class="prop">count</span>, <span class="fn">setCount</span>] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">button</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">setCount</span>((<span class="prop">c</span>) =&gt; <span class="prop">c</span> + <span class="num">1</span>)}&gt;
+      Add to cart ({<span class="prop">count</span>})
+    &lt;/<span class="tag">button</span>&gt;
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>Mental model:</strong> In Next.js App Router, every component is a Server Component by default. Only add <code>'use client'</code> when you need interactivity (state, effects, event handlers). Push <code>'use client'</code> as far down the tree as possible.
+  </div>
+
+  <!-- ===== NEXT.JS APP ROUTER ===== -->
+  <h2>Next.js App Router</h2>
+
+  <p>Next.js is the most popular React framework. Its App Router (introduced in Next.js 13) uses Server Components by default with file-based routing.</p>
+
+  <div class="file-tree">
+    <span class="dir">app/</span><br>
+    &nbsp;&nbsp;<span class="highlight">layout.tsx</span> <span class="file">&larr; root layout (wraps all pages)</span><br>
+    &nbsp;&nbsp;<span class="highlight">page.tsx</span> <span class="file">&larr; / (home page)</span><br>
+    &nbsp;&nbsp;<span class="dir">products/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">page.tsx</span> <span class="file">&larr; /products</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">[id]/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">page.tsx</span> <span class="file">&larr; /products/123</span><br>
+    &nbsp;&nbsp;<span class="dir">about/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">page.tsx</span> <span class="file">&larr; /about</span><br>
+  </div>
+
+  <h3>Rendering strategies in Next.js</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Strategy</th>
+        <th>When HTML is Generated</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>SSG</strong> (Static Site Generation)</td>
+        <td>At build time</td>
+        <td>Blog posts, docs, marketing pages</td>
+      </tr>
+      <tr>
+        <td><strong>SSR</strong> (Server-Side Rendering)</td>
+        <td>On each request</td>
+        <td>Pages with user-specific or frequently changing data</td>
+      </tr>
+      <tr>
+        <td><strong>ISR</strong> (Incremental Static Regeneration)</td>
+        <td>At build time, then revalidates on a schedule</td>
+        <td>Product pages (rebuild every 60s)</td>
+      </tr>
+      <tr>
+        <td><strong>Client-side</strong></td>
+        <td>In the browser (like our Vite SPA)</td>
+        <td>Interactive dashboards, auth-only content</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== WHEN NEXT VS VITE ===== -->
+  <h2>When You Need Next.js vs Vite SPA</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Next.js makes sense for...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>SEO-critical pages</strong> &mdash; blogs, e-commerce, marketing sites, documentation</li>
+          <li><strong>First load performance</strong> &mdash; content must be visible before JS loads</li>
+          <li><strong>Public content</strong> &mdash; pages that Google must index</li>
+          <li><strong>Hybrid apps</strong> &mdash; some pages public (SSR), some behind login (client)</li>
+          <li><strong>Full-stack React</strong> &mdash; API routes, database access, all in one project</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Vite SPA is fine for...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Dashboards</strong> &mdash; admin panels, analytics, internal tools</li>
+          <li><strong>Apps behind login</strong> &mdash; no SEO needed for authenticated pages</li>
+          <li><strong>Internal tools</strong> &mdash; company tools that aren't public</li>
+          <li><strong>Simpler deployment</strong> &mdash; just static files, no Node.js server needed</li>
+          <li><strong>Separate frontend/backend</strong> &mdash; frontend team deploys independently</li>
+        </ul>
+        <p style="margin-top: 10px; color: #34d399;"><strong>This is what we're building.</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>Vite SPA vs Next.js</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Vite SPA</th>
+        <th>Next.js</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Rendering</td>
+        <td>Client only</td>
+        <td>Server + Client (hybrid)</td>
+      </tr>
+      <tr>
+        <td>SEO</td>
+        <td>Poor (empty HTML initially)</td>
+        <td>Excellent (full HTML from server)</td>
+      </tr>
+      <tr>
+        <td>First load speed</td>
+        <td>Slower (wait for JS)</td>
+        <td>Faster (HTML arrives ready)</td>
+      </tr>
+      <tr>
+        <td>Deployment</td>
+        <td>Static files (CDN)</td>
+        <td>Node.js server or Vercel</td>
+      </tr>
+      <tr>
+        <td>Hosting cost</td>
+        <td>Nearly free (static hosting)</td>
+        <td>Needs compute (server)</td>
+      </tr>
+      <tr>
+        <td>Complexity</td>
+        <td>Simpler &mdash; just React</td>
+        <td>More concepts (Server/Client components, caching, streaming)</td>
+      </tr>
+      <tr>
+        <td>Routing</td>
+        <td>TanStack Router (type-safe)</td>
+        <td>File-based (convention)</td>
+      </tr>
+      <tr>
+        <td>Data fetching</td>
+        <td>TanStack Query (client-side)</td>
+        <td>Server Components + fetch (server-side)</td>
+      </tr>
+      <tr>
+        <td>State management</td>
+        <td>Zustand (client-side)</td>
+        <td>Less needed (data fetched on server)</td>
+      </tr>
+      <tr>
+        <td>Learning curve</td>
+        <td>Moderate</td>
+        <td>Steep (many rendering modes, caching, Server vs Client components)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>The industry trend:</strong> React is moving toward server-first with RSC. Next.js is the reference implementation. But SPAs aren't going away &mdash; they're the right choice for applications (as opposed to websites). Know both patterns exist, start with SPA, adopt Next.js when you need server rendering.
+  </div>
+
+  <!-- ===== OTHER SSR FRAMEWORKS ===== -->
+  <h2>Other SSR Frameworks</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Framework</th>
+        <th>Approach</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Remix</strong></td>
+        <td>Web standards-first SSR</td>
+        <td>Now merged into React Router v7. Less magic than Next.js, uses native form handling.</td>
+      </tr>
+      <tr>
+        <td><strong>Astro</strong></td>
+        <td>Static-first, partial hydration</td>
+        <td>Sends zero JS by default. Perfect for content sites. Can use React, Vue, Svelte components.</td>
+      </tr>
+      <tr>
+        <td><strong>TanStack Start</strong></td>
+        <td>Full-stack React with TanStack Router</td>
+        <td>New, by the TanStack team. Type-safe SSR with the router we already know.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Future path:</strong> Once you're comfortable with React SPAs (our current focus), the natural next step is to try Next.js for a project that needs SEO. Everything you've learned (components, hooks, TypeScript, Tailwind) carries over directly.
+  </div>
+
+</body>
+</html>

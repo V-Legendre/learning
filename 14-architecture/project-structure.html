@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>14 — Project Structure</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>14 — Project Structure</h1>
+  <p class="subtitle">How to organize a production React project: feature folders, barrel exports, and the API layer.</p>
+
+  <!-- ===== TWO APPROACHES ===== -->
+  <h2>Two Approaches to Organization</h2>
+
+  <p>As a project grows past a handful of components, you need a consistent structure. There are two dominant patterns in the React ecosystem, and they map nicely to patterns you already know from Python.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Feature Folders (Recommended)</div>
+      <div class="comp-body">
+        <p>Group files by <strong>domain/feature</strong>. Everything related to "auth" lives together. This is the pattern used by most production React codebases.</p>
+        <p><strong>Python analogy:</strong> Django apps &mdash; each app (users, orders, payments) has its own models, views, urls, tests.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Layer Folders (Simpler)</div>
+      <div class="comp-body">
+        <p>Group files by <strong>type</strong> &mdash; all components together, all hooks together. Works for small apps but becomes a mess at scale.</p>
+        <p><strong>Python analogy:</strong> Flask app organized by type (all routes in <code>routes/</code>, all models in <code>models/</code>).</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== FEATURE FOLDER STRUCTURE ===== -->
+  <h2>Feature Folder Structure</h2>
+
+  <p>This is what a mature React project looks like. Each feature is a self-contained unit with its own components, hooks, API calls, and types.</p>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">features/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">auth/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">LoginForm.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">SignupForm.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">AuthLayout.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">hooks/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useAuth.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">api.ts</span> <span class="file">&larr; all auth API calls</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">types.ts</span> <span class="file">&larr; User, LoginData, etc.</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.ts</span> <span class="file">&larr; barrel export</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">dashboard/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">DashboardPage.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">StatsCard.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">ActivityFeed.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">hooks/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useDashboardStats.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">api.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">types.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">settings/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">...</span><br>
+    &nbsp;&nbsp;<span class="dir">shared/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">components/</span> <span class="file">&larr; Button, Modal, Input (used everywhere)</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">hooks/</span> <span class="file">&larr; useDebounce, useLocalStorage</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">utils/</span> <span class="file">&larr; formatDate, cn</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">types/</span> <span class="file">&larr; shared type definitions</span><br>
+    &nbsp;&nbsp;<span class="dir">routes/</span> <span class="file">&larr; TanStack Router file-based routes</span><br>
+    &nbsp;&nbsp;<span class="dir">styles/</span> <span class="file">&larr; global CSS, Tailwind config</span><br>
+    &nbsp;&nbsp;<span class="dir">test/</span> <span class="file">&larr; test setup, MSW handlers</span><br>
+    &nbsp;&nbsp;<span class="file">main.tsx</span><br>
+    &nbsp;&nbsp;<span class="file">App.tsx</span><br>
+  </div>
+
+  <!-- ===== LAYER FOLDER STRUCTURE ===== -->
+  <h2>Layer Folder Structure</h2>
+
+  <p>For small apps (under 10 components), layer folders are fine. Everything is flat and easy to find.</p>
+
+  <div class="file-tree">
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">LoginForm.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">SignupForm.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">DashboardPage.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Modal.tsx</span><br>
+    &nbsp;&nbsp;<span class="dir">hooks/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useAuth.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">useDebounce.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">api/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">auth.ts</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">dashboard.ts</span><br>
+    &nbsp;&nbsp;<span class="dir">types/</span><br>
+    &nbsp;&nbsp;<span class="dir">utils/</span><br>
+    &nbsp;&nbsp;<span class="dir">routes/</span><br>
+    &nbsp;&nbsp;<span class="file">main.tsx</span><br>
+  </div>
+
+  <div class="note">
+    <strong>When to switch:</strong> Start with layer folders. When you find yourself scrolling through a <code>components/</code> directory with 15+ files, it's time to refactor into feature folders.
+  </div>
+
+  <!-- ===== RULES OF THUMB ===== -->
+  <h2>Rules of Thumb</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Rule</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Feature folders when 10+ components</td>
+        <td>Below that, the overhead of folders isn't worth it</td>
+      </tr>
+      <tr>
+        <td>One component per file</td>
+        <td>Easy to find, easy to test, clear ownership</td>
+      </tr>
+      <tr>
+        <td>Co-locate tests next to source</td>
+        <td><code>LoginForm.tsx</code> + <code>LoginForm.test.tsx</code> in the same folder</td>
+      </tr>
+      <tr>
+        <td>Keep <code>shared/</code> truly shared</td>
+        <td>If only one feature uses it, keep it in that feature</td>
+      </tr>
+      <tr>
+        <td>Flat over nested</td>
+        <td>Don't nest more than 3 levels deep inside a feature</td>
+      </tr>
+      <tr>
+        <td>Name files after the component</td>
+        <td><code>LoginForm.tsx</code> exports <code>LoginForm</code> &mdash; never <code>index.tsx</code> for components</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== BARREL EXPORTS ===== -->
+  <h2>Barrel Exports</h2>
+
+  <p>A barrel export is an <code>index.ts</code> file that re-exports the public API of a feature. It lets consumers import from the feature folder directly instead of reaching into its internals.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Without barrel exports</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Deep imports &mdash; coupled to internal structure</span>
+<span class="kw">import</span> { <span class="type">LoginForm</span> } <span class="kw">from</span> <span class="str">'../features/auth/components/LoginForm'</span>
+<span class="kw">import</span> { <span class="fn">useAuth</span> } <span class="kw">from</span> <span class="str">'../features/auth/hooks/useAuth'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'../features/auth/types'</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">With barrel exports</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Clean imports &mdash; feature controls its API</span>
+<span class="kw">import</span> { <span class="type">LoginForm</span>, <span class="fn">useAuth</span> } <span class="kw">from</span> <span class="str">'../features/auth'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'../features/auth'</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>The barrel file</h3>
+
+<pre><code><span class="cm">// features/auth/index.ts</span>
+
+<span class="cm">// Re-export public components</span>
+<span class="kw">export</span> { <span class="type">LoginForm</span> } <span class="kw">from</span> <span class="str">'./components/LoginForm'</span>
+<span class="kw">export</span> { <span class="type">SignupForm</span> } <span class="kw">from</span> <span class="str">'./components/SignupForm'</span>
+
+<span class="cm">// Re-export hooks</span>
+<span class="kw">export</span> { <span class="fn">useAuth</span> } <span class="kw">from</span> <span class="str">'./hooks/useAuth'</span>
+
+<span class="cm">// Re-export types</span>
+<span class="kw">export</span> <span class="kw">type</span> { <span class="type">User</span>, <span class="type">LoginData</span>, <span class="type">AuthState</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+
+<span class="cm">// NOT exported: internal components, helpers, etc.</span>
+<span class="cm">// This gives the feature control over its public surface</span></code></pre>
+
+  <h3>Pros and Cons</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Pros</th>
+        <th>Cons</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Clean, short imports</td>
+        <td>Can mask where things actually live</td>
+      </tr>
+      <tr>
+        <td>Feature controls its public API</td>
+        <td>Risk of circular dependencies between features</td>
+      </tr>
+      <tr>
+        <td>Refactoring internals doesn't break consumers</td>
+        <td>Can hurt tree-shaking if barrel re-exports everything</td>
+      </tr>
+      <tr>
+        <td>Enforces encapsulation</td>
+        <td>IDE auto-imports might bypass barrels</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Tip:</strong> Only barrel-export what's truly public. Internal helpers and sub-components should <em>not</em> be re-exported. Think of it like Python's <code>__init__.py</code> with explicit <code>__all__</code>.
+  </div>
+
+  <!-- ===== API LAYER ===== -->
+  <h2>The API Layer</h2>
+
+  <p>Centralize all API calls in each feature's <code>api.ts</code> file. This keeps fetch logic out of components and makes it easy to swap backends, add error handling, or mock in tests.</p>
+
+  <h3>Feature API file</h3>
+
+<pre><code><span class="cm">// features/dashboard/api.ts</span>
+
+<span class="kw">import</span> { <span class="fn">api</span> } <span class="kw">from</span> <span class="str">'../../shared/utils/api'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">DashboardStats</span>, <span class="type">Activity</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+
+<span class="cm">// Pure fetch functions &mdash; no React, no hooks</span>
+<span class="kw">export const</span> <span class="fn">fetchStats</span> = (): <span class="type">Promise</span>&lt;<span class="type">DashboardStats</span>&gt; =&gt;
+  <span class="fn">api</span>.<span class="fn">get</span>(<span class="str">'/dashboard/stats'</span>)
+
+<span class="kw">export const</span> <span class="fn">fetchActivity</span> = (<span class="prop">page</span>: <span class="type">number</span>): <span class="type">Promise</span>&lt;<span class="type">Activity</span>[]&gt; =&gt;
+  <span class="fn">api</span>.<span class="fn">get</span>(<span class="str">`/dashboard/activity?page=</span>${page}<span class="str">`</span>)</code></pre>
+
+  <h3>TanStack Query hooks that use the API</h3>
+
+<pre><code><span class="cm">// features/dashboard/hooks/useDashboardStats.ts</span>
+
+<span class="kw">import</span> { <span class="fn">useQuery</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+<span class="kw">import</span> { <span class="fn">fetchStats</span> } <span class="kw">from</span> <span class="str">'../api'</span>
+
+<span class="kw">export const</span> <span class="fn">useDashboardStats</span> = () =&gt; {
+  <span class="kw">return</span> <span class="fn">useQuery</span>({
+    <span class="prop">queryKey</span>: [<span class="str">'dashboard'</span>, <span class="str">'stats'</span>],
+    <span class="prop">queryFn</span>: <span class="fn">fetchStats</span>,
+    <span class="prop">staleTime</span>: <span class="num">5</span> * <span class="num">60</span> * <span class="num">1000</span>, <span class="cm">// 5 minutes</span>
+  })
+}</code></pre>
+
+  <h3>Shared API utility</h3>
+
+<pre><code><span class="cm">// shared/utils/api.ts</span>
+<span class="cm">// Thin wrapper around fetch with auth, error handling, JSON parsing</span>
+
+<span class="kw">const</span> <span class="prop">BASE_URL</span> = <span class="kw">import</span>.meta.env.<span class="prop">VITE_API_URL</span>
+
+<span class="kw">const</span> <span class="fn">request</span> = <span class="kw">async</span> &lt;<span class="type">T</span>&gt;(
+  <span class="prop">path</span>: <span class="type">string</span>,
+  <span class="prop">options</span>: <span class="type">RequestInit</span> = {}
+): <span class="type">Promise</span>&lt;<span class="type">T</span>&gt; =&gt; {
+  <span class="kw">const</span> <span class="prop">res</span> = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`</span>${<span class="prop">BASE_URL</span>}${path}<span class="str">`</span>, {
+    <span class="prop">headers</span>: {
+      <span class="str">'Content-Type'</span>: <span class="str">'application/json'</span>,
+      ...<span class="prop">options</span>.<span class="prop">headers</span>,
+    },
+    ...<span class="prop">options</span>,
+  })
+
+  <span class="kw">if</span> (!<span class="prop">res</span>.<span class="prop">ok</span>) {
+    <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`API error: </span>${<span class="prop">res</span>.<span class="prop">status</span>}<span class="str">`</span>)
+  }
+
+  <span class="kw">return</span> <span class="prop">res</span>.<span class="fn">json</span>()
+}
+
+<span class="kw">export const</span> <span class="prop">api</span> = {
+  <span class="fn">get</span>:    &lt;<span class="type">T</span>&gt;(<span class="prop">path</span>: <span class="type">string</span>) =&gt; <span class="fn">request</span>&lt;<span class="type">T</span>&gt;(path),
+  <span class="fn">post</span>:   &lt;<span class="type">T</span>&gt;(<span class="prop">path</span>: <span class="type">string</span>, <span class="prop">data</span>: <span class="type">unknown</span>) =&gt;
+    <span class="fn">request</span>&lt;<span class="type">T</span>&gt;(path, { <span class="prop">method</span>: <span class="str">'POST'</span>, <span class="prop">body</span>: <span class="type">JSON</span>.<span class="fn">stringify</span>(data) }),
+  <span class="fn">put</span>:    &lt;<span class="type">T</span>&gt;(<span class="prop">path</span>: <span class="type">string</span>, <span class="prop">data</span>: <span class="type">unknown</span>) =&gt;
+    <span class="fn">request</span>&lt;<span class="type">T</span>&gt;(path, { <span class="prop">method</span>: <span class="str">'PUT'</span>, <span class="prop">body</span>: <span class="type">JSON</span>.<span class="fn">stringify</span>(data) }),
+  <span class="fn">delete</span>: &lt;<span class="type">T</span>&gt;(<span class="prop">path</span>: <span class="type">string</span>) =&gt;
+    <span class="fn">request</span>&lt;<span class="type">T</span>&gt;(path, { <span class="prop">method</span>: <span class="str">'DELETE'</span> }),
+}</code></pre>
+
+  <div class="note">
+    <strong>Python analogy:</strong> This is exactly like having a <code>services/</code> or <code>clients/</code> layer in a Python project &mdash; a <code>class DashboardClient</code> with typed methods that wrap HTTP calls. The TanStack Query hook is like adding caching and retry logic on top.
+  </div>
+
+  <!-- ===== DEPENDENCY RULES ===== -->
+  <h2>Dependency Rules</h2>
+
+  <p>Keep your imports sane with these directional rules:</p>
+
+  <div class="panel">
+    <div class="panel-title">Import direction rules</div>
+    <ul>
+      <li><strong>Features can import from <code>shared/</code></strong> &mdash; always OK</li>
+      <li><strong>Features should NOT import from other features</strong> &mdash; if two features need the same thing, lift it to <code>shared/</code></li>
+      <li><strong><code>shared/</code> never imports from features</strong> &mdash; it has no knowledge of specific domains</li>
+      <li><strong>Routes import from features</strong> &mdash; routes wire features to URLs</li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Routes</div>
+      <div class="desc">Wire URL &rarr; Feature</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Features</div>
+      <div class="desc">Self-contained domains</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Shared</div>
+      <div class="desc">Reusable utilities</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Circular dependency trap:</strong> Feature A imports from Feature B, which imports from Feature A. This is the #1 sign you need to extract shared code. ESLint plugins like <code>eslint-plugin-import</code> can enforce these boundaries automatically.
+  </div>
+
+  <!-- ===== PATH ALIASES ===== -->
+  <h2>Path Aliases</h2>
+
+  <p>Instead of counting <code>../../../</code>, set up path aliases in your <code>tsconfig.json</code>:</p>
+
+<pre><code><span class="cm">// tsconfig.json</span>
+{
+  <span class="str">"compilerOptions"</span>: {
+    <span class="str">"baseUrl"</span>: <span class="str">"."</span>,
+    <span class="str">"paths"</span>: {
+      <span class="str">"@features/*"</span>: [<span class="str">"src/features/*"</span>],
+      <span class="str">"@shared/*"</span>:   [<span class="str">"src/shared/*"</span>],
+      <span class="str">"@routes/*"</span>:   [<span class="str">"src/routes/*"</span>]
+    }
+  }
+}</code></pre>
+
+  <p>Then imports become:</p>
+
+<pre><code><span class="cm">// Clean, absolute-style imports</span>
+<span class="kw">import</span> { <span class="type">LoginForm</span>, <span class="fn">useAuth</span> } <span class="kw">from</span> <span class="str">'@features/auth'</span>
+<span class="kw">import</span> { <span class="type">Button</span> } <span class="kw">from</span> <span class="str">'@shared/components/Button'</span></code></pre>
+
+  <div class="tip">
+    <strong>Vite support:</strong> Also add the aliases to <code>vite.config.ts</code> via <code>resolve.alias</code> or use the <code>vite-tsconfig-paths</code> plugin which reads them from <code>tsconfig.json</code> automatically.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Concept</th>
+        <th>When / What</th>
+        <th>Python Analogy</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Feature folders</td>
+        <td>10+ components, production apps</td>
+        <td>Django apps</td>
+      </tr>
+      <tr>
+        <td>Layer folders</td>
+        <td>Small apps, prototypes</td>
+        <td>Flask blueprints by type</td>
+      </tr>
+      <tr>
+        <td>Barrel exports</td>
+        <td>Clean public API per feature</td>
+        <td><code>__init__.py</code> with <code>__all__</code></td>
+      </tr>
+      <tr>
+        <td>API layer</td>
+        <td>Centralized, typed fetch functions</td>
+        <td>Service/client classes</td>
+      </tr>
+      <tr>
+        <td><code>shared/</code></td>
+        <td>Cross-feature reusable code</td>
+        <td><code>utils/</code> or <code>common/</code> package</td>
+      </tr>
+      <tr>
+        <td>Path aliases</td>
+        <td>Eliminate <code>../../../</code></td>
+        <td>Package-relative imports</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

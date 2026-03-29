@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>11 — Advanced State Patterns</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>11 — Advanced State Patterns</h1>
+  <p class="subtitle">Optimistic updates, derived state, URL state, and store composition patterns.</p>
+
+  <!-- ===== OPTIMISTIC UPDATES ===== -->
+  <h2>Optimistic Updates</h2>
+
+  <p>Update the UI <strong>immediately</strong>, then send the request to the server. If it fails, <strong>revert</strong>. This makes the app feel instant even on slow connections.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">User clicks</div>
+      <div class="desc">e.g. "Like" button</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Update UI immediately</div>
+      <div class="desc">Show liked state</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Send API request</div>
+      <div class="desc">POST /api/like</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">On error: revert</div>
+      <div class="desc">Restore previous state</div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Optimistic updates are like <strong>writing to cache first, then persisting to the database</strong>. If the DB write fails, you roll back the cache.</p>
+<pre><code><span class="cm"># Python: write-through cache pattern</span>
+<span class="kw">def</span> <span class="fn">toggle_like</span>(post_id):
+    <span class="cm"># 1. Update cache immediately</span>
+    cache.<span class="fn">set</span>(f<span class="str">"liked:{post_id}"</span>, <span class="kw">True</span>)
+    <span class="kw">try</span>:
+        <span class="cm"># 2. Persist to database</span>
+        db.<span class="fn">execute</span>(<span class="str">"INSERT INTO likes..."</span>)
+    <span class="kw">except</span> <span class="type">Exception</span>:
+        <span class="cm"># 3. Rollback cache on failure</span>
+        cache.<span class="fn">delete</span>(f<span class="str">"liked:{post_id}"</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">TanStack Query pattern</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> likeMutation = <span class="fn">useMutation</span>({
+  <span class="fn">mutationFn</span>: (postId: <span class="type">string</span>) =>
+    <span class="fn">fetch</span>(<span class="str">`/api/posts/${postId}/like`</span>, {
+      method: <span class="str">'POST'</span>,
+    }),
+
+  <span class="cm">// Before request: optimistically update</span>
+  <span class="fn">onMutate</span>: <span class="kw">async</span> (postId) => {
+    <span class="cm">// Cancel in-flight queries</span>
+    <span class="kw">await</span> queryClient
+      .<span class="fn">cancelQueries</span>({ queryKey: [<span class="str">'post'</span>, postId] })
+
+    <span class="cm">// Save previous state for rollback</span>
+    <span class="kw">const</span> previous = queryClient
+      .<span class="fn">getQueryData</span>([<span class="str">'post'</span>, postId])
+
+    <span class="cm">// Optimistically update</span>
+    queryClient.<span class="fn">setQueryData</span>(
+      [<span class="str">'post'</span>, postId],
+      (old) => ({ ...old, liked: <span class="kw">true</span> })
+    )
+
+    <span class="kw">return</span> { previous }
+  },
+
+  <span class="cm">// On error: revert to saved state</span>
+  <span class="fn">onError</span>: (_err, postId, context) => {
+    queryClient.<span class="fn">setQueryData</span>(
+      [<span class="str">'post'</span>, postId],
+      context?.previous
+    )
+  },
+
+  <span class="cm">// Always refetch after error or success</span>
+  <span class="fn">onSettled</span>: (_data, _err, postId) => {
+    queryClient.<span class="fn">invalidateQueries</span>({
+      queryKey: [<span class="str">'post'</span>, postId],
+    })
+  },
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The three callbacks:</strong>
+    <ul>
+      <li><code>onMutate</code> — runs <em>before</em> the request. Save old state, update optimistically. Return context for rollback.</li>
+      <li><code>onError</code> — runs on failure. Use context to revert.</li>
+      <li><code>onSettled</code> — runs after success <em>or</em> failure. Invalidate queries to get fresh server data.</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>When to use optimistic updates:</strong> For actions where the success rate is high (>99%) and immediate feedback matters. "Like" buttons, toggling favorites, reordering lists. Don't use for critical actions like payments.
+  </div>
+
+  <!-- ===== DERIVED STATE ===== -->
+  <h2>Derived State</h2>
+
+  <p>Derived state is data <strong>computed from other state</strong>. The rule: <strong>don't store it — compute it.</strong> Storing derived values creates synchronization bugs.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Storing derived state (BUG)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// DON'T: total can get out of sync</span>
+<span class="kw">interface</span> <span class="type">CartState</span> {
+  items: <span class="type">CartItem</span>[]
+  total: <span class="type">number</span>  <span class="cm">// derived! don't store</span>
+}
+
+<span class="fn">addItem</span>: (item) => <span class="fn">set</span>((s) => ({
+  items: [...s.items, item],
+  <span class="cm">// Forgot to update total? Bug!</span>
+  total: s.items.<span class="fn">reduce</span>(...) + item.price
+}))</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Computing derived state</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// DO: compute on the fly</span>
+<span class="kw">interface</span> <span class="type">CartState</span> {
+  items: <span class="type">CartItem</span>[]
+  <span class="cm">// No total stored!</span>
+}
+
+<span class="cm">// Option 1: In the store with get()</span>
+<span class="fn">getTotal</span>: () =>
+  <span class="fn">get</span>().items.<span class="fn">reduce</span>(
+    (sum, i) => sum + i.price * i.qty, <span class="num">0</span>
+  )
+
+<span class="cm">// Option 2: In component with useMemo</span>
+<span class="kw">const</span> items = <span class="fn">useCartStore</span>((s) => s.items)
+<span class="kw">const</span> total = <span class="fn">useMemo</span>(
+  () => items.<span class="fn">reduce</span>(
+    (sum, i) => sum + i.price * i.qty, <span class="num">0</span>
+  ),
+  [items]
+)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Derived state is like a SQL <code>VIEW</code> or a Python <code>@property</code>:</p>
+<pre><code><span class="cm"># Don't store total in the table</span>
+<span class="cm"># Compute it with a VIEW:</span>
+<span class="cm"># SELECT SUM(price * qty) FROM cart_items</span>
+
+<span class="cm"># Or in Python:</span>
+<span class="kw">class</span> <span class="type">Cart</span>:
+    <span class="kw">@property</span>
+    <span class="kw">def</span> <span class="fn">total</span>(self) -> <span class="type">float</span>:
+        <span class="kw">return</span> <span class="fn">sum</span>(
+            i.price * i.qty
+            <span class="kw">for</span> i <span class="kw">in</span> self.items
+        )</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">Common derived values</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Total price</strong> = sum of (price * quantity)</li>
+          <li><strong>Filtered list</strong> = items matching a filter</li>
+          <li><strong>Item count</strong> = array.length</li>
+          <li><strong>Is empty</strong> = items.length === 0</li>
+          <li><strong>Selected item</strong> = items.find(id === selectedId)</li>
+          <li><strong>Form validity</strong> = all fields pass validation</li>
+        </ul>
+        <p style="color: #999; margin-top: 10px; font-size: 13px;">Use <code>useMemo</code> if the computation is expensive. For simple derivations, just compute inline.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== URL AS STATE ===== -->
+  <h2>URL as State (Deep Dive)</h2>
+
+  <p>For filters, sorting, pagination, and search — use the URL. This gives you shareability, bookmarkability, and proper back/forward navigation for free.</p>
+
+  <div class="panel">
+    <div class="panel-title">Complete URL state pattern with TanStack Query</div>
+<pre><code><span class="kw">import</span> { <span class="fn">useSearchParams</span> } <span class="kw">from</span> <span class="str">'react-router-dom'</span>
+<span class="kw">import</span> { <span class="fn">useQuery</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+
+<span class="kw">interface</span> <span class="type">Filters</span> {
+  search: <span class="type">string</span>
+  category: <span class="type">string</span>
+  sort: <span class="str">'name'</span> | <span class="str">'price'</span> | <span class="str">'rating'</span>
+  page: <span class="type">number</span>
+}
+
+<span class="cm">// 1. Read filters from URL</span>
+<span class="kw">const</span> <span class="fn">useFilters</span> = (): <span class="type">Filters</span> => {
+  <span class="kw">const</span> [params] = <span class="fn">useSearchParams</span>()
+  <span class="kw">return</span> {
+    search: params.<span class="fn">get</span>(<span class="str">'search'</span>) ?? <span class="str">''</span>,
+    category: params.<span class="fn">get</span>(<span class="str">'category'</span>) ?? <span class="str">'all'</span>,
+    sort: (params.<span class="fn">get</span>(<span class="str">'sort'</span>) <span class="kw">as</span> <span class="type">Filters</span>[<span class="str">'sort'</span>]) ?? <span class="str">'name'</span>,
+    page: <span class="fn">Number</span>(params.<span class="fn">get</span>(<span class="str">'page'</span>)) || <span class="num">1</span>,
+  }
+}
+
+<span class="cm">// 2. Update filters in URL</span>
+<span class="kw">const</span> <span class="fn">useUpdateFilters</span> = () => {
+  <span class="kw">const</span> [, setParams] = <span class="fn">useSearchParams</span>()
+
+  <span class="kw">return</span> (updates: <span class="type">Partial</span>&lt;<span class="type">Filters</span>&gt;) => {
+    <span class="fn">setParams</span>((prev) => {
+      <span class="kw">const</span> next = <span class="kw">new</span> <span class="type">URLSearchParams</span>(prev)
+      Object.<span class="fn">entries</span>(updates).<span class="fn">forEach</span>(([key, val]) => {
+        <span class="kw">if</span> (val) next.<span class="fn">set</span>(key, <span class="fn">String</span>(val))
+        <span class="kw">else</span> next.<span class="fn">delete</span>(key)
+      })
+      <span class="cm">// Reset to page 1 when filters change</span>
+      <span class="kw">if</span> (!(<span class="str">'page'</span> <span class="kw">in</span> updates)) next.<span class="fn">set</span>(<span class="str">'page'</span>, <span class="str">'1'</span>)
+      <span class="kw">return</span> next
+    })
+  }
+}
+
+<span class="cm">// 3. Use filters in a query</span>
+<span class="kw">const</span> <span class="fn">ProductList</span> = () => {
+  <span class="kw">const</span> filters = <span class="fn">useFilters</span>()
+  <span class="kw">const</span> updateFilters = <span class="fn">useUpdateFilters</span>()
+
+  <span class="kw">const</span> { data, isLoading } = <span class="fn">useQuery</span>({
+    <span class="cm">// Query key includes filters — auto-refetches on change</span>
+    queryKey: [<span class="str">'products'</span>, filters],
+    <span class="fn">queryFn</span>: () => <span class="fn">fetchProducts</span>(filters),
+  })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;input</span>
+        <span class="attr">value</span>={filters.search}
+        <span class="attr">onChange</span>={(e) =>
+          <span class="fn">updateFilters</span>({ search: e.target.value })}
+      <span class="tag">/&gt;</span>
+      <span class="cm">{/* URL updates, query refetches, UI updates */}</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> When filters are in the URL and the query key includes the filters, TanStack Query automatically refetches when the URL changes. No manual coordination needed.
+  </div>
+
+  <!-- ===== ZUSTAND + TANSTACK QUERY ===== -->
+  <h2>Zustand + TanStack Query</h2>
+
+  <p>These two tools complement each other. The key rule: <strong>never duplicate server data in Zustand.</strong></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Data Type</th>
+        <th>Tool</th>
+        <th>Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Server data</td>
+        <td>TanStack Query</td>
+        <td>Product list, user profile, comments</td>
+      </tr>
+      <tr>
+        <td>Client-only UI state</td>
+        <td>Zustand</td>
+        <td>Shopping cart, sidebar open, theme</td>
+      </tr>
+      <tr>
+        <td>Shareable/bookmarkable</td>
+        <td>URL params</td>
+        <td>Search, filters, pagination</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">DON'T: Duplicate server data</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Zustand store with server data — BAD</span>
+<span class="kw">const</span> <span class="fn">useProductStore</span> = <span class="fn">create</span>((set) => ({
+  products: [],        <span class="cm">// server data!</span>
+  isLoading: <span class="kw">false</span>,    <span class="cm">// server state!</span>
+  error: <span class="kw">null</span>,         <span class="cm">// server state!</span>
+  <span class="fn">fetchProducts</span>: <span class="kw">async</span> () => {
+    <span class="fn">set</span>({ isLoading: <span class="kw">true</span> })
+    <span class="kw">try</span> {
+      <span class="kw">const</span> data = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/products'</span>)
+      <span class="fn">set</span>({ products: data, isLoading: <span class="kw">false</span> })
+    } <span class="kw">catch</span> (err) {
+      <span class="fn">set</span>({ error: err, isLoading: <span class="kw">false</span> })
+    }
+  },
+}))</code></pre>
+        <p style="color: #f87171; font-size: 13px; margin-top: 8px;">No caching, no dedup, no background refetch, no stale-while-revalidate. You're reimplementing TanStack Query poorly.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">DO: Each tool does its job</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// TanStack Query: server data</span>
+<span class="kw">const</span> { data: products } = <span class="fn">useQuery</span>({
+  queryKey: [<span class="str">'products'</span>],
+  <span class="fn">queryFn</span>: <span class="fn">fetchProducts</span>,
+})
+
+<span class="cm">// Zustand: client-only state</span>
+<span class="kw">const</span> <span class="fn">useCartStore</span> = <span class="fn">create</span>(() => ({
+  items: [],  <span class="cm">// client state only!</span>
+  <span class="fn">addItem</span>: ...,
+}))
+
+<span class="cm">// Component combines both:</span>
+<span class="kw">const</span> <span class="fn">ProductCard</span> = ({ product }) => {
+  <span class="kw">const</span> addItem = <span class="fn">useCartStore</span>((s) => s.addItem)
+  <span class="kw">return</span> (
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =>
+      <span class="fn">addItem</span>(product)}<span class="tag">&gt;</span>
+      Add to Cart
+    <span class="tag">&lt;/button&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SLICE PATTERN ===== -->
+  <h2>Slice Pattern</h2>
+
+  <p>When a single store grows large, split it into <strong>slices</strong> — separate files that each define a portion of the state. Then compose them into one store.</p>
+
+  <div class="file-tree">
+    <span class="dir">src/stores/</span><br>
+    &nbsp;&nbsp;<span class="highlight">useAppStore.ts</span> &nbsp;&nbsp;&nbsp;<span class="cm">// combines slices</span><br>
+    &nbsp;&nbsp;<span class="dir">slices/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">authSlice.ts</span> &nbsp;&nbsp;&nbsp;<span class="cm">// user, login, logout</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">uiSlice.ts</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// sidebar, theme</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">notificationSlice.ts</span> <span class="cm">// toasts</span>
+  </div>
+
+<pre><code><span class="cm">// slices/authSlice.ts</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">StateCreator</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+
+<span class="kw">export interface</span> <span class="type">AuthSlice</span> {
+  user: <span class="type">User</span> | <span class="kw">null</span>
+  <span class="fn">login</span>: (user: <span class="type">User</span>) => <span class="type">void</span>
+  <span class="fn">logout</span>: () => <span class="type">void</span>
+}
+
+<span class="kw">export const</span> <span class="fn">createAuthSlice</span>: <span class="type">StateCreator</span>&lt;
+  <span class="type">AuthSlice</span> & <span class="type">UISlice</span>,  <span class="cm">// full store type</span>
+  [],
+  [],
+  <span class="type">AuthSlice</span>             <span class="cm">// this slice's type</span>
+&gt; = (set) => ({
+  user: <span class="kw">null</span>,
+  <span class="fn">login</span>: (user) => <span class="fn">set</span>({ user }),
+  <span class="fn">logout</span>: () => <span class="fn">set</span>({ user: <span class="kw">null</span> }),
+})
+
+<span class="cm">// slices/uiSlice.ts</span>
+<span class="kw">export interface</span> <span class="type">UISlice</span> {
+  sidebarOpen: <span class="type">boolean</span>
+  <span class="fn">toggleSidebar</span>: () => <span class="type">void</span>
+}
+
+<span class="kw">export const</span> <span class="fn">createUISlice</span>: <span class="type">StateCreator</span>&lt;
+  <span class="type">AuthSlice</span> & <span class="type">UISlice</span>, [], [], <span class="type">UISlice</span>
+&gt; = (set) => ({
+  sidebarOpen: <span class="kw">false</span>,
+  <span class="fn">toggleSidebar</span>: () =>
+    <span class="fn">set</span>((s) => ({ sidebarOpen: !s.sidebarOpen })),
+})
+
+<span class="cm">// useAppStore.ts — combine slices</span>
+<span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+<span class="kw">import</span> { <span class="fn">createAuthSlice</span>, <span class="kw">type</span> <span class="type">AuthSlice</span> } <span class="kw">from</span> <span class="str">'./slices/authSlice'</span>
+<span class="kw">import</span> { <span class="fn">createUISlice</span>, <span class="kw">type</span> <span class="type">UISlice</span> } <span class="kw">from</span> <span class="str">'./slices/uiSlice'</span>
+
+<span class="kw">export const</span> <span class="fn">useAppStore</span> = <span class="fn">create</span>&lt;<span class="type">AuthSlice</span> & <span class="type">UISlice</span>&gt;()(
+  (...args) => ({
+    ...<span class="fn">createAuthSlice</span>(...args),
+    ...<span class="fn">createUISlice</span>(...args),
+  })
+)</code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> Slices within one store can access each other's state via <code>get()</code>. But if the domains are truly independent, prefer separate stores over slices. Slices are for when domains need to interact.
+  </div>
+
+  <!-- ===== STATE NORMALIZATION ===== -->
+  <h2>State Normalization</h2>
+
+  <p>Flatten nested data structures. Use IDs to reference entities, like rows in a database table. This prevents deep nesting, makes updates O(1), and avoids duplication.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Nested (denormalized)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Deeply nested — hard to update</span>
+<span class="kw">interface</span> <span class="type">State</span> {
+  posts: {
+    id: <span class="type">string</span>
+    title: <span class="type">string</span>
+    author: {
+      id: <span class="type">string</span>
+      name: <span class="type">string</span>  <span class="cm">// duplicated!</span>
+    }
+    comments: {
+      id: <span class="type">string</span>
+      text: <span class="type">string</span>
+      author: {
+        id: <span class="type">string</span>
+        name: <span class="type">string</span> <span class="cm">// duplicated!</span>
+      }
+    }[]
+  }[]
+}
+
+<span class="cm">// Updating author name = find every</span>
+<span class="cm">// occurrence and update. Easy to miss one.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Flat (normalized)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Like database tables</span>
+<span class="kw">interface</span> <span class="type">State</span> {
+  users: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">User</span>&gt;
+  posts: <span class="type">Record</span>&lt;<span class="type">string</span>, {
+    id: <span class="type">string</span>
+    title: <span class="type">string</span>
+    authorId: <span class="type">string</span>    <span class="cm">// FK</span>
+    commentIds: <span class="type">string</span>[] <span class="cm">// FK[]</span>
+  }&gt;
+  comments: <span class="type">Record</span>&lt;<span class="type">string</span>, {
+    id: <span class="type">string</span>
+    text: <span class="type">string</span>
+    authorId: <span class="type">string</span>    <span class="cm">// FK</span>
+  }&gt;
+}
+
+<span class="cm">// Update author name = one operation</span>
+<span class="cm">// state.users[id].name = "New Name"</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python / SQL Analogy</div>
+      <div class="comp-body">
+        <p>This is exactly how you'd model it in PostgreSQL:</p>
+<pre><code><span class="cm">-- Separate tables with foreign keys</span>
+<span class="kw">CREATE TABLE</span> users (
+  id <span class="type">UUID PRIMARY KEY</span>,
+  name <span class="type">TEXT</span>
+);
+<span class="kw">CREATE TABLE</span> posts (
+  id <span class="type">UUID PRIMARY KEY</span>,
+  title <span class="type">TEXT</span>,
+  author_id <span class="type">UUID REFERENCES</span> users(id)
+);
+<span class="kw">CREATE TABLE</span> comments (
+  id <span class="type">UUID PRIMARY KEY</span>,
+  text <span class="type">TEXT</span>,
+  post_id <span class="type">UUID REFERENCES</span> posts(id),
+  author_id <span class="type">UUID REFERENCES</span> users(id)
+);</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Record&lt;string, T&gt; = dict[str, T] in Python</span>
+<span class="cm">// It's a hash map keyed by ID</span>
+
+<span class="kw">type</span> <span class="type">NormalizedState</span> = {
+  entities: {
+    users: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">User</span>&gt;
+    posts: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">Post</span>&gt;
+  }
+  ids: {
+    users: <span class="type">string</span>[]  <span class="cm">// preserves order</span>
+    posts: <span class="type">string</span>[]
+  }
+}
+
+<span class="cm">// Lookup is O(1): state.entities.users[id]</span>
+<span class="cm">// List render: state.ids.users.map(id =></span>
+<span class="cm">//   state.entities.users[id])</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>When to normalize:</strong> When you have entities referenced by other entities (users, posts, comments). For simple lists without relationships, flat arrays are fine. Don't over-engineer.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Pattern Summary</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Pattern</th>
+        <th>Problem It Solves</th>
+        <th>Key Idea</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Optimistic updates</td>
+        <td>Slow-feeling UI on mutations</td>
+        <td>Update UI first, revert on error</td>
+      </tr>
+      <tr>
+        <td>Derived state</td>
+        <td>Sync bugs from redundant data</td>
+        <td>Compute, don't store</td>
+      </tr>
+      <tr>
+        <td>URL as state</td>
+        <td>Non-shareable, non-bookmarkable views</td>
+        <td>Put filters/search/pagination in URL</td>
+      </tr>
+      <tr>
+        <td>Zustand + Query separation</td>
+        <td>Duplicating server data in client stores</td>
+        <td>Query for server data, Zustand for UI state</td>
+      </tr>
+      <tr>
+        <td>Slice pattern</td>
+        <td>Large, unwieldy stores</td>
+        <td>Split by domain, compose into one store</td>
+      </tr>
+      <tr>
+        <td>Normalization</td>
+        <td>Deeply nested data, duplicate entities</td>
+        <td>Flatten like DB tables, reference by ID</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

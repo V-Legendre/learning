@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 — Async/Await &amp; Promises</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>03 — Async/Await &amp; Promises</h1>
+  <p class="subtitle">How JavaScript handles concurrency: single-threaded, non-blocking, event-loop-driven.</p>
+
+  <!-- ===== THE EVENT LOOP ===== -->
+  <h2>The JavaScript Event Loop</h2>
+
+  <div class="panel">
+    <div class="panel-title">Mental Model: JS vs Python Concurrency</div>
+    <p>Both JS and Python are single-threaded for your code. The key difference is the <strong>default mode</strong>:</p>
+    <ul>
+      <li><strong>Python</strong> = synchronous by default. You opt into async with <code>asyncio</code>.</li>
+      <li><strong>JavaScript</strong> = async by default for I/O. All network, timers, and file operations are non-blocking.</li>
+    </ul>
+    <p>In Python, <code>requests.get(url)</code> blocks. In JS, <code>fetch(url)</code> returns immediately with a Promise.</p>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Call Stack</div>
+      <div class="desc">Runs your synchronous code line by line</div>
+    </div>
+    <span class="arrow">--></span>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Web APIs</div>
+      <div class="desc">Handles async ops (fetch, setTimeout, DOM events)</div>
+    </div>
+    <span class="arrow">--></span>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Task Queue</div>
+      <div class="desc">Completed callbacks wait here</div>
+    </div>
+    <span class="arrow">--></span>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Event Loop</div>
+      <div class="desc">Moves callbacks to call stack when it's empty</div>
+    </div>
+  </div>
+
+<pre><code><span class="cm">// This demonstrates the event loop order</span>
+console.<span class="fn">log</span>(<span class="str">"1 - synchronous"</span>)
+
+<span class="fn">setTimeout</span>(() => {
+  console.<span class="fn">log</span>(<span class="str">"2 - timeout callback"</span>)
+}, <span class="num">0</span>)  <span class="cm">// Even 0ms delay goes through the queue!</span>
+
+<span class="type">Promise</span>.<span class="fn">resolve</span>().<span class="fn">then</span>(() => {
+  console.<span class="fn">log</span>(<span class="str">"3 - promise (microtask)"</span>)
+})
+
+console.<span class="fn">log</span>(<span class="str">"4 - synchronous"</span>)
+
+<span class="cm">// Output order: 1, 4, 3, 2</span>
+<span class="cm">// Synchronous runs first, then microtasks (Promises),</span>
+<span class="cm">// then macrotasks (setTimeout)</span></code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> Promises use a <strong>microtask queue</strong> which has higher priority than the regular task queue (setTimeout, setInterval). This is why Promise callbacks run before setTimeout callbacks even with <code>setTimeout(..., 0)</code>.
+  </div>
+
+  <!-- ===== PROMISES ===== -->
+  <h2>Promises</h2>
+
+  <p>A Promise represents a value that will be available in the future. It's like Python's <code>asyncio.Future</code>.</p>
+
+  <h3>Three States</h3>
+
+  <table>
+    <thead>
+      <tr><th>State</th><th>Meaning</th><th>Transitions to</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>pending</code></td><td>Operation in progress</td><td>fulfilled or rejected</td></tr>
+      <tr><td><code>fulfilled</code></td><td>Completed successfully</td><td>Terminal</td></tr>
+      <tr><td><code>rejected</code></td><td>Failed with an error</td><td>Terminal</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Creating Promises</h3>
+
+<pre><code><span class="cm">// Creating a Promise manually (rare — mostly you consume them)</span>
+<span class="kw">const</span> <span class="fn">delay</span> = (ms: <span class="type">number</span>): <span class="type">Promise</span>&lt;<span class="type">void</span>&gt; =>
+  <span class="kw">new</span> <span class="type">Promise</span>(resolve => <span class="fn">setTimeout</span>(resolve, ms))
+
+<span class="cm">// Wrapping a callback API in a Promise</span>
+<span class="kw">const</span> <span class="fn">readFile</span> = (path: <span class="type">string</span>): <span class="type">Promise</span>&lt;<span class="type">string</span>&gt; =>
+  <span class="kw">new</span> <span class="type">Promise</span>((resolve, reject) => {
+    fs.<span class="fn">readFile</span>(path, <span class="str">"utf-8"</span>, (err, data) => {
+      <span class="kw">if</span> (err) <span class="fn">reject</span>(err)
+      <span class="kw">else</span> <span class="fn">resolve</span>(data)
+    })
+  })</code></pre>
+
+  <h3>.then() / .catch() / .finally()</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript — Promise chain</div>
+      <div class="comp-body">
+<pre><code><span class="fn">fetch</span>(<span class="str">"/api/users"</span>)
+  .<span class="fn">then</span>(response => response.<span class="fn">json</span>())
+  .<span class="fn">then</span>(data => {
+    console.<span class="fn">log</span>(data)
+  })
+  .<span class="fn">catch</span>(error => {
+    console.<span class="fn">error</span>(<span class="str">"Failed:"</span>, error)
+  })
+  .<span class="fn">finally</span>(() => {
+    console.<span class="fn">log</span>(<span class="str">"Done"</span>)
+  })</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Python doesn't chain like this.</span>
+<span class="cm"># The equivalent is just sequential:</span>
+<span class="kw">try</span>:
+    response = requests.<span class="fn">get</span>(<span class="str">"/api/users"</span>)
+    data = response.<span class="fn">json</span>()
+    <span class="fn">print</span>(data)
+<span class="kw">except</span> <span class="type">Exception</span> <span class="kw">as</span> e:
+    <span class="fn">print</span>(<span class="str">f"Failed: {e}"</span>)
+<span class="kw">finally</span>:
+    <span class="fn">print</span>(<span class="str">"Done"</span>)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> <code>.then()</code> returns a new Promise, enabling chaining. Each <code>.then()</code> receives the return value of the previous one. A single <code>.catch()</code> at the end handles errors from any step in the chain.
+  </div>
+
+  <!-- ===== ASYNC/AWAIT ===== -->
+  <h2>async/await</h2>
+
+  <p>Syntactic sugar over Promises. Makes async code look synchronous. Almost identical to Python's <code>async/await</code>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">fetchUsers</span> = <span class="kw">async</span> (): <span class="type">Promise</span>&lt;<span class="type">User</span>[]&gt; => {
+  <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/users"</span>)
+
+  <span class="kw">if</span> (!response.ok) {
+    <span class="kw">throw new</span> <span class="type">Error</span>(
+      <span class="str">`HTTP ${response.status}`</span>
+    )
+  }
+
+  <span class="kw">const</span> data = <span class="kw">await</span> response.<span class="fn">json</span>()
+  <span class="kw">return</span> data
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="kw">async def</span> <span class="fn">fetch_users</span>() -> <span class="type">list</span>[<span class="type">User</span>]:
+    <span class="kw">async with</span> aiohttp.<span class="fn">ClientSession</span>() <span class="kw">as</span> s:
+        response = <span class="kw">await</span> s.<span class="fn">get</span>(<span class="str">"/api/users"</span>)
+
+        <span class="kw">if</span> response.status != <span class="num">200</span>:
+            <span class="kw">raise</span> <span class="type">Exception</span>(
+                <span class="str">f"HTTP {response.status}"</span>
+            )
+
+        data = <span class="kw">await</span> response.<span class="fn">json</span>()
+        <span class="kw">return</span> data</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Rules of async/await</div>
+    <ul>
+      <li><code>async</code> functions always return a Promise (even if you return a plain value)</li>
+      <li><code>await</code> can only be used inside an <code>async</code> function (or at the top level of a module)</li>
+      <li><code>await</code> pauses execution of that function until the Promise settles</li>
+      <li>Other code (event handlers, other async functions) continues running while awaiting</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Key difference from Python:</strong> In Python, you need an event loop (<code>asyncio.run()</code>) to run async code. In JS, the event loop is always running. You can call an <code>async</code> function from anywhere — it just runs.
+  </div>
+
+  <!-- ===== ERROR HANDLING ===== -->
+  <h2>Error Handling</h2>
+
+  <h3>try/catch with async/await</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">loadData</span> = <span class="kw">async</span> () => {
+  <span class="kw">try</span> {
+    <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/data"</span>)
+
+    <span class="cm">// fetch does NOT throw on HTTP errors (404, 500)</span>
+    <span class="cm">// It only throws on network failures</span>
+    <span class="kw">if</span> (!response.ok) {
+      <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`HTTP error: ${response.status}`</span>)
+    }
+
+    <span class="kw">const</span> data = <span class="kw">await</span> response.<span class="fn">json</span>()
+    <span class="kw">return</span> data
+  } <span class="kw">catch</span> (error) {
+    <span class="cm">// Catches: network errors, HTTP errors we threw, JSON parse errors</span>
+    console.<span class="fn">error</span>(<span class="str">"Failed to load:"</span>, error)
+    <span class="kw">return null</span>
+  } <span class="kw">finally</span> {
+    <span class="cm">// Runs regardless of success/failure</span>
+    <span class="fn">setLoading</span>(<span class="kw">false</span>)
+  }
+}</code></pre>
+
+  <div class="warn">
+    <strong>Gotcha: fetch doesn't throw on HTTP errors!</strong> Unlike Python's <code>requests.raise_for_status()</code> or <code>httpx</code>, the <code>fetch</code> API resolves successfully for 404, 500, etc. You must check <code>response.ok</code> (true for 200-299) yourself.
+  </div>
+
+  <h3>Typed Error Handling</h3>
+
+<pre><code><span class="cm">// TypeScript catch blocks receive 'unknown' (not 'Error')</span>
+<span class="kw">try</span> {
+  <span class="kw">await</span> <span class="fn">riskyOperation</span>()
+} <span class="kw">catch</span> (error) {
+  <span class="cm">// error is 'unknown' — you must narrow the type</span>
+
+  <span class="kw">if</span> (error <span class="kw">instanceof</span> <span class="type">Error</span>) {
+    console.<span class="fn">log</span>(error.message) <span class="cm">// now TS knows it's Error</span>
+  }
+
+  <span class="cm">// Or assert it (less safe but common)</span>
+  <span class="kw">const</span> msg = error <span class="kw">instanceof</span> <span class="type">Error</span> ? error.message : <span class="fn">String</span>(error)
+}</code></pre>
+
+  <div class="note">
+    <strong>Python comparison:</strong> Python's <code>except Exception as e:</code> gives you a typed exception. TS's <code>catch (error)</code> gives you <code>unknown</code> because JS can throw anything — strings, numbers, objects, not just Error instances.
+  </div>
+
+  <!-- ===== PROMISE COMBINATORS ===== -->
+  <h2>Promise Combinators</h2>
+
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Behavior</th><th>Python equivalent</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Promise.all()</code></td><td>Wait for ALL to succeed, fail fast on first rejection</td><td><code>asyncio.gather()</code></td></tr>
+      <tr><td><code>Promise.allSettled()</code></td><td>Wait for ALL to complete (success or failure)</td><td><code>asyncio.gather(return_exceptions=True)</code></td></tr>
+      <tr><td><code>Promise.race()</code></td><td>First to settle wins (success or failure)</td><td><code>asyncio.wait(return_when=FIRST_COMPLETED)</code></td></tr>
+      <tr><td><code>Promise.any()</code></td><td>First to <em>succeed</em> wins, ignores rejections</td><td>No direct equivalent</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Promise.all — Parallel Requests</h3>
+
+<pre><code><span class="cm">// Fire multiple requests in parallel, wait for all</span>
+<span class="kw">const</span> <span class="fn">loadDashboard</span> = <span class="kw">async</span> () => {
+  <span class="kw">const</span> [users, posts, comments] = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">all</span>([
+    <span class="fn">fetch</span>(<span class="str">"/api/users"</span>).<span class="fn">then</span>(r => r.<span class="fn">json</span>()),
+    <span class="fn">fetch</span>(<span class="str">"/api/posts"</span>).<span class="fn">then</span>(r => r.<span class="fn">json</span>()),
+    <span class="fn">fetch</span>(<span class="str">"/api/comments"</span>).<span class="fn">then</span>(r => r.<span class="fn">json</span>()),
+  ])
+
+  <span class="cm">// All three resolved — use the data</span>
+  <span class="kw">return</span> { users, posts, comments }
+}
+
+<span class="cm">// WARNING: If ANY request fails, ALL results are lost</span>
+<span class="cm">// Use allSettled if you want partial results</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript — Promise.all</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> [a, b] = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">all</span>([
+  <span class="fn">fetchA</span>(),
+  <span class="fn">fetchB</span>()
+])</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>a, b = <span class="kw">await</span> asyncio.<span class="fn">gather</span>(
+    <span class="fn">fetch_a</span>(),
+    <span class="fn">fetch_b</span>()
+)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Promise.allSettled — Partial Success</h3>
+
+<pre><code><span class="kw">const</span> results = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">allSettled</span>([
+  <span class="fn">fetch</span>(<span class="str">"/api/users"</span>),
+  <span class="fn">fetch</span>(<span class="str">"/api/posts"</span>),    <span class="cm">// might fail</span>
+  <span class="fn">fetch</span>(<span class="str">"/api/comments"</span>),
+])
+
+<span class="cm">// Each result has { status, value? | reason? }</span>
+results.<span class="fn">forEach</span>(result => {
+  <span class="kw">if</span> (result.status === <span class="str">"fulfilled"</span>) {
+    console.<span class="fn">log</span>(<span class="str">"Success:"</span>, result.value)
+  } <span class="kw">else</span> {
+    console.<span class="fn">log</span>(<span class="str">"Failed:"</span>, result.reason)
+  }
+})
+
+<span class="cm">// Extract only successful results</span>
+<span class="kw">const</span> successes = results
+  .<span class="fn">filter</span>((r): r <span class="kw">is</span> <span class="type">PromiseFulfilledResult</span>&lt;<span class="type">Response</span>&gt; =>
+    r.status === <span class="str">"fulfilled"</span>)
+  .<span class="fn">map</span>(r => r.value)</code></pre>
+
+  <h3>Promise.race — Timeout Pattern</h3>
+
+<pre><code><span class="cm">// Create a timeout that rejects after N ms</span>
+<span class="kw">const</span> <span class="fn">timeout</span> = (ms: <span class="type">number</span>): <span class="type">Promise</span>&lt;<span class="type">never</span>&gt; =>
+  <span class="kw">new</span> <span class="type">Promise</span>((_, reject) =>
+    <span class="fn">setTimeout</span>(() => <span class="fn">reject</span>(<span class="kw">new</span> <span class="type">Error</span>(<span class="str">"Timeout"</span>)), ms)
+  )
+
+<span class="cm">// Race the actual request against the timeout</span>
+<span class="kw">const</span> <span class="fn">fetchWithTimeout</span> = <span class="kw">async</span> (url: <span class="type">string</span>, ms: <span class="type">number</span>) => {
+  <span class="kw">const</span> response = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">race</span>([
+    <span class="fn">fetch</span>(url),
+    <span class="fn">timeout</span>(ms)
+  ])
+  <span class="kw">return</span> response.<span class="fn">json</span>()
+}
+
+<span class="cm">// Usage: will throw "Timeout" if request takes &gt; 5s</span>
+<span class="kw">const</span> data = <span class="kw">await</span> <span class="fn">fetchWithTimeout</span>(<span class="str">"/api/slow"</span>, <span class="num">5000</span>)</code></pre>
+
+  <!-- ===== COMMON PATTERNS ===== -->
+  <h2>Common Patterns</h2>
+
+  <div class="panel">
+    <div class="panel-title">Fetch + Parse (the standard pattern)</div>
+<pre><code><span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">number</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">getUsers</span> = <span class="kw">async</span> (): <span class="type">Promise</span>&lt;<span class="type">User</span>[]&gt; => {
+  <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"https://api.example.com/users"</span>)
+
+  <span class="kw">if</span> (!response.ok) {
+    <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`Failed to fetch users: ${response.status}`</span>)
+  }
+
+  <span class="cm">// response.json() returns Promise&lt;any&gt; — cast to your type</span>
+  <span class="kw">const</span> users: <span class="type">User</span>[] = <span class="kw">await</span> response.<span class="fn">json</span>()
+  <span class="kw">return</span> users
+}
+
+<span class="cm">// In practice, use Zod to validate the response shape at runtime</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Sequential vs Parallel</div>
+<pre><code><span class="cm">// SEQUENTIAL — each waits for the previous (slow!)</span>
+<span class="kw">const</span> users = <span class="kw">await</span> <span class="fn">fetchUsers</span>()      <span class="cm">// 500ms</span>
+<span class="kw">const</span> posts = <span class="kw">await</span> <span class="fn">fetchPosts</span>()      <span class="cm">// 300ms</span>
+<span class="kw">const</span> comments = <span class="kw">await</span> <span class="fn">fetchComments</span>() <span class="cm">// 200ms</span>
+<span class="cm">// Total: ~1000ms</span>
+
+<span class="cm">// PARALLEL — all fire at once (fast!)</span>
+<span class="kw">const</span> [users, posts, comments] = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">all</span>([
+  <span class="fn">fetchUsers</span>(),     <span class="cm">// 500ms</span>
+  <span class="fn">fetchPosts</span>(),     <span class="cm">// 300ms</span>
+  <span class="fn">fetchComments</span>()  <span class="cm">// 200ms</span>
+])
+<span class="cm">// Total: ~500ms (limited by slowest)</span>
+
+<span class="cm">// Use SEQUENTIAL when: B depends on A's result</span>
+<span class="cm">// Use PARALLEL when: requests are independent</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Retry Pattern</div>
+<pre><code><span class="kw">const</span> <span class="fn">fetchWithRetry</span> = <span class="kw">async</span> &lt;<span class="type">T</span>&gt;(
+  fn: () => <span class="type">Promise</span>&lt;<span class="type">T</span>&gt;,
+  retries = <span class="num">3</span>,
+  delayMs = <span class="num">1000</span>
+): <span class="type">Promise</span>&lt;<span class="type">T</span>&gt; => {
+  <span class="kw">for</span> (<span class="kw">let</span> i = <span class="num">0</span>; i &lt; retries; i++) {
+    <span class="kw">try</span> {
+      <span class="kw">return await</span> <span class="fn">fn</span>()
+    } <span class="kw">catch</span> (error) {
+      <span class="kw">if</span> (i === retries - <span class="num">1</span>) <span class="kw">throw</span> error
+      <span class="kw">await</span> <span class="kw">new</span> <span class="type">Promise</span>(r => <span class="fn">setTimeout</span>(r, delayMs * (i + <span class="num">1</span>)))
+    }
+  }
+  <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">"Unreachable"</span>)
+}
+
+<span class="cm">// Usage</span>
+<span class="kw">const</span> data = <span class="kw">await</span> <span class="fn">fetchWithRetry</span>(() => <span class="fn">getUsers</span>(), <span class="num">3</span>, <span class="num">1000</span>)</code></pre>
+  </div>
+
+  <!-- ===== ASYNC IN REACT ===== -->
+  <h2>Async in React (Preview)</h2>
+
+  <div class="panel">
+    <div class="panel-title">useEffect + async (the most common pattern)</div>
+<pre><code><span class="cm">// You can't make the useEffect callback itself async.</span>
+<span class="cm">// Instead, define an async function inside and call it.</span>
+
+<span class="kw">const</span> <span class="fn">UserList</span> = () => {
+  <span class="kw">const</span> [users, setUsers] = <span class="fn">useState</span>&lt;<span class="type">User</span>[]&gt;([])
+  <span class="kw">const</span> [loading, setLoading] = <span class="fn">useState</span>(<span class="kw">true</span>)
+  <span class="kw">const</span> [error, setError] = <span class="fn">useState</span>&lt;<span class="type">string</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">const</span> <span class="fn">load</span> = <span class="kw">async</span> () => {
+      <span class="kw">try</span> {
+        <span class="kw">const</span> data = <span class="kw">await</span> <span class="fn">getUsers</span>()
+        <span class="fn">setUsers</span>(data)
+      } <span class="kw">catch</span> (e) {
+        <span class="fn">setError</span>(e <span class="kw">instanceof</span> <span class="type">Error</span> ? e.message : <span class="str">"Unknown error"</span>)
+      } <span class="kw">finally</span> {
+        <span class="fn">setLoading</span>(<span class="kw">false</span>)
+      }
+    }
+
+    <span class="fn">load</span>()
+  }, []) <span class="cm">// empty deps = run once on mount</span>
+
+  <span class="kw">if</span> (loading) <span class="kw">return</span> &lt;<span class="tag">p</span>&gt;Loading...&lt;/<span class="tag">p</span>&gt;
+  <span class="kw">if</span> (error) <span class="kw">return</span> &lt;<span class="tag">p</span>&gt;Error: {error}&lt;/<span class="tag">p</span>&gt;
+  <span class="kw">return</span> &lt;<span class="tag">ul</span>&gt;{users.<span class="fn">map</span>(u => &lt;<span class="tag">li</span> <span class="attr">key</span>={u.id}&gt;{u.name}&lt;/<span class="tag">li</span>&gt;)}&lt;/<span class="tag">ul</span>&gt;
+}</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> In real apps, you'll use a data-fetching library (TanStack Query, SWR) instead of manual fetch + useEffect. They handle caching, loading states, error states, deduplication, and more. We'll cover this in the React hooks sections.
+  </div>
+
+  <!-- ===== GOTCHAS ===== -->
+  <h2>Common Mistakes &amp; Gotchas</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Forgetting await</div>
+<pre><code><span class="cm">// WRONG — comparing Promise, not value</span>
+<span class="kw">const</span> data = <span class="fn">fetchData</span>()
+<span class="kw">if</span> (data.length > <span class="num">0</span>) { ... }
+<span class="cm">// data is Promise, not the resolved value!</span>
+
+<span class="cm">// RIGHT</span>
+<span class="kw">const</span> data = <span class="kw">await</span> <span class="fn">fetchData</span>()
+<span class="kw">if</span> (data.length > <span class="num">0</span>) { ... }</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Unhandled rejections</div>
+<pre><code><span class="cm">// WRONG — no error handling</span>
+<span class="fn">fetchData</span>() <span class="cm">// if this rejects, crash!</span>
+
+<span class="cm">// RIGHT — handle errors</span>
+<span class="fn">fetchData</span>().<span class="fn">catch</span>(console.error)
+<span class="cm">// or</span>
+<span class="kw">try</span> {
+  <span class="kw">await</span> <span class="fn">fetchData</span>()
+} <span class="kw">catch</span> (e) { ... }</code></pre>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Sequential when parallel is better</div>
+<pre><code><span class="cm">// SLOW — unnecessary sequential</span>
+<span class="kw">const</span> a = <span class="kw">await</span> <span class="fn">fetchA</span>()
+<span class="kw">const</span> b = <span class="kw">await</span> <span class="fn">fetchB</span>()
+
+<span class="cm">// FAST — parallel when independent</span>
+<span class="kw">const</span> [a, b] = <span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">all</span>([
+  <span class="fn">fetchA</span>(), <span class="fn">fetchB</span>()
+])</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">async in .forEach (doesn't work)</div>
+<pre><code><span class="cm">// WRONG — forEach ignores returned promises</span>
+urls.<span class="fn">forEach</span>(<span class="kw">async</span> url => {
+  <span class="kw">await</span> <span class="fn">fetch</span>(url) <span class="cm">// fires and forgets!</span>
+})
+
+<span class="cm">// RIGHT — use for...of or Promise.all</span>
+<span class="kw">for</span> (<span class="kw">const</span> url <span class="kw">of</span> urls) {
+  <span class="kw">await</span> <span class="fn">fetch</span>(url) <span class="cm">// sequential</span>
+}
+<span class="cm">// or parallel:</span>
+<span class="kw">await</span> <span class="type">Promise</span>.<span class="fn">all</span>(urls.<span class="fn">map</span>(<span class="fn">fetch</span>))</code></pre>
+    </div>
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Concept</th><th>TypeScript</th><th>Python</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Define async function</td><td><code>const fn = async () =&gt; {}</code></td><td><code>async def fn():</code></td></tr>
+      <tr><td>Wait for result</td><td><code>const x = await fn()</code></td><td><code>x = await fn()</code></td></tr>
+      <tr><td>Parallel execution</td><td><code>Promise.all([a(), b()])</code></td><td><code>asyncio.gather(a(), b())</code></td></tr>
+      <tr><td>Error handling</td><td><code>try { await } catch {}</code></td><td><code>try: await ... except:</code></td></tr>
+      <tr><td>Create resolved</td><td><code>Promise.resolve(value)</code></td><td><code>asyncio.sleep(0)</code> (not exact)</td></tr>
+      <tr><td>Return type</td><td><code>Promise&lt;T&gt;</code></td><td><code>Coroutine[..., T]</code></td></tr>
+      <tr><td>Run async code</td><td>Just call it (event loop always runs)</td><td><code>asyncio.run(main())</code></td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

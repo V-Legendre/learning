@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 — useReducer</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>08 — useReducer</h1>
+  <p class="subtitle">Managing complex state transitions with a reducer function. When <code>useState</code> gets messy, <code>useReducer</code> brings order.</p>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When to Use useReducer</h2>
+
+  <p><code>useState</code> is great for simple, independent values. <code>useReducer</code> is for when state updates get <strong>complex</strong>:</p>
+
+  <ul>
+    <li>Next state depends on the <strong>previous state</strong></li>
+    <li>Multiple related values change <strong>together</strong></li>
+    <li>Complex state transitions with <strong>multiple conditions</strong></li>
+    <li>You want a <strong>centralized</strong> place for all state logic</li>
+  </ul>
+
+  <div class="note">
+    <strong>Python analogy:</strong> <code>useReducer</code> is like a finite state machine or the command/event pattern. If you've used libraries like <code>transitions</code> (Python FSM), or the reduce pattern in functional programming (<code>functools.reduce</code>), the concept is identical: <code>(current_state, action) -> new_state</code>.
+  </div>
+
+  <!-- ===== THE PATTERN ===== -->
+  <h2>The Pattern</h2>
+
+<pre><code><span class="kw">const</span> [state, dispatch] = <span class="fn">useReducer</span>(reducer, initialState)</code></pre>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Component dispatches action</div>
+      <div class="desc"><code>dispatch({ type: "increment" })</code></div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Reducer receives action</div>
+      <div class="desc"><code>reducer(currentState, action)</code></div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Returns new state</div>
+      <div class="desc">Pure function, no side effects</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Component re-renders</div>
+      <div class="desc">With the new state value</div>
+    </div>
+  </div>
+
+  <!-- ===== BASIC EXAMPLE ===== -->
+  <h2>Basic Example: Counter</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">useState version</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Counter</span> = () =&gt; {
+  <span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;span&gt;</span>{count}<span class="tag">&lt;/span&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">setCount</span>(c =&gt; c + <span class="num">1</span>)}<span class="tag">&gt;</span>
+        +
+      <span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">setCount</span>(c =&gt; c - <span class="num">1</span>)}<span class="tag">&gt;</span>
+        -
+      <span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">setCount</span>(<span class="num">0</span>)}<span class="tag">&gt;</span>
+        Reset
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">useReducer version</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Action</span> =
+  | { type: <span class="str">"increment"</span> }
+  | { type: <span class="str">"decrement"</span> }
+  | { type: <span class="str">"reset"</span> }
+
+<span class="kw">const</span> <span class="fn">reducer</span> = (state: <span class="type">number</span>, action: <span class="type">Action</span>) =&gt; {
+  <span class="kw">switch</span> (action.type) {
+    <span class="kw">case</span> <span class="str">"increment"</span>: <span class="kw">return</span> state + <span class="num">1</span>
+    <span class="kw">case</span> <span class="str">"decrement"</span>: <span class="kw">return</span> state - <span class="num">1</span>
+    <span class="kw">case</span> <span class="str">"reset"</span>: <span class="kw">return</span> <span class="num">0</span>
+  }
+}
+
+<span class="kw">const</span> <span class="fn">Counter</span> = () =&gt; {
+  <span class="kw">const</span> [count, dispatch] = <span class="fn">useReducer</span>(reducer, <span class="num">0</span>)
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;span&gt;</span>{count}<span class="tag">&lt;/span&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">dispatch</span>({ type: <span class="str">"increment"</span> })}<span class="tag">&gt;</span>+<span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">dispatch</span>({ type: <span class="str">"decrement"</span> })}<span class="tag">&gt;</span>-<span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+        <span class="fn">dispatch</span>({ type: <span class="str">"reset"</span> })}<span class="tag">&gt;</span>Reset<span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>For this simple case, useState is fine.</strong> The reducer pattern pays off when state logic is more complex. Let's see real examples.
+  </div>
+
+  <!-- ===== DISCRIMINATED UNION ACTIONS ===== -->
+  <h2>Discriminated Union Actions</h2>
+
+  <p>Type your actions as a <strong>discriminated union</strong>. TypeScript will narrow the <code>payload</code> type inside each <code>case</code> block. This is one of the strongest type-safety patterns in React.</p>
+
+  <div class="panel">
+    <div class="panel-title">Properly typed actions</div>
+<pre><code><span class="cm">// Each action has a unique `type` and its own payload shape</span>
+<span class="kw">type</span> <span class="type">Action</span> =
+  | { type: <span class="str">"set_name"</span>; payload: <span class="type">string</span> }
+  | { type: <span class="str">"set_age"</span>; payload: <span class="type">number</span> }
+  | { type: <span class="str">"toggle_active"</span> }                     <span class="cm">// no payload needed</span>
+  | { type: <span class="str">"set_role"</span>; payload: <span class="str">"admin"</span> | <span class="str">"user"</span> }
+
+<span class="cm">// Inside the reducer switch:</span>
+<span class="kw">case</span> <span class="str">"set_name"</span>:
+  <span class="cm">// TypeScript knows: action.payload is string</span>
+  <span class="kw">return</span> { ...state, name: action.payload }
+
+<span class="kw">case</span> <span class="str">"set_age"</span>:
+  <span class="cm">// TypeScript knows: action.payload is number</span>
+  <span class="kw">return</span> { ...state, age: action.payload }
+
+<span class="kw">case</span> <span class="str">"toggle_active"</span>:
+  <span class="cm">// TypeScript knows: no payload on this action</span>
+  <span class="kw">return</span> { ...state, isActive: !state.isActive }</code></pre>
+  </div>
+
+  <!-- ===== REAL EXAMPLE: SHOPPING CART ===== -->
+  <h2>Real Example: Shopping Cart</h2>
+
+  <div class="panel">
+    <div class="panel-title">Shopping cart reducer — multiple related state transitions</div>
+<pre><code><span class="kw">type</span> <span class="type">CartItem</span> = {
+  id: <span class="type">string</span>
+  name: <span class="type">string</span>
+  price: <span class="type">number</span>
+  quantity: <span class="type">number</span>
+}
+
+<span class="kw">type</span> <span class="type">CartState</span> = {
+  items: <span class="type">CartItem</span>[]
+  total: <span class="type">number</span>
+}
+
+<span class="kw">type</span> <span class="type">CartAction</span> =
+  | { type: <span class="str">"add_item"</span>; payload: <span class="type">Omit</span>&lt;<span class="type">CartItem</span>, <span class="str">"quantity"</span>&gt; }
+  | { type: <span class="str">"remove_item"</span>; payload: { id: <span class="type">string</span> } }
+  | { type: <span class="str">"update_quantity"</span>; payload: { id: <span class="type">string</span>; quantity: <span class="type">number</span> } }
+  | { type: <span class="str">"clear_cart"</span> }
+
+<span class="kw">const</span> <span class="fn">calcTotal</span> = (items: <span class="type">CartItem</span>[]): <span class="type">number</span> =&gt;
+  items.<span class="fn">reduce</span>((sum, item) =&gt; sum + item.price * item.quantity, <span class="num">0</span>)
+
+<span class="kw">const</span> <span class="fn">cartReducer</span> = (state: <span class="type">CartState</span>, action: <span class="type">CartAction</span>): <span class="type">CartState</span> =&gt; {
+  <span class="kw">switch</span> (action.type) {
+    <span class="kw">case</span> <span class="str">"add_item"</span>: {
+      <span class="kw">const</span> existing = state.items.<span class="fn">find</span>(i =&gt; i.id === action.payload.id)
+      <span class="kw">const</span> items = existing
+        ? state.items.<span class="fn">map</span>(i =&gt;
+            i.id === action.payload.id
+              ? { ...i, quantity: i.quantity + <span class="num">1</span> }
+              : i
+          )
+        : [...state.items, { ...action.payload, quantity: <span class="num">1</span> }]
+      <span class="kw">return</span> { items, total: <span class="fn">calcTotal</span>(items) }
+    }
+
+    <span class="kw">case</span> <span class="str">"remove_item"</span>: {
+      <span class="kw">const</span> items = state.items.<span class="fn">filter</span>(i =&gt; i.id !== action.payload.id)
+      <span class="kw">return</span> { items, total: <span class="fn">calcTotal</span>(items) }
+    }
+
+    <span class="kw">case</span> <span class="str">"update_quantity"</span>: {
+      <span class="kw">const</span> items = state.items.<span class="fn">map</span>(i =&gt;
+        i.id === action.payload.id
+          ? { ...i, quantity: action.payload.quantity }
+          : i
+      )
+      <span class="kw">return</span> { items, total: <span class="fn">calcTotal</span>(items) }
+    }
+
+    <span class="kw">case</span> <span class="str">"clear_cart"</span>:
+      <span class="kw">return</span> { items: [], total: <span class="num">0</span> }
+  }
+}
+
+<span class="cm">// Usage in component</span>
+<span class="kw">const</span> <span class="fn">Cart</span> = () =&gt; {
+  <span class="kw">const</span> [cart, dispatch] = <span class="fn">useReducer</span>(cartReducer, { items: [], total: <span class="num">0</span> })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      {cart.items.<span class="fn">map</span>(item =&gt; (
+        <span class="tag">&lt;div</span> <span class="attr">key</span>={item.id}<span class="tag">&gt;</span>
+          <span class="tag">&lt;span&gt;</span>{item.name} x {item.quantity}<span class="tag">&lt;/span&gt;</span>
+          <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt;
+            <span class="fn">dispatch</span>({ type: <span class="str">"remove_item"</span>, payload: { id: item.id } })
+          }<span class="tag">&gt;</span>Remove<span class="tag">&lt;/button&gt;</span>
+        <span class="tag">&lt;/div&gt;</span>
+      ))}
+      <span class="tag">&lt;p&gt;</span>Total: ${cart.total.<span class="fn">toFixed</span>(<span class="num">2</span>)}<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">dispatch</span>({ type: <span class="str">"clear_cart"</span> })}<span class="tag">&gt;</span>
+        Clear
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <!-- ===== ASYNC STATE REDUCER ===== -->
+  <h2>Real Example: Async State (Loading/Error/Data)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Generic async state reducer</div>
+<pre><code><span class="kw">type</span> <span class="type">AsyncState</span>&lt;T&gt; = {
+  data: T | <span class="kw">null</span>
+  isLoading: <span class="type">boolean</span>
+  error: <span class="type">string</span> | <span class="kw">null</span>
+}
+
+<span class="kw">type</span> <span class="type">AsyncAction</span>&lt;T&gt; =
+  | { type: <span class="str">"loading"</span> }
+  | { type: <span class="str">"success"</span>; payload: T }
+  | { type: <span class="str">"error"</span>; payload: <span class="type">string</span> }
+
+<span class="kw">const</span> <span class="fn">asyncReducer</span> = &lt;T,&gt;(
+  state: <span class="type">AsyncState</span>&lt;T&gt;,
+  action: <span class="type">AsyncAction</span>&lt;T&gt;,
+): <span class="type">AsyncState</span>&lt;T&gt; =&gt; {
+  <span class="kw">switch</span> (action.type) {
+    <span class="kw">case</span> <span class="str">"loading"</span>:
+      <span class="kw">return</span> { data: <span class="kw">null</span>, isLoading: <span class="kw">true</span>, error: <span class="kw">null</span> }
+    <span class="kw">case</span> <span class="str">"success"</span>:
+      <span class="kw">return</span> { data: action.payload, isLoading: <span class="kw">false</span>, error: <span class="kw">null</span> }
+    <span class="kw">case</span> <span class="str">"error"</span>:
+      <span class="kw">return</span> { data: <span class="kw">null</span>, isLoading: <span class="kw">false</span>, error: action.payload }
+  }
+}
+
+<span class="cm">// Usage</span>
+<span class="kw">const</span> [state, dispatch] = <span class="fn">useReducer</span>(asyncReducer&lt;<span class="type">User</span>[]&gt;, {
+  data: <span class="kw">null</span>,
+  isLoading: <span class="kw">false</span>,
+  error: <span class="kw">null</span>,
+})</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>In practice:</strong> Use TanStack Query for data fetching — it handles this pattern and much more. But this async reducer is excellent for understanding how reducers model state machines, and it's useful for non-HTTP async operations.
+  </div>
+
+  <!-- ===== USESTATE VS USEREDUCER ===== -->
+  <h2>useState vs useReducer</h2>
+
+  <table>
+    <thead>
+      <tr><th>Criterion</th><th>useState</th><th>useReducer</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>State shape</strong></td>
+        <td>Single value (string, number, boolean)</td>
+        <td>Object with multiple related fields</td>
+      </tr>
+      <tr>
+        <td><strong>Transitions</strong></td>
+        <td>Simple: set to a new value</td>
+        <td>Complex: depends on action type and current state</td>
+      </tr>
+      <tr>
+        <td><strong>Related updates</strong></td>
+        <td>Multiple <code>setState</code> calls</td>
+        <td>One dispatch updates everything atomically</td>
+      </tr>
+      <tr>
+        <td><strong>Testability</strong></td>
+        <td>Test the component</td>
+        <td>Reducer is a pure function — test it in isolation</td>
+      </tr>
+      <tr>
+        <td><strong>Debugging</strong></td>
+        <td>Log individual state changes</td>
+        <td>Log every action with timestamp — full audit trail</td>
+      </tr>
+      <tr>
+        <td><strong>Example</strong></td>
+        <td>Toggle visibility, form field value</td>
+        <td>Shopping cart, multi-step form, game state</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Messy: Multiple useState for related values</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// These are related but managed separately</span>
+<span class="kw">const</span> [isLoading, setIsLoading] = <span class="fn">useState</span>(<span class="kw">false</span>)
+<span class="kw">const</span> [error, setError] = <span class="fn">useState</span>&lt;<span class="type">string</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+<span class="kw">const</span> [data, setData] = <span class="fn">useState</span>&lt;<span class="type">User</span>[] | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+<span class="cm">// Easy to create impossible states:</span>
+<span class="cm">// isLoading=true AND error="oops"</span>
+<span class="cm">// data=users AND isLoading=true</span>
+
+<span class="kw">const</span> <span class="fn">fetchData</span> = <span class="kw">async</span> () =&gt; {
+  <span class="fn">setIsLoading</span>(<span class="kw">true</span>)
+  <span class="fn">setError</span>(<span class="kw">null</span>)  <span class="cm">// easy to forget this</span>
+  <span class="kw">try</span> {
+    <span class="kw">const</span> result = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/users"</span>)
+    <span class="fn">setData</span>(<span class="kw">await</span> result.<span class="fn">json</span>())
+    <span class="fn">setIsLoading</span>(<span class="kw">false</span>)
+  } <span class="kw">catch</span> (e) {
+    <span class="fn">setError</span>(e.message)
+    <span class="fn">setIsLoading</span>(<span class="kw">false</span>)
+  }
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Clean: useReducer for related state</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// State transitions are centralized and atomic</span>
+<span class="kw">const</span> [state, dispatch] = <span class="fn">useReducer</span>(
+  asyncReducer, initialState
+)
+
+<span class="cm">// Impossible states are impossible.</span>
+<span class="cm">// "loading" always clears error and data.</span>
+<span class="cm">// "success" always clears loading and error.</span>
+<span class="cm">// "error" always clears loading and data.</span>
+
+<span class="kw">const</span> <span class="fn">fetchData</span> = <span class="kw">async</span> () =&gt; {
+  <span class="fn">dispatch</span>({ type: <span class="str">"loading"</span> })
+  <span class="kw">try</span> {
+    <span class="kw">const</span> result = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/users"</span>)
+    <span class="kw">const</span> data = <span class="kw">await</span> result.<span class="fn">json</span>()
+    <span class="fn">dispatch</span>({ type: <span class="str">"success"</span>, payload: data })
+  } <span class="kw">catch</span> (e) {
+    <span class="fn">dispatch</span>({ type: <span class="str">"error"</span>,
+      payload: e.message })
+  }
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REDUCER RULES ===== -->
+  <h2>Reducer Rules</h2>
+
+  <div class="panel">
+    <div class="panel-title">What a reducer must do</div>
+    <ul>
+      <li><strong>Pure function:</strong> Same input = same output. No side effects (no API calls, no localStorage, no random values)</li>
+      <li><strong>Return new state:</strong> Never mutate the existing state. Always return a new object: <code>{ ...state, field: newValue }</code></li>
+      <li><strong>Handle all actions:</strong> TypeScript's discriminated union + switch ensures exhaustiveness</li>
+      <li><strong>Synchronous:</strong> Reducers run during render. Async logic goes in event handlers or effects, then <code>dispatch</code> the result</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Mutating state</div>
+      <div class="comp-body">
+<pre><code><span class="kw">case</span> <span class="str">"add_item"</span>:
+  <span class="cm">// MUTATES the existing array!</span>
+  state.items.<span class="fn">push</span>(action.payload)
+  <span class="kw">return</span> state  <span class="cm">// same reference = no re-render</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Returning new state</div>
+      <div class="comp-body">
+<pre><code><span class="kw">case</span> <span class="str">"add_item"</span>:
+  <span class="cm">// Creates new array with spread</span>
+  <span class="kw">return</span> {
+    ...state,
+    items: [...state.items, action.payload],
+  }</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Testing advantage:</strong> Since reducers are pure functions, you can test them without React at all. Just call <code>reducer(someState, someAction)</code> and assert the output. No rendering, no mocking.
+  </div>
+
+<pre><code><span class="cm">// reducer.test.ts — no React needed</span>
+<span class="fn">test</span>(<span class="str">"add_item adds to cart"</span>, () =&gt; {
+  <span class="kw">const</span> initial: <span class="type">CartState</span> = { items: [], total: <span class="num">0</span> }
+  <span class="kw">const</span> result = <span class="fn">cartReducer</span>(initial, {
+    type: <span class="str">"add_item"</span>,
+    payload: { id: <span class="str">"1"</span>, name: <span class="str">"Widget"</span>, price: <span class="num">9.99</span> },
+  })
+
+  <span class="fn">expect</span>(result.items).toHaveLength(<span class="num">1</span>)
+  <span class="fn">expect</span>(result.total).toBe(<span class="num">9.99</span>)
+})
+
+<span class="fn">test</span>(<span class="str">"clear_cart empties everything"</span>, () =&gt; {
+  <span class="kw">const</span> withItems: <span class="type">CartState</span> = {
+    items: [{ id: <span class="str">"1"</span>, name: <span class="str">"Widget"</span>, price: <span class="num">9.99</span>, quantity: <span class="num">2</span> }],
+    total: <span class="num">19.98</span>,
+  }
+  <span class="kw">const</span> result = <span class="fn">cartReducer</span>(withItems, { type: <span class="str">"clear_cart"</span> })
+
+  <span class="fn">expect</span>(result.items).toEqual([])
+  <span class="fn">expect</span>(result.total).toBe(<span class="num">0</span>)
+})</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Decision Guide</h2>
+
+  <table>
+    <thead>
+      <tr><th>Scenario</th><th>Use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Toggle a boolean</td><td><code>useState</code></td></tr>
+      <tr><td>Single input value</td><td><code>useState</code></td></tr>
+      <tr><td>Counter with increment/decrement</td><td>Either (useState is fine)</td></tr>
+      <tr><td>Form with 5+ fields and validation</td><td><code>useReducer</code></td></tr>
+      <tr><td>Shopping cart (add, remove, update quantity, clear)</td><td><code>useReducer</code></td></tr>
+      <tr><td>Multi-step wizard with back/forward/reset</td><td><code>useReducer</code></td></tr>
+      <tr><td>Loading/error/success state machine</td><td><code>useReducer</code></td></tr>
+      <tr><td>Complex client state shared via Context</td><td><code>useReducer</code> + Context</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

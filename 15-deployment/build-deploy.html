@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>15 — Build &amp; Deploy</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>15 — Build &amp; Deploy</h1>
+  <p class="subtitle">Building production bundles with Vite, environment variables, and deploying to Vercel, Netlify, or AWS.</p>
+
+  <!-- ===== BUILD PROCESS ===== -->
+  <h2>The Build Process</h2>
+
+  <p>A React app in development is a bunch of TypeScript/JSX files, CSS, and assets that a dev server transforms on the fly. For production, you <strong>build</strong> everything into optimized static files.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm build<br>
+    <span class="output">vite v5.x building for production...</span><br>
+    <span class="output">transforming (142 modules)...</span><br>
+    <span class="output">rendering chunks (8)...</span><br>
+    <span class="output">computing gzip size (8)...</span><br>
+    <br>
+    <span class="output">dist/index.html                  0.46 kB | gzip: 0.30 kB</span><br>
+    <span class="output">dist/assets/index-a1b2c3.css    14.21 kB | gzip: 3.87 kB</span><br>
+    <span class="output">dist/assets/index-d4e5f6.js    148.32 kB | gzip: 47.21 kB</span><br>
+    <span class="output">dist/assets/vendor-g7h8i9.js    82.14 kB | gzip: 26.43 kB</span><br>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Building is like creating a Docker image. You bundle everything into a self-contained artifact that can be deployed anywhere. The <code>dist/</code> folder is your "image" &mdash; just static files (HTML + JS + CSS) that any web server can serve.
+  </div>
+
+  <h3>What Vite does during build</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">TypeScript &rarr; JS</div>
+      <div class="desc">Strips types, compiles JSX</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Tree Shaking</div>
+      <div class="desc">Removes unused code</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Minification</div>
+      <div class="desc">Shorter names, no whitespace</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Code Splitting</div>
+      <div class="desc">Multiple chunks for lazy loading</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Asset Hashing</div>
+      <div class="desc">main.a1b2c3.js for cache busting</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Optimization</th>
+        <th>What It Does</th>
+        <th>Why It Matters</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Tree shaking</strong></td>
+        <td>Removes functions/modules you imported but never called</td>
+        <td>Only ships code you actually use</td>
+      </tr>
+      <tr>
+        <td><strong>Minification</strong></td>
+        <td>Renames variables to single letters, removes whitespace/comments</td>
+        <td>30-50% smaller files</td>
+      </tr>
+      <tr>
+        <td><strong>Code splitting</strong></td>
+        <td>Creates separate chunks for lazy-loaded routes</td>
+        <td>Faster initial page load</td>
+      </tr>
+      <tr>
+        <td><strong>Asset hashing</strong></td>
+        <td>Adds content hash to filenames: <code>main.a1b2c3.js</code></td>
+        <td>Browser caches aggressively. New hash = new file = cache invalidated</td>
+      </tr>
+      <tr>
+        <td><strong>CSS extraction</strong></td>
+        <td>Moves CSS out of JS into separate <code>.css</code> files</td>
+        <td>Browser can cache CSS independently, parallel loading</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== PREVIEW ===== -->
+  <h2>Preview Locally</h2>
+
+  <p>Before deploying, test the production build locally:</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm build<br>
+    <span class="prompt">$ </span>pnpm preview<br>
+    <span class="output">  Local:   http://localhost:4173/</span><br>
+    <span class="output">  Network: http://192.168.1.42:4173/</span><br>
+  </div>
+
+  <div class="tip">
+    <strong>Why preview matters:</strong> The dev server (<code>pnpm dev</code>) and the production build can behave differently. Environment variables, code splitting, and path resolution may change. Always test with <code>pnpm preview</code> before deploying.
+  </div>
+
+  <!-- ===== ENVIRONMENT VARIABLES ===== -->
+  <h2>Environment Variables</h2>
+
+  <p>Vite uses <code>import.meta.env</code> for environment variables. Only variables prefixed with <code>VITE_</code> are exposed to your frontend code.</p>
+
+  <h3>.env files</h3>
+
+  <div class="file-tree">
+    <span class="highlight">.env</span> <span class="file">&larr; loaded in all environments</span><br>
+    <span class="highlight">.env.local</span> <span class="file">&larr; loaded in all, gitignored (your overrides)</span><br>
+    <span class="highlight">.env.production</span> <span class="file">&larr; loaded only during pnpm build</span><br>
+    <span class="file">.env.development</span> <span class="file">&larr; loaded only during pnpm dev</span><br>
+  </div>
+
+<pre><code><span class="cm"># .env</span>
+<span class="prop">VITE_API_URL</span>=<span class="str">http://localhost:3000/api</span>
+<span class="prop">VITE_APP_NAME</span>=<span class="str">MyApp</span>
+
+<span class="cm"># .env.production</span>
+<span class="prop">VITE_API_URL</span>=<span class="str">https://api.myapp.com</span></code></pre>
+
+<pre><code><span class="cm">// Usage in code</span>
+<span class="kw">const</span> <span class="prop">apiUrl</span> = <span class="kw">import</span>.meta.env.<span class="prop">VITE_API_URL</span>
+<span class="kw">const</span> <span class="prop">mode</span> = <span class="kw">import</span>.meta.env.<span class="prop">MODE</span>     <span class="cm">// 'development' or 'production'</span>
+<span class="kw">const</span> <span class="prop">isDev</span> = <span class="kw">import</span>.meta.env.<span class="prop">DEV</span>     <span class="cm">// boolean</span>
+<span class="kw">const</span> <span class="prop">isProd</span> = <span class="kw">import</span>.meta.env.<span class="prop">PROD</span>   <span class="cm">// boolean</span></code></pre>
+
+  <div class="warn">
+    <strong>NEVER put secrets in frontend env vars!</strong> They are embedded in the JavaScript bundle and visible to anyone who opens DevTools. API keys for third-party services, database passwords, auth secrets &mdash; all of these must stay on the backend. The <code>VITE_</code> prefix is an intentional friction: it forces you to acknowledge this code is public.
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Same concept as <code>.env</code> files with <code>python-dotenv</code>. The key difference: in Python, env vars stay on the server. In a frontend build, they get <em>baked into the JS files at build time</em>. There's no server to hide them.
+  </div>
+
+  <!-- ===== TYPE-SAFE ENV VARS ===== -->
+  <h3>Type-safe environment variables</h3>
+
+<pre><code><span class="cm">// src/vite-env.d.ts (augment Vite's types)</span>
+
+<span class="cm">/// &lt;reference types="vite/client" /&gt;</span>
+
+<span class="kw">interface</span> <span class="type">ImportMetaEnv</span> {
+  <span class="kw">readonly</span> <span class="prop">VITE_API_URL</span>: <span class="type">string</span>
+  <span class="kw">readonly</span> <span class="prop">VITE_APP_NAME</span>: <span class="type">string</span>
+}
+
+<span class="kw">interface</span> <span class="type">ImportMeta</span> {
+  <span class="kw">readonly</span> <span class="prop">env</span>: <span class="type">ImportMetaEnv</span>
+}</code></pre>
+
+  <!-- ===== DEPLOY TO VERCEL ===== -->
+  <h2>Deploy to Vercel (Recommended)</h2>
+
+  <p>Vercel is the easiest path from code to deployed app. It was built for frontend frameworks.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Push to GitHub</strong> &mdash; your repo needs to be on GitHub (or GitLab/Bitbucket)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Import in Vercel</strong> &mdash; go to vercel.com &rarr; "New Project" &rarr; select your repo</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Configure</strong> &mdash; Vercel auto-detects Vite. Set framework to "Vite" and build command to <code>pnpm build</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Set env vars</strong> &mdash; Add <code>VITE_API_URL</code> and others in the dashboard (Settings &rarr; Environment Variables)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Deploy</strong> &mdash; click Deploy. Done. URL: <code>your-app.vercel.app</code></div>
+    </div>
+  </div>
+
+  <h3>What you get automatically</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Auto deploys</td>
+        <td>Every push to <code>main</code> triggers a production deploy</td>
+      </tr>
+      <tr>
+        <td>Preview deploys</td>
+        <td>Every PR gets a unique preview URL (great for code review)</td>
+      </tr>
+      <tr>
+        <td>SSL/HTTPS</td>
+        <td>Automatic, free, always on</td>
+      </tr>
+      <tr>
+        <td>CDN</td>
+        <td>Your static files are served from edge locations worldwide</td>
+      </tr>
+      <tr>
+        <td>SPA routing</td>
+        <td>Automatically rewrites all routes to <code>index.html</code></td>
+      </tr>
+      <tr>
+        <td>Rollbacks</td>
+        <td>One-click rollback to any previous deployment</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Vercel is like Heroku but for frontend apps. Push code, it builds and deploys. Preview deploys are like Heroku Review Apps. The big difference: your app is just static files on a CDN, not a running server process.
+  </div>
+
+  <!-- ===== OTHER HOSTING OPTIONS ===== -->
+  <h2>Other Hosting Options</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th>
+        <th>Strengths</th>
+        <th>When to Use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Netlify</strong></td>
+        <td>Very similar to Vercel. Great forms, functions, identity.</td>
+        <td>Personal preference &mdash; Vercel and Netlify are near-equivalent</td>
+      </tr>
+      <tr>
+        <td><strong>Cloudflare Pages</strong></td>
+        <td>Edge deployment, free tier, fastest CDN, Workers for serverless</td>
+        <td>Global audience, edge computing needs, cost-sensitive at scale</td>
+      </tr>
+      <tr>
+        <td><strong>S3 + CloudFront</strong></td>
+        <td>Full AWS control. You already know this stack.</td>
+        <td>Already on AWS, need fine-grained control, enterprise requirements</td>
+      </tr>
+      <tr>
+        <td><strong>GitHub Pages</strong></td>
+        <td>Free, simple, built into GitHub</td>
+        <td>Static docs, personal sites, learning projects (this repo!)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>S3 + CloudFront tip:</strong> You already know this from DevOps. The only gotcha for SPAs: configure CloudFront to serve <code>index.html</code> for 404 errors (so client-side routing works). Set a custom error response: 404 &rarr; <code>/index.html</code> with 200 status.
+  </div>
+
+  <!-- ===== GITHUB ACTIONS CI/CD ===== -->
+  <h2>GitHub Actions CI/CD</h2>
+
+  <p>For any hosting platform, you'll want CI to run linting and tests before deploying.</p>
+
+<pre><code><span class="cm"># .github/workflows/ci.yml</span>
+
+<span class="prop">name</span>: <span class="str">CI</span>
+
+<span class="kw">on</span>:
+  <span class="prop">push</span>:
+    <span class="prop">branches</span>: [<span class="str">main</span>]
+  <span class="prop">pull_request</span>:
+    <span class="prop">branches</span>: [<span class="str">main</span>]
+
+<span class="prop">jobs</span>:
+  <span class="prop">build</span>:
+    <span class="prop">runs-on</span>: <span class="str">ubuntu-latest</span>
+
+    <span class="prop">steps</span>:
+      - <span class="prop">uses</span>: <span class="str">actions/checkout@v4</span>
+
+      - <span class="prop">name</span>: <span class="str">Install pnpm</span>
+        <span class="prop">uses</span>: <span class="str">pnpm/action-setup@v4</span>
+        <span class="kw">with</span>:
+          <span class="prop">version</span>: <span class="num">9</span>
+
+      - <span class="prop">name</span>: <span class="str">Setup Node.js</span>
+        <span class="prop">uses</span>: <span class="str">actions/setup-node@v4</span>
+        <span class="kw">with</span>:
+          <span class="prop">node-version</span>: <span class="num">20</span>
+          <span class="prop">cache</span>: <span class="str">'pnpm'</span>
+
+      - <span class="prop">name</span>: <span class="str">Install dependencies</span>
+        <span class="prop">run</span>: <span class="str">pnpm install --frozen-lockfile</span>
+
+      - <span class="prop">name</span>: <span class="str">Lint</span>
+        <span class="prop">run</span>: <span class="str">pnpm lint</span>
+
+      - <span class="prop">name</span>: <span class="str">Type check</span>
+        <span class="prop">run</span>: <span class="str">pnpm tsc --noEmit</span>
+
+      - <span class="prop">name</span>: <span class="str">Test</span>
+        <span class="prop">run</span>: <span class="str">pnpm test</span>
+
+      - <span class="prop">name</span>: <span class="str">Build</span>
+        <span class="prop">run</span>: <span class="str">pnpm build</span></code></pre>
+
+  <div class="note">
+    <strong>Vercel integration:</strong> If you use Vercel, you don't need a deploy step in CI &mdash; Vercel handles it automatically on push. The CI workflow is just for linting, type checking, and testing. If a check fails, Vercel won't deploy the broken build.
+  </div>
+
+  <!-- ===== CUSTOM DOMAIN ===== -->
+  <h2>Custom Domain</h2>
+
+  <div class="panel">
+    <div class="panel-title">DNS setup for Vercel / Netlify</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Buy a domain (Cloudflare Registrar, Namecheap, Google Domains)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>In Vercel: Settings &rarr; Domains &rarr; Add <code>myapp.com</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Add DNS records at your registrar:<br>
+          <code>A</code> record: <code>@</code> &rarr; <code>76.76.21.21</code> (Vercel's IP)<br>
+          <code>CNAME</code> record: <code>www</code> &rarr; <code>cname.vercel-dns.com</code>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>SSL certificate is provisioned automatically (Let's Encrypt)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PRODUCTION CHECKLIST ===== -->
+  <h2>Production Checklist</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Check</th>
+        <th>How</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Build succeeds</td>
+        <td><code>pnpm build</code> with no errors</td>
+      </tr>
+      <tr>
+        <td>No console errors</td>
+        <td><code>pnpm preview</code> and check DevTools console</td>
+      </tr>
+      <tr>
+        <td>Env vars set correctly</td>
+        <td>Verify <code>VITE_API_URL</code> points to production API</td>
+      </tr>
+      <tr>
+        <td>No secrets in bundle</td>
+        <td>Search <code>dist/</code> for anything sensitive</td>
+      </tr>
+      <tr>
+        <td>SPA routing works</td>
+        <td>Directly access a deep URL like <code>/dashboard/settings</code></td>
+      </tr>
+      <tr>
+        <td>Assets load</td>
+        <td>Check Network tab for 404s on images, fonts, etc.</td>
+      </tr>
+      <tr>
+        <td>Performance baseline</td>
+        <td>Run Lighthouse in Chrome DevTools</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">The deployment mental model</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Code</div>
+        <div class="desc">TypeScript + JSX + CSS</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">pnpm build</div>
+        <div class="desc">Vite bundles to dist/</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Static files</div>
+        <div class="desc">HTML + JS + CSS + assets</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">CDN</div>
+        <div class="desc">Vercel / Netlify / CloudFront</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Browser</div>
+        <div class="desc">Downloads and runs</div>
+      </div>
+    </div>
+    <p style="margin-top: 15px; color: #888;">No server process. No Docker container. Just files on a CDN. That's the fundamental difference from deploying a Flask/Django app.</p>
+  </div>
+
+</body>
+</html>

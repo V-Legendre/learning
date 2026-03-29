@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 — useMemo & useCallback</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>08 — useMemo & useCallback</h1>
+  <p class="subtitle">Memoization hooks for performance optimization. The React equivalent of <code>@functools.lru_cache</code> — powerful but often overused.</p>
+
+  <!-- ===== useMemo ===== -->
+  <h2>useMemo: Cache Computed Values</h2>
+
+  <p><code>useMemo</code> caches the <strong>result of a computation</strong>. React only re-runs the function when its dependencies change. Without it, the computation runs on every render.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python: @cached_property</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> functools <span class="kw">import</span> cached_property
+
+<span class="kw">class</span> <span class="type">Report</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, data: <span class="type">list</span>):
+        self.data = data
+
+    <span class="cm">@cached_property</span>
+    <span class="kw">def</span> <span class="fn">sorted_data</span>(self):
+        <span class="cm"># Only computed once,</span>
+        <span class="cm"># cached for subsequent access</span>
+        <span class="kw">return</span> <span class="fn">sorted</span>(self.data,
+            key=<span class="kw">lambda</span> x: x[<span class="str">"score"</span>])</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React: useMemo</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">Report</span> = ({ data }: <span class="type">Props</span>) =&gt; {
+  <span class="cm">// Only recomputed when `data` changes</span>
+  <span class="kw">const</span> sortedData = <span class="fn">useMemo</span>(
+    () =&gt; [...data].<span class="fn">sort</span>(
+      (a, b) =&gt; a.score - b.score
+    ),
+    [data] <span class="cm">// dependency array</span>
+  )
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {sortedData.<span class="fn">map</span>(item =&gt; (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={item.id}<span class="tag">&gt;</span>{item.name}<span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Syntax</h3>
+<pre><code><span class="kw">const</span> memoizedValue = <span class="fn">useMemo</span>(() =&gt; <span class="fn">expensiveComputation</span>(a, b), [a, b])
+<span class="cm">//                           ^--- function to compute     ^--- dependencies</span>
+<span class="cm">// Re-runs ONLY when a or b change. Returns cached result otherwise.</span></code></pre>
+
+  <!-- ===== useCallback ===== -->
+  <h2>useCallback: Cache Function References</h2>
+
+  <p><code>useCallback</code> caches a <strong>function itself</strong> (its reference), not its result. In JavaScript, <code>() =&gt; {}</code> creates a new function object on every render. <code>useCallback</code> returns the same function reference unless dependencies change.</p>
+
+  <div class="panel">
+    <div class="panel-title">The problem: New function reference on every render</div>
+<pre><code><span class="kw">const</span> <span class="fn">Parent</span> = () =&gt; {
+  <span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="cm">// This function is re-created on every render</span>
+  <span class="cm">// Even though its logic never changes</span>
+  <span class="kw">const</span> <span class="fn">handleClick</span> = () =&gt; {
+    console.<span class="fn">log</span>(<span class="str">"clicked"</span>)
+  }
+
+  <span class="cm">// ExpensiveChild receives a new handleClick reference</span>
+  <span class="cm">// on every render, so it always re-renders</span>
+  <span class="kw">return</span> <span class="tag">&lt;ExpensiveChild</span> <span class="attr">onClick</span>={handleClick} <span class="tag">/&gt;</span>
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The fix: useCallback stabilizes the reference</div>
+<pre><code><span class="kw">const</span> <span class="fn">Parent</span> = () =&gt; {
+  <span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="cm">// Same function reference across renders (unless deps change)</span>
+  <span class="kw">const</span> <span class="fn">handleClick</span> = <span class="fn">useCallback</span>(() =&gt; {
+    console.<span class="fn">log</span>(<span class="str">"clicked"</span>)
+  }, []) <span class="cm">// empty deps = never changes</span>
+
+  <span class="cm">// ExpensiveChild sees the same prop, skips re-render</span>
+  <span class="kw">return</span> <span class="tag">&lt;ExpensiveChild</span> <span class="attr">onClick</span>={handleClick} <span class="tag">/&gt;</span>
+}</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> <code>useCallback(fn, deps)</code> is equivalent to <code>useMemo(() =&gt; fn, deps)</code>. Both cache something — <code>useMemo</code> caches the <em>return value</em>, <code>useCallback</code> caches the <em>function itself</em>.
+  </div>
+
+  <!-- ===== REACT.MEMO ===== -->
+  <h2>React.memo: Memoize Components</h2>
+
+  <p><code>React.memo</code> wraps a component to <strong>skip re-rendering</strong> if its props haven't changed (shallow comparison). This is where <code>useCallback</code> becomes useful — without stable prop references, <code>React.memo</code> can't work.</p>
+
+<pre><code><span class="cm">// Memoized component: skips re-render if props are shallowly equal</span>
+<span class="kw">const</span> <span class="fn">ExpensiveList</span> = <span class="fn">React.memo</span>(({ items, onSelect }: <span class="type">Props</span>) =&gt; {
+  console.<span class="fn">log</span>(<span class="str">"ExpensiveList rendered"</span>)  <span class="cm">// only logs when props change</span>
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {items.<span class="fn">map</span>(item =&gt; (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={item.id} <span class="attr">onClick</span>={() =&gt; <span class="fn">onSelect</span>(item.id)}<span class="tag">&gt;</span>
+          {item.name}
+        <span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+})</code></pre>
+
+  <h3>The trio: useCallback + React.memo + useMemo</h3>
+
+  <div class="panel">
+    <div class="panel-title">How they work together</div>
+<pre><code><span class="kw">const</span> <span class="fn">SearchPage</span> = () =&gt; {
+  <span class="kw">const</span> [query, setQuery] = <span class="fn">useState</span>(<span class="str">""</span>)
+  <span class="kw">const</span> [sort, setSort] = <span class="fn">useState</span>&lt;<span class="str">"name"</span> | <span class="str">"date"</span>&gt;(<span class="str">"name"</span>)
+  <span class="kw">const</span> { data: allItems } = <span class="fn">useQuery</span>({ <span class="cm">/* ... */</span> })
+
+  <span class="cm">// useMemo: cache expensive filter + sort (only recomputes when inputs change)</span>
+  <span class="kw">const</span> filteredItems = <span class="fn">useMemo</span>(() =&gt; {
+    <span class="kw">if</span> (!allItems) <span class="kw">return</span> []
+    <span class="kw">return</span> allItems
+      .<span class="fn">filter</span>(item =&gt; item.name.<span class="fn">toLowerCase</span>().<span class="fn">includes</span>(query.<span class="fn">toLowerCase</span>()))
+      .<span class="fn">sort</span>((a, b) =&gt;
+        sort === <span class="str">"name"</span>
+          ? a.name.<span class="fn">localeCompare</span>(b.name)
+          : b.date.<span class="fn">getTime</span>() - a.date.<span class="fn">getTime</span>()
+      )
+  }, [allItems, query, sort])
+
+  <span class="cm">// useCallback: stable function reference for memoized child</span>
+  <span class="kw">const</span> <span class="fn">handleSelect</span> = <span class="fn">useCallback</span>((id: <span class="type">string</span>) =&gt; {
+    console.<span class="fn">log</span>(<span class="str">"Selected:"</span>, id)
+  }, [])
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;input</span> <span class="attr">value</span>={query} <span class="attr">onChange</span>={e =&gt; <span class="fn">setQuery</span>(e.target.value)} <span class="tag">/&gt;</span>
+      <span class="cm">{/* React.memo child: won't re-render unless filteredItems or handleSelect change */}</span>
+      <span class="tag">&lt;ItemList</span> <span class="attr">items</span>={filteredItems} <span class="attr">onSelect</span>={handleSelect} <span class="tag">/&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="cm">// React.memo: skip re-render if props haven't changed</span>
+<span class="kw">const</span> <span class="fn">ItemList</span> = <span class="fn">React.memo</span>(({ items, onSelect }: <span class="type">ItemListProps</span>) =&gt; {
+  <span class="cm">// ... render items</span>
+})</code></pre>
+  </div>
+
+  <!-- ===== WHEN THEY HELP ===== -->
+  <h2>When They Actually Help</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Worth using</div>
+      <ul>
+        <li><strong>Expensive computations:</strong> Sorting/filtering large arrays (1000+ items), complex math, tree traversals</li>
+        <li><strong>Stable callbacks for memoized children:</strong> <code>useCallback</code> + <code>React.memo</code> together</li>
+        <li><strong>Hook dependencies:</strong> When a value/function is used in another hook's dependency array</li>
+        <li><strong>Referential equality:</strong> When you need the same object reference to prevent unnecessary effect re-runs</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #f87171;">Not worth it (premature optimization)</div>
+      <ul>
+        <li><strong>Simple computations:</strong> <code>useMemo(() =&gt; a + b, [a, b])</code> — the memoization overhead exceeds the computation cost</li>
+        <li><strong>Functions that aren't passed to memoized children:</strong> No point stabilizing a reference nobody checks</li>
+        <li><strong>Primitive props:</strong> <code>React.memo</code> already works with strings, numbers, booleans — they compare by value, not reference</li>
+        <li><strong>"Just in case" optimization:</strong> If you haven't measured a problem, you're adding complexity for nothing</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Pointless: Memoizing cheap operations</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Adding overhead to a trivial operation</span>
+<span class="kw">const</span> fullName = <span class="fn">useMemo</span>(
+  () =&gt; <span class="str">`</span>${firstName}<span class="str"> </span>${lastName}<span class="str">`</span>,
+  [firstName, lastName]
+)
+
+<span class="cm">// Callback that nobody checks with React.memo</span>
+<span class="kw">const</span> <span class="fn">handleClick</span> = <span class="fn">useCallback</span>(() =&gt; {
+  <span class="fn">setOpen</span>(<span class="kw">true</span>)
+}, [])
+<span class="cm">// If &lt;button&gt; isn't React.memo'd,</span>
+<span class="cm">// this useCallback does nothing.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Worthwhile: Real performance wins</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Sorting 10K items — measurably expensive</span>
+<span class="kw">const</span> sorted = <span class="fn">useMemo</span>(
+  () =&gt; [...largeArray].<span class="fn">sort</span>(compareFn),
+  [largeArray]
+)
+
+<span class="cm">// Callback for a React.memo'd child component</span>
+<span class="cm">// that renders 500 list items</span>
+<span class="kw">const</span> <span class="fn">handleSelect</span> = <span class="fn">useCallback</span>(
+  (id: <span class="type">string</span>) =&gt; <span class="fn">setSelected</span>(id),
+  []
+)
+<span class="kw">return</span> <span class="tag">&lt;MemoizedList</span> <span class="attr">onSelect</span>={handleSelect} <span class="tag">/&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REACT COMPILER ===== -->
+  <h2>React Compiler (React 19+)</h2>
+
+  <p>React 19 introduced the <strong>React Compiler</strong> (formerly "React Forget") which <strong>automatically</strong> applies memoization at build time. It analyzes your components and inserts <code>useMemo</code> and <code>useCallback</code> where needed.</p>
+
+  <div class="panel">
+    <div class="panel-title">What the React Compiler does</div>
+    <table>
+      <thead>
+        <tr><th>Before (manual)</th><th>After (compiler)</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>You manually wrap values in <code>useMemo</code></td>
+          <td>Compiler inserts memoization automatically</td>
+        </tr>
+        <tr>
+          <td>You manually wrap callbacks in <code>useCallback</code></td>
+          <td>Compiler stabilizes references where needed</td>
+        </tr>
+        <tr>
+          <td>You manually wrap components in <code>React.memo</code></td>
+          <td>Compiler adds bailout logic per-component</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Current status (2026):</strong> The React Compiler is stable and enabled by default in new React 19 projects. For existing projects, you can adopt it incrementally. When using the compiler, you can remove most manual <code>useMemo</code>/<code>useCallback</code> calls — the compiler handles them better than humans because it can memoize at a finer granularity.
+  </div>
+
+  <div class="note">
+    <strong>Should you still learn useMemo/useCallback?</strong> Yes. (1) You'll encounter them in existing codebases everywhere. (2) Understanding what they do helps you understand React's rendering model. (3) The compiler doesn't cover every case — knowing when to apply manual optimization is still valuable.
+  </div>
+
+  <!-- ===== THE RULE OF THUMB ===== -->
+  <h2>The Rule of Thumb</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Write code without memoization</div>
+      <div class="desc">React is fast by default. Don't optimize preemptively.</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Measure with React DevTools Profiler</div>
+      <div class="desc">Identify which components re-render unnecessarily.</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Apply targeted memoization</div>
+      <div class="desc">useMemo for expensive computations. useCallback + React.memo for component trees.</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Measure again</div>
+      <div class="desc">Verify the optimization actually helped. Remove if it didn't.</div>
+    </div>
+  </div>
+
+  <!-- ===== SUMMARY TABLE ===== -->
+  <h2>Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th>Tool</th><th>Caches</th><th>Use when</th><th>Python equivalent</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>useMemo</code></td>
+        <td>Computed value</td>
+        <td>Expensive computation with known deps</td>
+        <td><code>@functools.lru_cache</code>, <code>@cached_property</code></td>
+      </tr>
+      <tr>
+        <td><code>useCallback</code></td>
+        <td>Function reference</td>
+        <td>Passing callback to React.memo child or as hook dependency</td>
+        <td>No direct equivalent (Python doesn't recreate closures on every call)</td>
+      </tr>
+      <tr>
+        <td><code>React.memo</code></td>
+        <td>Component render output</td>
+        <td>Component re-renders often with same props</td>
+        <td><code>@functools.lru_cache</code> on a function's output</td>
+      </tr>
+      <tr>
+        <td>React Compiler</td>
+        <td>Everything above, automatically</td>
+        <td>React 19+ projects</td>
+        <td>No equivalent (static analysis at build time)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>The biggest mistake:</strong> Wrapping everything in <code>useMemo</code>/<code>useCallback</code> "for performance." This adds complexity, can introduce bugs (stale closures from wrong dependencies), and the overhead of memoization can actually make things <em>slower</em> for cheap operations. Profile first. Optimize second.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>12 — Async Error Handling</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>12 — Async Error Handling</h1>
+  <p class="subtitle">Handling errors in API calls, mutations, event handlers, and network failures.</p>
+
+  <!-- ===== TANSTACK QUERY ERRORS ===== -->
+  <h2>TanStack Query Error Handling</h2>
+
+  <p>TanStack Query gives you per-query error state out of the box. Every <code>useQuery</code> call returns <code>isError</code> and <code>error</code> alongside the data.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>Like structured exception handling at different levels:</p>
+<pre><code><span class="cm"># Per-endpoint error handling</span>
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/users"</span>)
+<span class="kw">def</span> <span class="fn">get_users</span>():
+    <span class="kw">try</span>:
+        <span class="kw">return</span> db.<span class="fn">query</span>(<span class="str">"SELECT * FROM users"</span>)
+    <span class="kw">except</span> <span class="type">DatabaseError</span> <span class="kw">as</span> e:
+        <span class="kw">raise</span> <span class="type">HTTPException</span>(<span class="num">500</span>, str(e))
+
+<span class="cm"># Global error handler (middleware)</span>
+<span class="kw">@app</span>.<span class="fn">exception_handler</span>(<span class="type">Exception</span>)
+<span class="kw">def</span> <span class="fn">handle_error</span>(req, exc):
+    logger.<span class="fn">error</span>(exc)
+    <span class="kw">return</span> <span class="fn">JSONResponse</span>(<span class="num">500</span>, ...)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Per-query error handling</span>
+<span class="kw">const</span> { data, isError, error } = <span class="fn">useQuery</span>({
+  queryKey: [<span class="str">'users'</span>],
+  <span class="fn">queryFn</span>: <span class="fn">fetchUsers</span>,
+})
+
+<span class="kw">if</span> (isError) {
+  <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>Error: {error.message}<span class="tag">&lt;/p&gt;</span>
+}
+
+<span class="cm">// Global error handler</span>
+<span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="type">QueryClient</span>({
+  defaultOptions: {
+    queries: {
+      <span class="fn">onError</span>: (err) => <span class="fn">toast</span>(err.message),
+    },
+  },
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Per-Query Error Display</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">UserList</span> = () => {
+  <span class="kw">const</span> { data, isLoading, isError, error, refetch } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">'users'</span>],
+    <span class="fn">queryFn</span>: <span class="fn">fetchUsers</span>,
+    retry: <span class="num">3</span>,              <span class="cm">// retry failed requests 3 times</span>
+    retryDelay: (attempt) => <span class="cm">// exponential backoff</span>
+      Math.<span class="fn">min</span>(<span class="num">1000</span> * <span class="num">2</span> ** attempt, <span class="num">30000</span>),
+  })
+
+  <span class="kw">if</span> (isLoading) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+
+  <span class="kw">if</span> (isError) {
+    <span class="kw">return</span> (
+      <span class="tag">&lt;div</span> <span class="attr">role</span>=<span class="str">"alert"</span><span class="tag">&gt;</span>
+        <span class="tag">&lt;p&gt;</span>Failed to load users: {error.message}<span class="tag">&lt;/p&gt;</span>
+        <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => <span class="fn">refetch</span>()}<span class="tag">&gt;</span>
+          Try again
+        <span class="tag">&lt;/button&gt;</span>
+      <span class="tag">&lt;/div&gt;</span>
+    )
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {data.<span class="fn">map</span>((user) => (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>{user.name}<span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}</code></pre>
+
+  <h3>Retry Configuration</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Option</th>
+        <th>Default</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>retry</code></td>
+        <td><code>3</code></td>
+        <td>Number of retries. Set <code>false</code> to disable. Can be a function: <code>(count, error) => boolean</code></td>
+      </tr>
+      <tr>
+        <td><code>retryDelay</code></td>
+        <td>Exponential</td>
+        <td>Delay between retries. Default doubles each time, capped at 30s.</td>
+      </tr>
+      <tr>
+        <td><code>retryOnMount</code></td>
+        <td><code>true</code></td>
+        <td>Retry failed queries when component mounts</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Smart retry:</strong> Don't retry 4xx errors (client mistakes). Only retry 5xx (server errors) and network failures.
+  </div>
+
+<pre><code><span class="kw">const</span> { data } = <span class="fn">useQuery</span>({
+  queryKey: [<span class="str">'users'</span>],
+  <span class="fn">queryFn</span>: <span class="fn">fetchUsers</span>,
+  <span class="cm">// Only retry on server errors, not client errors</span>
+  <span class="fn">retry</span>: (failureCount, error) => {
+    <span class="kw">if</span> (error <span class="kw">instanceof</span> <span class="type">Response</span> && error.status &lt; <span class="num">500</span>) {
+      <span class="kw">return false</span> <span class="cm">// 4xx: don't retry</span>
+    }
+    <span class="kw">return</span> failureCount &lt; <span class="num">3</span> <span class="cm">// 5xx / network: retry up to 3 times</span>
+  },
+})</code></pre>
+
+  <!-- ===== GLOBAL ERROR HANDLER ===== -->
+  <h2>Global Error Handler</h2>
+
+  <p>Set up a global error handler on the <code>QueryClient</code> to show a toast notification whenever any query fails. This is your safety net — individual components can still handle errors locally if needed.</p>
+
+<pre><code><span class="kw">import</span> { <span class="fn">toast</span> } <span class="kw">from</span> <span class="str">'sonner'</span>  <span class="cm">// or react-hot-toast</span>
+<span class="kw">import</span> { <span class="type">QueryClient</span>, <span class="type">QueryCache</span>, <span class="type">MutationCache</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-query'</span>
+
+<span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="type">QueryClient</span>({
+  queryCache: <span class="kw">new</span> <span class="type">QueryCache</span>({
+    <span class="fn">onError</span>: (error, query) => {
+      <span class="cm">// Only show toast if no component-level error handling</span>
+      <span class="kw">if</span> (query.meta?.showGlobalError !== <span class="kw">false</span>) {
+        <span class="fn">toast</span>.<span class="fn">error</span>(<span class="str">`Failed to load data: ${error.message}`</span>)
+      }
+    },
+  }),
+  mutationCache: <span class="kw">new</span> <span class="type">MutationCache</span>({
+    <span class="fn">onError</span>: (error) => {
+      <span class="fn">toast</span>.<span class="fn">error</span>(<span class="str">`Operation failed: ${error.message}`</span>)
+    },
+  }),
+})</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> The <code>meta</code> field on queries lets you pass arbitrary data. Here we use it to let individual queries opt out of the global error toast when they handle errors themselves.
+  </div>
+
+<pre><code><span class="cm">// Opt out of global error toast for this query</span>
+<span class="kw">const</span> { data, isError, error } = <span class="fn">useQuery</span>({
+  queryKey: [<span class="str">'users'</span>],
+  <span class="fn">queryFn</span>: <span class="fn">fetchUsers</span>,
+  meta: { showGlobalError: <span class="kw">false</span> },  <span class="cm">// handle errors locally</span>
+})
+
+<span class="cm">// This component renders its own error UI</span>
+<span class="kw">if</span> (isError) <span class="kw">return</span> <span class="tag">&lt;InlineError</span> <span class="attr">error</span>={error} <span class="tag">/&gt;</span></code></pre>
+
+  <!-- ===== MUTATION ERRORS ===== -->
+  <h2>Mutation Error Handling</h2>
+
+  <p>Mutations (POST, PUT, DELETE) need special attention because they modify data. Show errors <strong>near the action</strong> that caused them.</p>
+
+<pre><code><span class="kw">const</span> <span class="fn">CreateUserForm</span> = () => {
+  <span class="kw">const</span> mutation = <span class="fn">useMutation</span>({
+    <span class="fn">mutationFn</span>: (data: <span class="type">CreateUserInput</span>) =>
+      <span class="fn">fetch</span>(<span class="str">'/api/users'</span>, {
+        method: <span class="str">'POST'</span>,
+        body: JSON.<span class="fn">stringify</span>(data),
+      }).<span class="fn">then</span>((r) => {
+        <span class="kw">if</span> (!r.ok) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`HTTP ${r.status}`</span>)
+        <span class="kw">return</span> r.<span class="fn">json</span>()
+      }),
+    <span class="fn">onSuccess</span>: () => {
+      <span class="fn">toast</span>.<span class="fn">success</span>(<span class="str">'User created!'</span>)
+      queryClient.<span class="fn">invalidateQueries</span>({ queryKey: [<span class="str">'users'</span>] })
+    },
+    <span class="cm">// onError from global mutationCache handles the toast</span>
+  })
+
+  <span class="kw">const</span> <span class="fn">handleSubmit</span> = (e: <span class="type">React</span>.<span class="type">FormEvent</span>) => {
+    e.<span class="fn">preventDefault</span>()
+    mutation.<span class="fn">mutate</span>({ name, email })
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={handleSubmit}<span class="tag">&gt;</span>
+      <span class="cm">{/* form fields */}</span>
+
+      <span class="cm">{/* Show error next to submit button */}</span>
+      {mutation.isError && (
+        <span class="tag">&lt;p</span> <span class="attr">style</span>={{ color: <span class="str">'red'</span> }}<span class="tag">&gt;</span>
+          {mutation.error.message}
+        <span class="tag">&lt;/p&gt;</span>
+      )}
+
+      <span class="tag">&lt;button</span>
+        <span class="attr">type</span>=<span class="str">"submit"</span>
+        <span class="attr">disabled</span>={mutation.isPending}
+      <span class="tag">&gt;</span>
+        {mutation.isPending ? <span class="str">'Creating...'</span> : <span class="str">'Create User'</span>}
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> <code>mutation.reset()</code> clears the error state. Call it when the user starts editing again, or when you want to dismiss the error message.
+  </div>
+
+  <!-- ===== TOAST NOTIFICATIONS ===== -->
+  <h2>Toast Notifications</h2>
+
+  <p>Toasts are ephemeral messages that appear briefly and dismiss themselves. Ideal for non-blocking error/success feedback.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Library</th>
+        <th>Size</th>
+        <th>Style</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sonner</code></td>
+        <td>~5KB</td>
+        <td>Beautiful, animated</td>
+        <td>Best DX, recommended. By the shadcn/ui creator.</td>
+      </tr>
+      <tr>
+        <td><code>react-hot-toast</code></td>
+        <td>~5KB</td>
+        <td>Clean, customizable</td>
+        <td>Popular, well-documented</td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">// Setup: Add Toaster to your app root</span>
+<span class="kw">import</span> { <span class="type">Toaster</span>, <span class="fn">toast</span> } <span class="kw">from</span> <span class="str">'sonner'</span>
+
+<span class="kw">const</span> <span class="fn">App</span> = () => (
+  <span class="tag">&lt;&gt;</span>
+    <span class="tag">&lt;Toaster</span> <span class="attr">position</span>=<span class="str">"top-right"</span> <span class="tag">/&gt;</span>
+    <span class="tag">&lt;Router /&gt;</span>
+  <span class="tag">&lt;/&gt;</span>
+)
+
+<span class="cm">// Usage anywhere in your app</span>
+<span class="fn">toast</span>.<span class="fn">success</span>(<span class="str">'User created!'</span>)
+<span class="fn">toast</span>.<span class="fn">error</span>(<span class="str">'Failed to save changes'</span>)
+<span class="fn">toast</span>.<span class="fn">loading</span>(<span class="str">'Uploading file...'</span>)
+
+<span class="cm">// Promise-based (auto loading/success/error)</span>
+<span class="fn">toast</span>.<span class="fn">promise</span>(<span class="fn">uploadFile</span>(file), {
+  loading: <span class="str">'Uploading...'</span>,
+  success: <span class="str">'File uploaded!'</span>,
+  error: <span class="str">'Upload failed'</span>,
+})</code></pre>
+
+  <!-- ===== EVENT HANDLER ERRORS ===== -->
+  <h2>try/catch in Event Handlers</h2>
+
+  <p>Error boundaries don't catch errors in event handlers (onClick, onChange, onSubmit). Use <code>try/catch</code> with local error state.</p>
+
+  <div class="panel">
+    <div class="panel-title">Pattern: event handler with error state</div>
+<pre><code><span class="kw">const</span> <span class="fn">FileUploader</span> = () => {
+  <span class="kw">const</span> [error, setError] = <span class="fn">useState</span>&lt;<span class="type">string</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+  <span class="kw">const</span> [uploading, setUploading] = <span class="fn">useState</span>(<span class="kw">false</span>)
+
+  <span class="kw">const</span> <span class="fn">handleUpload</span> = <span class="kw">async</span> (e: <span class="type">React</span>.<span class="type">ChangeEvent</span>&lt;<span class="type">HTMLInputElement</span>&gt;) => {
+    <span class="kw">const</span> file = e.target.files?.[<span class="num">0</span>]
+    <span class="kw">if</span> (!file) <span class="kw">return</span>
+
+    <span class="fn">setError</span>(<span class="kw">null</span>)  <span class="cm">// Clear previous error</span>
+    <span class="fn">setUploading</span>(<span class="kw">true</span>)
+
+    <span class="kw">try</span> {
+      <span class="cm">// Validate</span>
+      <span class="kw">if</span> (file.size > <span class="num">5_000_000</span>) {
+        <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">'File must be under 5MB'</span>)
+      }
+
+      <span class="cm">// Upload</span>
+      <span class="kw">const</span> formData = <span class="kw">new</span> <span class="type">FormData</span>()
+      formData.<span class="fn">append</span>(<span class="str">'file'</span>, file)
+
+      <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/upload'</span>, {
+        method: <span class="str">'POST'</span>,
+        body: formData,
+      })
+
+      <span class="kw">if</span> (!res.ok) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`Upload failed: ${res.statusText}`</span>)
+
+      <span class="fn">toast</span>.<span class="fn">success</span>(<span class="str">'File uploaded!'</span>)
+    } <span class="kw">catch</span> (err) {
+      <span class="kw">const</span> message = err <span class="kw">instanceof</span> <span class="type">Error</span>
+        ? err.message
+        : <span class="str">'Something went wrong'</span>
+      <span class="fn">setError</span>(message)
+    } <span class="kw">finally</span> {
+      <span class="fn">setUploading</span>(<span class="kw">false</span>)
+    }
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"file"</span> <span class="attr">onChange</span>={handleUpload} <span class="attr">disabled</span>={uploading} <span class="tag">/&gt;</span>
+      {uploading && <span class="tag">&lt;p&gt;</span>Uploading...<span class="tag">&lt;/p&gt;</span>}
+      {error && <span class="tag">&lt;p</span> <span class="attr">style</span>={{ color: <span class="str">'red'</span> }}<span class="tag">&gt;</span>{error}<span class="tag">&lt;/p&gt;</span>}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <!-- ===== ERROR TYPES ===== -->
+  <h2>Differentiating Error Types</h2>
+
+  <p>Different HTTP status codes need different UI treatment. A 404 is not the same as a 500.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Category</th>
+        <th>UI Treatment</th>
+        <th>Retry?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>400</code></td>
+        <td>Bad request</td>
+        <td>Show validation errors</td>
+        <td>No (user must fix input)</td>
+      </tr>
+      <tr>
+        <td><code>401</code></td>
+        <td>Unauthorized</td>
+        <td>Redirect to login</td>
+        <td>No (re-auth needed)</td>
+      </tr>
+      <tr>
+        <td><code>403</code></td>
+        <td>Forbidden</td>
+        <td>"You don't have access"</td>
+        <td>No (permissions issue)</td>
+      </tr>
+      <tr>
+        <td><code>404</code></td>
+        <td>Not found</td>
+        <td>"Item not found" page</td>
+        <td>No (resource doesn't exist)</td>
+      </tr>
+      <tr>
+        <td><code>429</code></td>
+        <td>Rate limited</td>
+        <td>"Too many requests, slow down"</td>
+        <td>Yes (after delay)</td>
+      </tr>
+      <tr>
+        <td><code>500</code></td>
+        <td>Server error</td>
+        <td>"Something went wrong, try again"</td>
+        <td>Yes (automatic)</td>
+      </tr>
+      <tr>
+        <td>Network</td>
+        <td>No connection</td>
+        <td>"Check your internet connection"</td>
+        <td>Yes (when online)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Custom error class for API errors</div>
+<pre><code><span class="cm">// lib/api.ts — typed API error</span>
+<span class="kw">export class</span> <span class="type">ApiError</span> <span class="kw">extends</span> <span class="type">Error</span> {
+  <span class="kw">constructor</span>(
+    <span class="kw">public</span> status: <span class="type">number</span>,
+    message: <span class="type">string</span>,
+    <span class="kw">public</span> code?: <span class="type">string</span>,
+  ) {
+    <span class="kw">super</span>(message)
+    <span class="kw">this</span>.name = <span class="str">'ApiError'</span>
+  }
+
+  <span class="kw">get</span> <span class="fn">isClientError</span>() { <span class="kw">return</span> <span class="kw">this</span>.status >= <span class="num">400</span> && <span class="kw">this</span>.status &lt; <span class="num">500</span> }
+  <span class="kw">get</span> <span class="fn">isServerError</span>() { <span class="kw">return</span> <span class="kw">this</span>.status >= <span class="num">500</span> }
+  <span class="kw">get</span> <span class="fn">isNotFound</span>()    { <span class="kw">return</span> <span class="kw">this</span>.status === <span class="num">404</span> }
+  <span class="kw">get</span> <span class="fn">isUnauthorized</span>() { <span class="kw">return</span> <span class="kw">this</span>.status === <span class="num">401</span> }
+}
+
+<span class="cm">// Wrapper for fetch</span>
+<span class="kw">export const</span> <span class="fn">apiFetch</span> = <span class="kw">async</span> &lt;<span class="type">T</span>&gt;(url: <span class="type">string</span>, init?: <span class="type">RequestInit</span>): <span class="type">Promise</span>&lt;<span class="type">T</span>&gt; => {
+  <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(url, init)
+
+  <span class="kw">if</span> (!res.ok) {
+    <span class="kw">const</span> body = <span class="kw">await</span> res.<span class="fn">json</span>().<span class="fn">catch</span>(() => <span class="kw">null</span>)
+    <span class="kw">throw new</span> <span class="type">ApiError</span>(
+      res.status,
+      body?.message ?? res.statusText,
+      body?.code,
+    )
+  }
+
+  <span class="kw">return</span> res.<span class="fn">json</span>()
+}
+
+<span class="cm">// Smart retry — only for server errors</span>
+<span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="type">QueryClient</span>({
+  defaultOptions: {
+    queries: {
+      <span class="fn">retry</span>: (count, error) => {
+        <span class="kw">if</span> (error <span class="kw">instanceof</span> <span class="type">ApiError</span> && error.isClientError) {
+          <span class="kw">return false</span> <span class="cm">// never retry 4xx</span>
+        }
+        <span class="kw">return</span> count &lt; <span class="num">3</span>
+      },
+    },
+  },
+})</code></pre>
+  </div>
+
+  <!-- ===== NETWORK ERRORS ===== -->
+  <h2>Network Error Patterns</h2>
+
+  <h3>Offline Detection</h3>
+
+<pre><code><span class="cm">// Hook to detect online/offline status</span>
+<span class="kw">const</span> <span class="fn">useOnlineStatus</span> = () => {
+  <span class="kw">const</span> [isOnline, setIsOnline] = <span class="fn">useState</span>(navigator.onLine)
+
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">const</span> <span class="fn">handleOnline</span> = () => <span class="fn">setIsOnline</span>(<span class="kw">true</span>)
+    <span class="kw">const</span> <span class="fn">handleOffline</span> = () => <span class="fn">setIsOnline</span>(<span class="kw">false</span>)
+
+    window.<span class="fn">addEventListener</span>(<span class="str">'online'</span>, handleOnline)
+    window.<span class="fn">addEventListener</span>(<span class="str">'offline'</span>, handleOffline)
+
+    <span class="kw">return</span> () => {
+      window.<span class="fn">removeEventListener</span>(<span class="str">'online'</span>, handleOnline)
+      window.<span class="fn">removeEventListener</span>(<span class="str">'offline'</span>, handleOffline)
+    }
+  }, [])
+
+  <span class="kw">return</span> isOnline
+}
+
+<span class="cm">// Usage: show a banner</span>
+<span class="kw">const</span> <span class="fn">OfflineBanner</span> = () => {
+  <span class="kw">const</span> isOnline = <span class="fn">useOnlineStatus</span>()
+
+  <span class="kw">if</span> (isOnline) <span class="kw">return null</span>
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">style</span>={{ background: <span class="str">'#f59e0b'</span>, padding: <span class="str">'8px'</span>, textAlign: <span class="str">'center'</span> }}<span class="tag">&gt;</span>
+      You're offline. Changes will sync when you reconnect.
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> TanStack Query automatically pauses queries when offline and retries when the connection comes back. You get this for free with the <code>onlineManager</code>.
+  </div>
+
+  <!-- ===== LOGGING ===== -->
+  <h2>Error Logging Strategy</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Development</div>
+      <div class="comp-body">
+        <ul>
+          <li>Log everything to console</li>
+          <li>Show detailed error messages</li>
+          <li>Show component stack traces</li>
+          <li>Use React DevTools error overlay</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Production</div>
+      <div class="comp-body">
+        <ul>
+          <li>Send errors to monitoring service (Sentry, LogRocket)</li>
+          <li>Show user-friendly messages only</li>
+          <li>Never expose raw error messages, stack traces, or API details</li>
+          <li>Include context: user ID, URL, action attempted</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Security rule:</strong> Never show raw error messages to users in production. A message like <code>ECONNREFUSED postgres://admin:pass@db:5432</code> leaks your infrastructure. Always map errors to user-friendly messages.
+  </div>
+
+<pre><code><span class="cm">// Map API errors to user-friendly messages</span>
+<span class="kw">const</span> <span class="fn">getUserMessage</span> = (error: <span class="type">unknown</span>): <span class="type">string</span> => {
+  <span class="kw">if</span> (error <span class="kw">instanceof</span> <span class="type">ApiError</span>) {
+    <span class="kw">if</span> (error.isNotFound) <span class="kw">return</span> <span class="str">'The item you requested was not found.'</span>
+    <span class="kw">if</span> (error.isUnauthorized) <span class="kw">return</span> <span class="str">'Please log in to continue.'</span>
+    <span class="kw">if</span> (error.isServerError) <span class="kw">return</span> <span class="str">'Something went wrong. Please try again later.'</span>
+    <span class="kw">return</span> error.message <span class="cm">// 4xx with specific message from server</span>
+  }
+
+  <span class="kw">if</span> (error <span class="kw">instanceof</span> <span class="type">TypeError</span> && error.message === <span class="str">'Failed to fetch'</span>) {
+    <span class="kw">return</span> <span class="str">'Network error. Check your internet connection.'</span>
+  }
+
+  <span class="kw">return</span> <span class="str">'An unexpected error occurred.'</span>
+}</code></pre>
+
+  <!-- ===== COMPLETE STRATEGY ===== -->
+  <h2>Complete Error Handling Strategy</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Error Boundaries</div>
+      <div class="desc">Catch render crashes, show fallback UI</div>
+    </div>
+    <div class="arrow">+</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">TanStack Query</div>
+      <div class="desc">Per-query errors, retry, global handler</div>
+    </div>
+    <div class="arrow">+</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">try/catch</div>
+      <div class="desc">Event handlers, form submissions</div>
+    </div>
+    <div class="arrow">+</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Toast</div>
+      <div class="desc">Non-blocking notifications</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Error handling checklist</div>
+    <ul>
+      <li>Error boundaries around independent sections (not just the root)</li>
+      <li>TanStack Query for all API error states (loading, error, data)</li>
+      <li>Global query/mutation error handler with toast notifications</li>
+      <li>try/catch in event handlers with local error state</li>
+      <li>Custom <code>ApiError</code> class to differentiate 4xx vs 5xx</li>
+      <li>Smart retry: only retry server errors and network failures</li>
+      <li>User-friendly error messages in production, detailed in development</li>
+      <li>Error monitoring service (Sentry) for production</li>
+    </ul>
+  </div>
+
+</body>
+</html>

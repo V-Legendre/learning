@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — Storybook</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>16 — Storybook</h1>
+  <p class="subtitle">Building UI components in isolation: stories, component-driven development, and visual regression testing.</p>
+
+  <!-- ===== WHAT IS STORYBOOK ===== -->
+  <h2>What Is Storybook?</h2>
+
+  <p>Storybook is a tool for developing UI components in <strong>isolation</strong>. Instead of running your full app and navigating to a page to see a component, you build it in a separate environment where each component gets its own "story" &mdash; a rendered example with specific props.</p>
+
+  <div class="panel">
+    <div class="panel-title">The problem Storybook solves</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Without Storybook</div>
+        <div class="comp-body">
+          <ul>
+            <li>Start the full app</li>
+            <li>Log in (if behind auth)</li>
+            <li>Navigate to the page</li>
+            <li>Set up the right data state</li>
+            <li>Finally see your component</li>
+            <li>Change code, repeat...</li>
+          </ul>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">With Storybook</div>
+        <div class="comp-body">
+          <ul>
+            <li>Open Storybook (separate dev server)</li>
+            <li>Pick your component from the sidebar</li>
+            <li>See it instantly with various prop combinations</li>
+            <li>Change code, see updates immediately</li>
+            <li>No app, no auth, no data setup</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Think of Storybook like Swagger UI for your components. Swagger lets you interact with API endpoints in isolation. Storybook lets you interact with UI components in isolation.
+  </div>
+
+  <!-- ===== SETUP ===== -->
+  <h2>Setting Up Storybook</h2>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>pnpm dlx storybook@latest init<br>
+    <span class="output">  Detecting project type... React + Vite</span><br>
+    <span class="output">  Installing dependencies...</span><br>
+    <span class="output">  Adding Storybook scripts to package.json...</span><br>
+    <span class="output">  Creating .storybook/ config directory...</span><br>
+    <br>
+    <span class="prompt">$ </span>pnpm storybook<br>
+    <span class="output">  Storybook running at http://localhost:6006</span><br>
+  </div>
+
+  <div class="file-tree">
+    <span class="dir">.storybook/</span><br>
+    &nbsp;&nbsp;<span class="highlight">main.ts</span> <span class="file">&larr; Storybook config (addons, framework)</span><br>
+    &nbsp;&nbsp;<span class="highlight">preview.ts</span> <span class="file">&larr; Global decorators, parameters</span><br>
+    <span class="dir">src/</span><br>
+    &nbsp;&nbsp;<span class="dir">shared/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">components/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">Button.stories.tsx</span> <span class="file">&larr; stories live next to components</span><br>
+  </div>
+
+  <!-- ===== WRITING STORIES ===== -->
+  <h2>Writing Stories</h2>
+
+  <p>A story file exports multiple examples ("stories") of a component, each showing different props/states.</p>
+
+  <h3>The component</h3>
+
+<pre><code><span class="cm">// shared/components/Button.tsx</span>
+
+<span class="kw">interface</span> <span class="type">ButtonProps</span> {
+  <span class="prop">variant</span>: <span class="str">'primary'</span> | <span class="str">'secondary'</span> | <span class="str">'danger'</span>
+  <span class="prop">size</span>: <span class="str">'sm'</span> | <span class="str">'md'</span> | <span class="str">'lg'</span>
+  <span class="prop">disabled</span>?: <span class="type">boolean</span>
+  <span class="prop">loading</span>?: <span class="type">boolean</span>
+  <span class="prop">children</span>: <span class="type">React.ReactNode</span>
+  <span class="fn">onClick</span>?: () =&gt; <span class="type">void</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Button</span> = ({
+  <span class="prop">variant</span>,
+  <span class="prop">size</span>,
+  <span class="prop">disabled</span>,
+  <span class="prop">loading</span>,
+  <span class="prop">children</span>,
+  <span class="prop">onClick</span>,
+}: <span class="type">ButtonProps</span>) =&gt; {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">button</span>
+      <span class="attr">className</span>={<span class="fn">cn</span>(<span class="str">'btn'</span>, <span class="str">`btn-</span>${variant}<span class="str">`</span>, <span class="str">`btn-</span>${size}<span class="str">`</span>)}
+      <span class="attr">disabled</span>={disabled || loading}
+      <span class="attr">onClick</span>={onClick}
+    &gt;
+      {loading ? <span class="str">'Loading...'</span> : children}
+    &lt;/<span class="tag">button</span>&gt;
+  )
+}</code></pre>
+
+  <h3>The stories file</h3>
+
+<pre><code><span class="cm">// shared/components/Button.stories.tsx</span>
+
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">Meta</span>, <span class="type">StoryObj</span> } <span class="kw">from</span> <span class="str">'@storybook/react'</span>
+<span class="kw">import</span> { <span class="type">Button</span> } <span class="kw">from</span> <span class="str">'./Button'</span>
+
+<span class="cm">// Meta: describes the component</span>
+<span class="kw">const</span> <span class="prop">meta</span>: <span class="type">Meta</span>&lt;<span class="kw">typeof</span> <span class="type">Button</span>&gt; = {
+  <span class="prop">title</span>: <span class="str">'Shared/Button'</span>,     <span class="cm">// sidebar path</span>
+  <span class="prop">component</span>: <span class="type">Button</span>,
+  <span class="prop">tags</span>: [<span class="str">'autodocs'</span>],         <span class="cm">// auto-generate docs page</span>
+  <span class="prop">argTypes</span>: {
+    <span class="prop">onClick</span>: { <span class="prop">action</span>: <span class="str">'clicked'</span> }, <span class="cm">// logs clicks in Storybook panel</span>
+  },
+}
+
+<span class="kw">export default</span> <span class="prop">meta</span>
+<span class="kw">type</span> <span class="type">Story</span> = <span class="type">StoryObj</span>&lt;<span class="kw">typeof</span> <span class="type">Button</span>&gt;
+
+<span class="cm">// Each export is a story (a rendered example)</span>
+
+<span class="kw">export const</span> <span class="prop">Primary</span>: <span class="type">Story</span> = {
+  <span class="prop">args</span>: {
+    <span class="prop">variant</span>: <span class="str">'primary'</span>,
+    <span class="prop">size</span>: <span class="str">'md'</span>,
+    <span class="prop">children</span>: <span class="str">'Click me'</span>,
+  },
+}
+
+<span class="kw">export const</span> <span class="prop">Secondary</span>: <span class="type">Story</span> = {
+  <span class="prop">args</span>: {
+    <span class="prop">variant</span>: <span class="str">'secondary'</span>,
+    <span class="prop">size</span>: <span class="str">'md'</span>,
+    <span class="prop">children</span>: <span class="str">'Cancel'</span>,
+  },
+}
+
+<span class="kw">export const</span> <span class="prop">Danger</span>: <span class="type">Story</span> = {
+  <span class="prop">args</span>: {
+    <span class="prop">variant</span>: <span class="str">'danger'</span>,
+    <span class="prop">size</span>: <span class="str">'md'</span>,
+    <span class="prop">children</span>: <span class="str">'Delete'</span>,
+  },
+}
+
+<span class="kw">export const</span> <span class="prop">Loading</span>: <span class="type">Story</span> = {
+  <span class="prop">args</span>: {
+    <span class="prop">variant</span>: <span class="str">'primary'</span>,
+    <span class="prop">size</span>: <span class="str">'md'</span>,
+    <span class="prop">loading</span>: <span class="kw">true</span>,
+    <span class="prop">children</span>: <span class="str">'Save'</span>,
+  },
+}
+
+<span class="kw">export const</span> <span class="prop">Disabled</span>: <span class="type">Story</span> = {
+  <span class="prop">args</span>: {
+    <span class="prop">variant</span>: <span class="str">'primary'</span>,
+    <span class="prop">size</span>: <span class="str">'md'</span>,
+    <span class="prop">disabled</span>: <span class="kw">true</span>,
+    <span class="prop">children</span>: <span class="str">'Disabled'</span>,
+  },
+}
+
+<span class="kw">export const</span> <span class="prop">AllSizes</span>: <span class="type">Story</span> = {
+  <span class="fn">render</span>: () =&gt; (
+    &lt;<span class="tag">div</span> <span class="attr">style</span>={{ <span class="prop">display</span>: <span class="str">'flex'</span>, <span class="prop">gap</span>: <span class="str">'12px'</span>, <span class="prop">alignItems</span>: <span class="str">'center'</span> }}&gt;
+      &lt;<span class="tag">Button</span> <span class="attr">variant</span>=<span class="str">"primary"</span> <span class="attr">size</span>=<span class="str">"sm"</span>&gt;Small&lt;/<span class="tag">Button</span>&gt;
+      &lt;<span class="tag">Button</span> <span class="attr">variant</span>=<span class="str">"primary"</span> <span class="attr">size</span>=<span class="str">"md"</span>&gt;Medium&lt;/<span class="tag">Button</span>&gt;
+      &lt;<span class="tag">Button</span> <span class="attr">variant</span>=<span class="str">"primary"</span> <span class="attr">size</span>=<span class="str">"lg"</span>&gt;Large&lt;/<span class="tag">Button</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  ),
+}</code></pre>
+
+  <div class="tip">
+    <strong>Key pattern:</strong> Each story is a named export with an <code>args</code> object. Storybook uses <code>args</code> to generate interactive controls &mdash; you can tweak props in the UI panel. The <code>render</code> function gives you custom layout for more complex examples.
+  </div>
+
+  <!-- ===== COMPONENT-DRIVEN DEVELOPMENT ===== -->
+  <h2>Component-Driven Development</h2>
+
+  <p>Storybook encourages a bottom-up development workflow: build small components, then compose them into larger ones.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Atoms</div>
+      <div class="desc">Button, Input, Badge, Avatar</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Molecules</div>
+      <div class="desc">SearchBar, UserCard, FormField</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Organisms</div>
+      <div class="desc">Header, Sidebar, DataTable</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Pages</div>
+      <div class="desc">DashboardPage, SettingsPage</div>
+    </div>
+  </div>
+
+  <p>At each level, the component has stories showing all its states. When you build pages, you're just wiring together already-tested pieces.</p>
+
+  <h3>Interaction stories</h3>
+
+  <p>Storybook can also simulate user interactions in stories, useful for testing flows:</p>
+
+<pre><code><span class="cm">// LoginForm.stories.tsx</span>
+<span class="kw">import</span> { <span class="fn">within</span>, <span class="fn">userEvent</span> } <span class="kw">from</span> <span class="str">'@storybook/test'</span>
+
+<span class="kw">export const</span> <span class="prop">FilledForm</span>: <span class="type">Story</span> = {
+  <span class="fn">play</span>: <span class="kw">async</span> ({ <span class="prop">canvasElement</span> }) =&gt; {
+    <span class="kw">const</span> <span class="prop">canvas</span> = <span class="fn">within</span>(<span class="prop">canvasElement</span>)
+
+    <span class="cm">// Simulate typing</span>
+    <span class="kw">await</span> <span class="fn">userEvent</span>.<span class="fn">type</span>(
+      <span class="prop">canvas</span>.<span class="fn">getByLabelText</span>(<span class="str">'Email'</span>),
+      <span class="str">'user@example.com'</span>
+    )
+    <span class="kw">await</span> <span class="fn">userEvent</span>.<span class="fn">type</span>(
+      <span class="prop">canvas</span>.<span class="fn">getByLabelText</span>(<span class="str">'Password'</span>),
+      <span class="str">'password123'</span>
+    )
+
+    <span class="cm">// Click submit</span>
+    <span class="kw">await</span> <span class="fn">userEvent</span>.<span class="fn">click</span>(
+      <span class="prop">canvas</span>.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { <span class="prop">name</span>: <span class="str">'Log in'</span> })
+    )
+  },
+}</code></pre>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When Storybook Is Worth It</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Worth it when...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Design system / component library</strong> &mdash; shared components used across apps need documentation</li>
+          <li><strong>Team with designers</strong> &mdash; Storybook serves as a visual contract between design and dev</li>
+          <li><strong>Complex component states</strong> &mdash; loading, error, empty, disabled, responsive &mdash; hard to test all in the app</li>
+          <li><strong>Visual regression testing</strong> &mdash; Chromatic/Percy can screenshot every story on every PR</li>
+          <li><strong>Onboarding</strong> &mdash; new developers can browse all components and their props</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Skip it when...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Small solo project</strong> &mdash; the overhead of maintaining stories isn't worth it</li>
+          <li><strong>Rapid prototyping</strong> &mdash; stories slow down iteration when the API is changing daily</li>
+          <li><strong>Few shared components</strong> &mdash; if most components are page-specific, there's less value</li>
+          <li><strong>No visual QA process</strong> &mdash; Storybook shines when someone reviews visuals</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== VISUAL REGRESSION ===== -->
+  <h2>Visual Regression Testing</h2>
+
+  <p>The killer feature of Storybook at scale: automatically detect visual changes on every PR.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">PR opened</div>
+      <div class="desc">Developer changes a component</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">CI runs</div>
+      <div class="desc">Builds Storybook, publishes to Chromatic</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Screenshots</div>
+      <div class="desc">Every story captured</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Diff</div>
+      <div class="desc">Compared to baseline (main branch)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Review</div>
+      <div class="desc">Approve or reject visual changes</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>Type</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Chromatic</strong></td>
+        <td>Paid (free tier: 5,000 snapshots/month)</td>
+        <td>By the Storybook team. Tightest integration. Catches UI changes, shows pixel diffs.</td>
+      </tr>
+      <tr>
+        <td><strong>Percy</strong></td>
+        <td>Paid</td>
+        <td>By BrowserStack. Cross-browser visual testing. Works with or without Storybook.</td>
+      </tr>
+      <tr>
+        <td><strong>Playwright screenshots</strong></td>
+        <td>Free (DIY)</td>
+        <td>Use Playwright to screenshot pages/components, compare in CI. More manual setup.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Concept</th>
+        <th>Key Takeaway</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>What Storybook does</td>
+        <td>Isolated component development environment with prop-driven examples</td>
+      </tr>
+      <tr>
+        <td>Stories</td>
+        <td><code>.stories.tsx</code> files with named exports, each showing a component state</td>
+      </tr>
+      <tr>
+        <td>Component-driven dev</td>
+        <td>Build atoms &rarr; molecules &rarr; organisms &rarr; pages</td>
+      </tr>
+      <tr>
+        <td>Visual regression</td>
+        <td>Chromatic/Percy screenshot every story on each PR to catch unintended changes</td>
+      </tr>
+      <tr>
+        <td>Worth it?</td>
+        <td>Yes for design systems and teams. Overkill for small solo projects.</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

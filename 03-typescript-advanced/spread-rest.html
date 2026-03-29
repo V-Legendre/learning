@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 — Spread &amp; Rest Operators</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>03 — Spread &amp; Rest Operators</h1>
+  <p class="subtitle">The <code>...</code> operator — spreads things apart or gathers them together. Core to immutable state updates in React.</p>
+
+  <!-- ===== MENTAL MODEL ===== -->
+  <h2>Two Sides of the Same Coin</h2>
+
+  <div class="panel">
+    <div class="panel-title">Spread vs Rest — same syntax, different context</div>
+    <p>The <code>...</code> operator does two opposite things depending on where you use it:</p>
+    <ul>
+      <li><strong>Spread</strong> = "unpack/expand" an iterable or object into individual elements</li>
+      <li><strong>Rest</strong> = "gather/collect" multiple elements into a single array or object</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">Spread (expanding)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> arr = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>]
+<span class="kw">const</span> copy = [...arr]
+<span class="cm">// Unpacks [1, 2, 3] into 1, 2, 3</span>
+<span class="cm">// then wraps in new array</span>
+
+<span class="kw">const</span> obj = { a: <span class="num">1</span> }
+<span class="kw">const</span> copy = { ...obj }
+<span class="cm">// Unpacks {a: 1} into a: 1</span>
+<span class="cm">// then wraps in new object</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Rest (collecting)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> [first, ...rest] = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>]
+<span class="cm">// rest = [2, 3]</span>
+<span class="cm">// Gathers remaining into array</span>
+
+<span class="kw">const</span> { a, ...rest } = { a: <span class="num">1</span>, b: <span class="num">2</span>, c: <span class="num">3</span> }
+<span class="cm">// rest = { b: 2, c: 3 }</span>
+<span class="cm">// Gathers remaining into object</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SPREAD OBJECTS ===== -->
+  <h2>Spread Objects</h2>
+
+  <h3>Shallow Copy</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> original = { x: <span class="num">1</span>, y: <span class="num">2</span> }
+<span class="kw">const</span> copy = { ...original }
+<span class="cm">// copy = { x: 1, y: 2 }</span>
+<span class="cm">// Different reference — mutating copy</span>
+<span class="cm">// doesn't affect original</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>original = {<span class="str">"x"</span>: <span class="num">1</span>, <span class="str">"y"</span>: <span class="num">2</span>}
+copy = {**original}
+<span class="cm"># copy = {"x": 1, "y": 2}</span>
+<span class="cm"># Same: ** unpacks dict</span>
+<span class="cm"># Also: dict(original) or original.copy()</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Override Properties (Immutable Update)</h3>
+
+  <p>This is the single most important pattern for React state updates. You create a new object with some properties changed.</p>
+
+<pre><code><span class="kw">const</span> user = { name: <span class="str">"Alice"</span>, age: <span class="num">30</span>, role: <span class="str">"user"</span> }
+
+<span class="cm">// Create new object with age changed</span>
+<span class="kw">const</span> updated = { ...user, age: <span class="num">31</span> }
+<span class="cm">// { name: "Alice", age: 31, role: "user" }</span>
+
+<span class="cm">// Add a new property</span>
+<span class="kw">const</span> withEmail = { ...user, email: <span class="str">"alice@example.com"</span> }
+<span class="cm">// { name: "Alice", age: 30, role: "user", email: "alice@example.com" }</span>
+
+<span class="cm">// Override multiple properties</span>
+<span class="kw">const</span> promoted = { ...user, role: <span class="str">"admin"</span>, age: <span class="num">31</span> }
+<span class="cm">// { name: "Alice", age: 31, role: "admin" }</span></code></pre>
+
+  <div class="warn">
+    <strong>Order matters!</strong> Later properties override earlier ones. <code>{ ...user, age: 31 }</code> works because <code>age: 31</code> comes AFTER <code>...user</code>. If reversed: <code>{ age: 31, ...user }</code>, the original <code>age: 30</code> would win.
+  </div>
+
+  <h3>Merging Objects</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> defaults = {
+  theme: <span class="str">"dark"</span>,
+  lang: <span class="str">"en"</span>,
+  debug: <span class="kw">false</span>
+}
+<span class="kw">const</span> userPrefs = {
+  theme: <span class="str">"light"</span>,
+  fontSize: <span class="num">16</span>
+}
+
+<span class="kw">const</span> config = { ...defaults, ...userPrefs }
+<span class="cm">// { theme: "light", lang: "en",</span>
+<span class="cm">//   debug: false, fontSize: 16 }</span>
+<span class="cm">// userPrefs overrides defaults</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>defaults = {
+    <span class="str">"theme"</span>: <span class="str">"dark"</span>,
+    <span class="str">"lang"</span>: <span class="str">"en"</span>,
+    <span class="str">"debug"</span>: <span class="kw">False</span>
+}
+user_prefs = {
+    <span class="str">"theme"</span>: <span class="str">"light"</span>,
+    <span class="str">"font_size"</span>: <span class="num">16</span>
+}
+
+config = {**defaults, **user_prefs}
+<span class="cm"># Same semantics — later wins</span>
+<span class="cm"># Python 3.9+: defaults | user_prefs</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SPREAD ARRAYS ===== -->
+  <h2>Spread Arrays</h2>
+
+<pre><code><span class="cm">// Concatenate arrays</span>
+<span class="kw">const</span> a = [<span class="num">1</span>, <span class="num">2</span>]
+<span class="kw">const</span> b = [<span class="num">3</span>, <span class="num">4</span>]
+<span class="kw">const</span> merged = [...a, ...b]        <span class="cm">// [1, 2, 3, 4]</span>
+
+<span class="cm">// Prepend / append</span>
+<span class="kw">const</span> items = [<span class="str">"b"</span>, <span class="str">"c"</span>]
+<span class="kw">const</span> withFirst = [<span class="str">"a"</span>, ...items]   <span class="cm">// ["a", "b", "c"]</span>
+<span class="kw">const</span> withLast = [...items, <span class="str">"d"</span>]    <span class="cm">// ["b", "c", "d"]</span>
+
+<span class="cm">// Insert in the middle</span>
+<span class="kw">const</span> nums = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">5</span>, <span class="num">6</span>]
+<span class="kw">const</span> inserted = [...nums.<span class="fn">slice</span>(<span class="num">0</span>, <span class="num">2</span>), <span class="num">3</span>, <span class="num">4</span>, ...nums.<span class="fn">slice</span>(<span class="num">2</span>)]
+<span class="cm">// [1, 2, 3, 4, 5, 6]</span>
+
+<span class="cm">// Shallow copy</span>
+<span class="kw">const</span> copy = [...items]             <span class="cm">// new array, same elements</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript spread</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> merged = [...a, ...b]
+<span class="kw">const</span> withNew = [...arr, item]</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>merged = [*a, *b]
+with_new = [*arr, item]
+<span class="cm"># Also: a + b, arr + [item]</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REST PARAMETERS ===== -->
+  <h2>Rest Parameters in Functions</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Gather all args into an array</span>
+<span class="kw">const</span> <span class="fn">sum</span> = (...nums: <span class="type">number</span>[]): <span class="type">number</span> => {
+  <span class="kw">return</span> nums.<span class="fn">reduce</span>((a, b) => a + b, <span class="num">0</span>)
+}
+
+<span class="fn">sum</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)     <span class="cm">// 6</span>
+<span class="fn">sum</span>(<span class="num">10</span>, <span class="num">20</span>)       <span class="cm">// 30</span>
+
+<span class="cm">// Mixed: fixed params + rest</span>
+<span class="kw">const</span> <span class="fn">log</span> = (
+  level: <span class="type">string</span>,
+  ...messages: <span class="type">string</span>[]
+) => {
+  console.<span class="fn">log</span>(<span class="str">`[${level}]`</span>, ...messages)
+}
+
+<span class="fn">log</span>(<span class="str">"ERROR"</span>, <span class="str">"Failed"</span>, <span class="str">"to connect"</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># *args gathers positional args</span>
+<span class="kw">def</span> <span class="fn">sum_nums</span>(*nums: <span class="type">int</span>) -> <span class="type">int</span>:
+    <span class="kw">return</span> <span class="fn">sum</span>(nums)
+
+<span class="fn">sum_nums</span>(<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>)    <span class="cm"># 6</span>
+<span class="fn">sum_nums</span>(<span class="num">10</span>, <span class="num">20</span>)      <span class="cm"># 30</span>
+
+<span class="cm"># Mixed: fixed + *args</span>
+<span class="kw">def</span> <span class="fn">log</span>(
+    level: <span class="type">str</span>,
+    *messages: <span class="type">str</span>
+):
+    <span class="fn">print</span>(<span class="str">f"[{level}]"</span>, *messages)
+
+<span class="fn">log</span>(<span class="str">"ERROR"</span>, <span class="str">"Failed"</span>, <span class="str">"to connect"</span>)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> JS/TS has <code>...args</code> (three dots), Python has <code>*args</code> (one star). JS doesn't have <code>**kwargs</code> directly, but rest with object destructuring achieves the same: <code>const { known, ...rest } = options</code>.
+  </div>
+
+  <!-- ===== REST IN DESTRUCTURING ===== -->
+  <h2>Rest in Destructuring</h2>
+
+  <h3>Object Rest</h3>
+
+<pre><code><span class="kw">const</span> user = { id: <span class="num">1</span>, name: <span class="str">"Alice"</span>, age: <span class="num">30</span>, role: <span class="str">"admin"</span> }
+
+<span class="cm">// Extract id, gather everything else</span>
+<span class="kw">const</span> { id, ...profile } = user
+<span class="cm">// id = 1</span>
+<span class="cm">// profile = { name: "Alice", age: 30, role: "admin" }</span>
+
+<span class="cm">// This is a clean way to REMOVE a property immutably:</span>
+<span class="kw">const</span> { role, ...userWithoutRole } = user
+<span class="cm">// userWithoutRole = { id: 1, name: "Alice", age: 30 }</span>
+<span class="cm">// "role" is extracted but unused — effectively deleted</span></code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> "Delete a property without mutating" pattern: <code>const { propToRemove, ...rest } = obj</code>. Use <code>rest</code> as the new object. ESLint may warn about the unused variable; prefix with <code>_</code>: <code>const { role: _role, ...rest } = obj</code>.
+  </div>
+
+  <h3>Array Rest</h3>
+
+<pre><code><span class="kw">const</span> [head, ...tail] = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>]
+<span class="cm">// head = 1, tail = [2, 3, 4]</span>
+
+<span class="kw">const</span> [first, second, ...remaining] = <span class="str">"hello"</span>.<span class="fn">split</span>(<span class="str">""</span>)
+<span class="cm">// first = "h", second = "e", remaining = ["l", "l", "o"]</span></code></pre>
+
+  <!-- ===== REACT IMMUTABLE UPDATES ===== -->
+  <h2>Immutable Update Patterns (React)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Why immutable updates?</div>
+    <p>React uses <strong>reference equality</strong> (<code>===</code>) to detect changes. If you mutate an object directly, its reference doesn't change, so React won't re-render. You must create a <strong>new object/array</strong> for React to detect the change.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Mutating (broken in React)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// WRONG — mutates in place</span>
+user.name = <span class="str">"Bob"</span>
+<span class="fn">setUser</span>(user) <span class="cm">// same reference!</span>
+<span class="cm">// React says "same object, skip re-render"</span>
+
+<span class="cm">// WRONG — push mutates the array</span>
+items.<span class="fn">push</span>(newItem)
+<span class="fn">setItems</span>(items) <span class="cm">// same reference!</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Immutable (correct in React)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// RIGHT — new object via spread</span>
+<span class="fn">setUser</span>({ ...user, name: <span class="str">"Bob"</span> })
+<span class="cm">// New reference, React re-renders</span>
+
+<span class="cm">// RIGHT — new array via spread</span>
+<span class="fn">setItems</span>([...items, newItem])
+<span class="cm">// New reference, React re-renders</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Common State Update Operations</h3>
+
+  <table>
+    <thead>
+      <tr><th>Operation</th><th>Immutable Pattern</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Update object property</td><td><code>{ ...obj, key: newValue }</code></td></tr>
+      <tr><td>Add to array</td><td><code>[...arr, newItem]</code></td></tr>
+      <tr><td>Prepend to array</td><td><code>[newItem, ...arr]</code></td></tr>
+      <tr><td>Remove from array</td><td><code>arr.filter(x => x.id !== targetId)</code></td></tr>
+      <tr><td>Update item in array</td><td><code>arr.map(x => x.id === id ? { ...x, name: "new" } : x)</code></td></tr>
+      <tr><td>Remove object property</td><td><code>const { key, ...rest } = obj; // use rest</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Updating Nested State</h3>
+
+<pre><code><span class="kw">type</span> <span class="type">State</span> = {
+  user: {
+    name: <span class="type">string</span>
+    address: {
+      city: <span class="type">string</span>
+      zip: <span class="type">string</span>
+    }
+  }
+  settings: {
+    theme: <span class="type">string</span>
+  }
+}
+
+<span class="cm">// Update deeply nested city</span>
+<span class="kw">const</span> <span class="fn">updateCity</span> = (state: <span class="type">State</span>, newCity: <span class="type">string</span>): <span class="type">State</span> => ({
+  ...state,
+  user: {
+    ...state.user,
+    address: {
+      ...state.user.address,
+      city: newCity
+    }
+  }
+})
+
+<span class="cm">// This is verbose — it's why libraries like Immer exist</span>
+<span class="cm">// Immer lets you write "mutating" code that produces</span>
+<span class="cm">// immutable updates under the hood</span></code></pre>
+
+  <div class="warn">
+    <strong>Pain point:</strong> Deeply nested immutable updates are verbose. In real projects, you'll use <strong>Immer</strong> (built into Redux Toolkit) which lets you write <code>state.user.address.city = newCity</code> and produces the immutable update automatically.
+  </div>
+
+  <!-- ===== SPREAD IN FUNCTION CALLS ===== -->
+  <h2>Spread in Function Calls</h2>
+
+<pre><code><span class="kw">const</span> nums = [<span class="num">1</span>, <span class="num">5</span>, <span class="num">3</span>, <span class="num">9</span>, <span class="num">2</span>]
+
+<span class="cm">// Spread array as individual arguments</span>
+Math.<span class="fn">max</span>(...nums)  <span class="cm">// 9  — same as Math.max(1, 5, 3, 9, 2)</span>
+
+<span class="cm">// Python equivalent: max(*nums)</span>
+
+<span class="cm">// Spread into JSX props</span>
+<span class="kw">const</span> buttonProps = { disabled: <span class="kw">true</span>, className: <span class="str">"btn"</span> }
+<span class="cm">// &lt;button {...buttonProps}&gt;Click&lt;/button&gt;</span>
+<span class="cm">// Same as: &lt;button disabled={true} className="btn"&gt;Click&lt;/button&gt;</span></code></pre>
+
+  <!-- ===== GOTCHAS ===== -->
+  <h2>Common Mistakes &amp; Gotchas</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Shallow copy only</div>
+<pre><code><span class="kw">const</span> original = {
+  name: <span class="str">"Alice"</span>,
+  tags: [<span class="str">"admin"</span>, <span class="str">"user"</span>]
+}
+<span class="kw">const</span> copy = { ...original }
+
+copy.tags.<span class="fn">push</span>(<span class="str">"editor"</span>)
+<span class="cm">// original.tags is ALSO modified!</span>
+<span class="cm">// Spread only copies one level deep</span>
+
+<span class="cm">// Fix: spread nested too</span>
+<span class="kw">const</span> deepCopy = {
+  ...original,
+  tags: [...original.tags]
+}</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Spread order matters</div>
+<pre><code><span class="cm">// defaults FIRST, overrides LAST</span>
+<span class="kw">const</span> good = { ...defaults, ...overrides }
+
+<span class="cm">// If reversed, overrides get clobbered</span>
+<span class="kw">const</span> bad = { ...overrides, ...defaults }
+<span class="cm">// defaults win! Not what you want.</span>
+
+<span class="cm">// Same as Python:</span>
+<span class="cm">// {**defaults, **overrides} = overrides win</span></code></pre>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Can't spread into an object from an array</div>
+<pre><code><span class="cm">// This works — index becomes key</span>
+<span class="kw">const</span> obj = { ...[<span class="str">"a"</span>, <span class="str">"b"</span>] }
+<span class="cm">// { 0: "a", 1: "b" } — probably not useful</span>
+
+<span class="cm">// You probably wanted:</span>
+<span class="kw">const</span> arr = [<span class="str">"a"</span>, <span class="str">"b"</span>]
+<span class="kw">const</span> obj = { items: arr }
+<span class="cm">// or use Object.fromEntries()</span></code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Rest must be last</div>
+<pre><code><span class="cm">// Rest element must be the last one</span>
+<span class="kw">const</span> { a, ...rest, b } = obj  <span class="cm">// ERROR!</span>
+<span class="kw">const</span> [first, ...rest, last] = arr <span class="cm">// ERROR!</span>
+
+<span class="cm">// Python allows *rest in the middle:</span>
+<span class="cm"># first, *rest, last = [1,2,3,4]  ✓</span>
+<span class="cm">// JS/TS does NOT allow this</span></code></pre>
+    </div>
+  </div>
+
+  <!-- ===== PRACTICAL REACT PATTERNS ===== -->
+  <h2>Practical React Patterns</h2>
+
+  <div class="panel">
+    <div class="panel-title">Forward props to child components</div>
+<pre><code><span class="kw">type</span> <span class="type">CardProps</span> = {
+  title: <span class="type">string</span>
+  highlighted<span class="kw">?</span>: <span class="type">boolean</span>
+} & <span class="type">React.HTMLAttributes</span>&lt;<span class="type">HTMLDivElement</span>&gt;
+
+<span class="kw">const</span> <span class="fn">Card</span> = ({ title, highlighted, ...<span class="prop">divProps</span> }: <span class="type">CardProps</span>) => (
+  &lt;<span class="tag">div</span>
+    {...divProps}
+    <span class="attr">className</span>={<span class="str">`card ${highlighted ? "highlighted" : ""} ${divProps.className ?? ""}`</span>}
+  &gt;
+    &lt;<span class="tag">h3</span>&gt;{title}&lt;/<span class="tag">h3</span>&gt;
+    {divProps.children}
+  &lt;/<span class="tag">div</span>&gt;
+)
+
+<span class="cm">// Usage: &lt;Card title="Hello" highlighted onClick={handler} style={{...}} /&gt;</span>
+<span class="cm">// title and highlighted are consumed; onClick, style forwarded to &lt;div&gt;</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Managing list state with spread</div>
+<pre><code><span class="kw">const</span> [todos, setTodos] = <span class="fn">useState</span>&lt;<span class="type">Todo</span>[]&gt;([])
+
+<span class="cm">// Add</span>
+<span class="kw">const</span> <span class="fn">addTodo</span> = (text: <span class="type">string</span>) =>
+  <span class="fn">setTodos</span>(prev => [...prev, { id: <span class="fn">crypto.randomUUID</span>(), text, done: <span class="kw">false</span> }])
+
+<span class="cm">// Remove</span>
+<span class="kw">const</span> <span class="fn">removeTodo</span> = (id: <span class="type">string</span>) =>
+  <span class="fn">setTodos</span>(prev => prev.<span class="fn">filter</span>(t => t.id !== id))
+
+<span class="cm">// Toggle</span>
+<span class="kw">const</span> <span class="fn">toggleTodo</span> = (id: <span class="type">string</span>) =>
+  <span class="fn">setTodos</span>(prev => prev.<span class="fn">map</span>(t =>
+    t.id === id ? { ...t, done: !t.done } : t
+  ))</code></pre>
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>What it does</th><th>Python equivalent</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>{ ...obj }</code></td><td>Shallow copy object</td><td><code>{**d}</code></td></tr>
+      <tr><td><code>{ ...obj, k: v }</code></td><td>Copy + override/add</td><td><code>{**d, "k": v}</code></td></tr>
+      <tr><td><code>{ ...a, ...b }</code></td><td>Merge objects (b wins)</td><td><code>{**a, **b}</code> or <code>a | b</code></td></tr>
+      <tr><td><code>[...arr]</code></td><td>Shallow copy array</td><td><code>[*lst]</code> or <code>lst.copy()</code></td></tr>
+      <tr><td><code>[...a, ...b]</code></td><td>Concatenate arrays</td><td><code>[*a, *b]</code> or <code>a + b</code></td></tr>
+      <tr><td><code>fn(...arr)</code></td><td>Spread as arguments</td><td><code>fn(*lst)</code></td></tr>
+      <tr><td><code>(...args: T[])</code></td><td>Rest params (gather)</td><td><code>*args: T</code></td></tr>
+      <tr><td><code>{ a, ...rest } = obj</code></td><td>Rest in destructuring</td><td>No direct equivalent</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

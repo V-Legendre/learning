@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>06 — Tailwind Core Utilities</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>06 — Tailwind Core Utilities</h1>
+  <p class="subtitle">The most-used utility classes you'll reach for daily. Think of this as a cheat sheet.</p>
+
+  <!-- ===== SPACING SCALE ===== -->
+  <h2>The Spacing Scale</h2>
+
+  <p>Tailwind uses a consistent spacing scale. The number in a class maps to a multiple of <strong>4px</strong> (0.25rem). Memorize this: <code>p-4</code> = 16px = 1rem.</p>
+
+  <table>
+    <thead>
+      <tr><th>Class suffix</th><th>rem</th><th>px</th><th>Class suffix</th><th>rem</th><th>px</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>0</td><td>0</td><td><code>8</code></td><td>2</td><td>32</td></tr>
+      <tr><td><code>0.5</code></td><td>0.125</td><td>2</td><td><code>10</code></td><td>2.5</td><td>40</td></tr>
+      <tr><td><code>1</code></td><td>0.25</td><td>4</td><td><code>12</code></td><td>3</td><td>48</td></tr>
+      <tr><td><code>1.5</code></td><td>0.375</td><td>6</td><td><code>16</code></td><td>4</td><td>64</td></tr>
+      <tr><td><code>2</code></td><td>0.5</td><td>8</td><td><code>20</code></td><td>5</td><td>80</td></tr>
+      <tr><td><code>3</code></td><td>0.75</td><td>12</td><td><code>24</code></td><td>6</td><td>96</td></tr>
+      <tr><td><code>4</code></td><td>1</td><td>16</td><td><code>32</code></td><td>8</td><td>128</td></tr>
+      <tr><td><code>5</code></td><td>1.25</td><td>20</td><td><code>40</code></td><td>10</td><td>160</td></tr>
+      <tr><td><code>6</code></td><td>1.5</td><td>24</td><td><code>48</code></td><td>12</td><td>192</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== PADDING & MARGIN ===== -->
+  <h2>Padding &amp; Margin</h2>
+
+  <table>
+    <thead>
+      <tr><th>Prefix</th><th>CSS Property</th><th>Example</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>p-</code></td><td><code>padding</code> (all sides)</td><td><code>p-4</code></td><td><code>padding: 1rem</code></td></tr>
+      <tr><td><code>px-</code></td><td><code>padding-left</code> + <code>right</code></td><td><code>px-6</code></td><td><code>padding: 0 1.5rem</code></td></tr>
+      <tr><td><code>py-</code></td><td><code>padding-top</code> + <code>bottom</code></td><td><code>py-2</code></td><td><code>padding: 0.5rem 0</code></td></tr>
+      <tr><td><code>pt-</code></td><td><code>padding-top</code></td><td><code>pt-8</code></td><td><code>padding-top: 2rem</code></td></tr>
+      <tr><td><code>m-</code></td><td><code>margin</code> (all sides)</td><td><code>m-4</code></td><td><code>margin: 1rem</code></td></tr>
+      <tr><td><code>mx-</code></td><td><code>margin-left</code> + <code>right</code></td><td><code>mx-auto</code></td><td><code>margin: 0 auto</code> (center)</td></tr>
+      <tr><td><code>mt-</code></td><td><code>margin-top</code></td><td><code>mt-8</code></td><td><code>margin-top: 2rem</code></td></tr>
+      <tr><td><code>mb-</code></td><td><code>margin-bottom</code></td><td><code>mb-4</code></td><td><code>margin-bottom: 1rem</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Pattern:</strong> <code>p</code> = padding, <code>m</code> = margin. <code>x</code> = horizontal, <code>y</code> = vertical. <code>t/r/b/l</code> = top/right/bottom/left. Same modifiers apply to both padding and margin.
+  </div>
+
+  <div class="tip">
+    <strong>Negative margins:</strong> Prefix with a dash: <code>-mt-4</code> = <code>margin-top: -1rem</code>. Useful for overlapping elements.
+  </div>
+
+  <!-- ===== LAYOUT ===== -->
+  <h2>Layout &amp; Display</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>Use for</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>block</code></td><td><code>display: block</code></td><td>Default for divs</td></tr>
+      <tr><td><code>inline</code></td><td><code>display: inline</code></td><td>Inline text elements</td></tr>
+      <tr><td><code>inline-block</code></td><td><code>display: inline-block</code></td><td>Inline with box behavior</td></tr>
+      <tr><td><code>flex</code></td><td><code>display: flex</code></td><td>Flexbox layouts</td></tr>
+      <tr><td><code>inline-flex</code></td><td><code>display: inline-flex</code></td><td>Inline flexbox</td></tr>
+      <tr><td><code>grid</code></td><td><code>display: grid</code></td><td>Grid layouts</td></tr>
+      <tr><td><code>hidden</code></td><td><code>display: none</code></td><td>Hide elements</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SIZING ===== -->
+  <h2>Sizing</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>w-full</code></td><td><code>width: 100%</code></td><td>Fill parent</td></tr>
+      <tr><td><code>w-screen</code></td><td><code>width: 100vw</code></td><td>Full viewport width</td></tr>
+      <tr><td><code>w-64</code></td><td><code>width: 16rem</code> (256px)</td><td>Fixed width using spacing scale</td></tr>
+      <tr><td><code>w-1/2</code></td><td><code>width: 50%</code></td><td>Fraction-based</td></tr>
+      <tr><td><code>max-w-lg</code></td><td><code>max-width: 32rem</code></td><td>Named max-widths (sm, md, lg, xl, 2xl...)</td></tr>
+      <tr><td><code>max-w-screen-xl</code></td><td><code>max-width: 1280px</code></td><td>Match breakpoints</td></tr>
+      <tr><td><code>h-screen</code></td><td><code>height: 100vh</code></td><td>Full viewport height</td></tr>
+      <tr><td><code>h-full</code></td><td><code>height: 100%</code></td><td>Fill parent height</td></tr>
+      <tr><td><code>min-h-screen</code></td><td><code>min-height: 100vh</code></td><td>At least viewport height</td></tr>
+      <tr><td><code>min-h-0</code></td><td><code>min-height: 0</code></td><td>Reset min-height (common in flex)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== FLEXBOX ===== -->
+  <h2>Flexbox</h2>
+
+  <p>The most common layout pattern. Almost everything you build uses flex.</p>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>flex</code></td><td><code>display: flex</code></td><td>Enable flex container</td></tr>
+      <tr><td><code>flex-col</code></td><td><code>flex-direction: column</code></td><td>Stack children vertically</td></tr>
+      <tr><td><code>flex-row</code></td><td><code>flex-direction: row</code></td><td>Default: children in a row</td></tr>
+      <tr><td><code>flex-wrap</code></td><td><code>flex-wrap: wrap</code></td><td>Wrap to next line</td></tr>
+      <tr><td><code>items-center</code></td><td><code>align-items: center</code></td><td>Center on cross axis</td></tr>
+      <tr><td><code>items-start</code></td><td><code>align-items: flex-start</code></td><td>Align to start of cross axis</td></tr>
+      <tr><td><code>justify-center</code></td><td><code>justify-content: center</code></td><td>Center on main axis</td></tr>
+      <tr><td><code>justify-between</code></td><td><code>justify-content: space-between</code></td><td>Space items apart evenly</td></tr>
+      <tr><td><code>justify-end</code></td><td><code>justify-content: flex-end</code></td><td>Push to end</td></tr>
+      <tr><td><code>gap-4</code></td><td><code>gap: 1rem</code></td><td>Space between flex/grid children</td></tr>
+      <tr><td><code>flex-1</code></td><td><code>flex: 1 1 0%</code></td><td>Grow to fill available space</td></tr>
+      <tr><td><code>shrink-0</code></td><td><code>flex-shrink: 0</code></td><td>Don't shrink this item</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Common flex patterns</h3>
+
+<pre><code><span class="cm">{/* Horizontal center */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex items-center justify-center"</span><span class="tag">&gt;</span>
+  Centered both ways
+<span class="tag">&lt;/div&gt;</span>
+
+<span class="cm">{/* Navbar: logo left, nav right */}</span>
+<span class="tag">&lt;nav</span> <span class="attr">className</span>=<span class="str">"flex items-center justify-between px-6 py-4"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;span&gt;</span>Logo<span class="tag">&lt;/span&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex gap-4"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="str">"#"</span><span class="tag">&gt;</span>Home<span class="tag">&lt;/a&gt;</span>
+    <span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="str">"#"</span><span class="tag">&gt;</span>About<span class="tag">&lt;/a&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;/nav&gt;</span>
+
+<span class="cm">{/* Vertical stack with spacing */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex flex-col gap-4"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Item 1<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Item 2<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Item 3<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;/div&gt;</span>
+
+<span class="cm">{/* Sidebar + content */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;aside</span> <span class="attr">className</span>=<span class="str">"w-64 shrink-0"</span><span class="tag">&gt;</span>Sidebar<span class="tag">&lt;/aside&gt;</span>
+  <span class="tag">&lt;main</span> <span class="attr">className</span>=<span class="str">"flex-1"</span><span class="tag">&gt;</span>Content<span class="tag">&lt;/main&gt;</span>
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <!-- ===== GRID ===== -->
+  <h2>Grid</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>Use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>grid</code></td><td><code>display: grid</code></td><td>Enable grid container</td></tr>
+      <tr><td><code>grid-cols-3</code></td><td><code>grid-template-columns: repeat(3, 1fr)</code></td><td>3 equal columns</td></tr>
+      <tr><td><code>grid-cols-12</code></td><td><code>grid-template-columns: repeat(12, 1fr)</code></td><td>12-column grid</td></tr>
+      <tr><td><code>col-span-2</code></td><td><code>grid-column: span 2</code></td><td>Item spans 2 columns</td></tr>
+      <tr><td><code>grid-rows-2</code></td><td><code>grid-template-rows: repeat(2, 1fr)</code></td><td>2 equal rows</td></tr>
+      <tr><td><code>gap-4</code></td><td><code>gap: 1rem</code></td><td>Space between cells</td></tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">{/* 3-column card grid */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"grid grid-cols-3 gap-6"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"bg-gray-800 p-4 rounded-lg"</span><span class="tag">&gt;</span>Card 1<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"bg-gray-800 p-4 rounded-lg"</span><span class="tag">&gt;</span>Card 2<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"bg-gray-800 p-4 rounded-lg"</span><span class="tag">&gt;</span>Card 3<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <!-- ===== TYPOGRAPHY ===== -->
+  <h2>Typography</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>Typical use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>text-xs</code></td><td><code>font-size: 0.75rem</code></td><td>Fine print, labels</td></tr>
+      <tr><td><code>text-sm</code></td><td><code>font-size: 0.875rem</code></td><td>Secondary text</td></tr>
+      <tr><td><code>text-base</code></td><td><code>font-size: 1rem</code></td><td>Body text (default)</td></tr>
+      <tr><td><code>text-lg</code></td><td><code>font-size: 1.125rem</code></td><td>Slightly larger body</td></tr>
+      <tr><td><code>text-xl</code></td><td><code>font-size: 1.25rem</code></td><td>Sub-headings</td></tr>
+      <tr><td><code>text-2xl</code></td><td><code>font-size: 1.5rem</code></td><td>Headings</td></tr>
+      <tr><td><code>text-3xl</code></td><td><code>font-size: 1.875rem</code></td><td>Large headings</td></tr>
+      <tr><td><code>font-normal</code></td><td><code>font-weight: 400</code></td><td>Regular weight</td></tr>
+      <tr><td><code>font-medium</code></td><td><code>font-weight: 500</code></td><td>Medium emphasis</td></tr>
+      <tr><td><code>font-semibold</code></td><td><code>font-weight: 600</code></td><td>Semi-bold emphasis</td></tr>
+      <tr><td><code>font-bold</code></td><td><code>font-weight: 700</code></td><td>Bold headings</td></tr>
+      <tr><td><code>leading-relaxed</code></td><td><code>line-height: 1.625</code></td><td>Comfortable reading</td></tr>
+      <tr><td><code>leading-tight</code></td><td><code>line-height: 1.25</code></td><td>Tight headings</td></tr>
+      <tr><td><code>tracking-wide</code></td><td><code>letter-spacing: 0.025em</code></td><td>Wider letter spacing</td></tr>
+      <tr><td><code>tracking-tight</code></td><td><code>letter-spacing: -0.025em</code></td><td>Tighter spacing (headings)</td></tr>
+      <tr><td><code>text-center</code></td><td><code>text-align: center</code></td><td>Center text</td></tr>
+      <tr><td><code>uppercase</code></td><td><code>text-transform: uppercase</code></td><td>Labels, badges</td></tr>
+      <tr><td><code>truncate</code></td><td>overflow + ellipsis</td><td>Cut long text with "..."</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== COLORS ===== -->
+  <h2>Colors</h2>
+
+  <p>Colors follow the pattern <code>{property}-{color}-{shade}</code>. Shades go from <strong>50</strong> (lightest) to <strong>950</strong> (darkest).</p>
+
+  <table>
+    <thead>
+      <tr><th>Prefix</th><th>Applies to</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>text-</code></td><td>Text color</td><td><code>text-gray-400</code>, <code>text-red-500</code></td></tr>
+      <tr><td><code>bg-</code></td><td>Background color</td><td><code>bg-blue-500</code>, <code>bg-gray-900</code></td></tr>
+      <tr><td><code>border-</code></td><td>Border color</td><td><code>border-gray-300</code></td></tr>
+      <tr><td><code>ring-</code></td><td>Focus ring color</td><td><code>ring-blue-500</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>The shade scale</h3>
+
+  <table>
+    <thead>
+      <tr><th>Shade</th><th>Description</th><th>Common use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>50</code></td><td>Almost white</td><td>Light backgrounds</td></tr>
+      <tr><td><code>100-200</code></td><td>Very light</td><td>Hover states, subtle backgrounds</td></tr>
+      <tr><td><code>300-400</code></td><td>Medium-light</td><td>Borders, secondary text</td></tr>
+      <tr><td><code>500</code></td><td>Base / default</td><td>Primary buttons, links, accents</td></tr>
+      <tr><td><code>600-700</code></td><td>Medium-dark</td><td>Hover states for buttons, headings</td></tr>
+      <tr><td><code>800-900</code></td><td>Dark</td><td>Dark backgrounds, dark mode text</td></tr>
+      <tr><td><code>950</code></td><td>Almost black</td><td>Very dark backgrounds</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Available colors:</strong> <code>slate</code>, <code>gray</code>, <code>zinc</code>, <code>neutral</code>, <code>stone</code> (grays), <code>red</code>, <code>orange</code>, <code>amber</code>, <code>yellow</code>, <code>lime</code>, <code>green</code>, <code>emerald</code>, <code>teal</code>, <code>cyan</code>, <code>sky</code>, <code>blue</code>, <code>indigo</code>, <code>violet</code>, <code>purple</code>, <code>fuchsia</code>, <code>pink</code>, <code>rose</code>. Plus <code>white</code>, <code>black</code>, <code>transparent</code>.
+  </div>
+
+  <!-- ===== BORDERS & ROUNDED ===== -->
+  <h2>Borders &amp; Rounded Corners</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>CSS</th><th>Visual</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>border</code></td><td><code>border-width: 1px</code></td><td>Thin border, all sides</td></tr>
+      <tr><td><code>border-2</code></td><td><code>border-width: 2px</code></td><td>Thicker border</td></tr>
+      <tr><td><code>border-t</code></td><td><code>border-top-width: 1px</code></td><td>Top border only</td></tr>
+      <tr><td><code>border-gray-300</code></td><td><code>border-color: #d1d5db</code></td><td>Border color</td></tr>
+      <tr><td><code>rounded</code></td><td><code>border-radius: 0.25rem</code></td><td>Slight rounding</td></tr>
+      <tr><td><code>rounded-md</code></td><td><code>border-radius: 0.375rem</code></td><td>Medium rounding</td></tr>
+      <tr><td><code>rounded-lg</code></td><td><code>border-radius: 0.5rem</code></td><td>Large rounding</td></tr>
+      <tr><td><code>rounded-xl</code></td><td><code>border-radius: 0.75rem</code></td><td>Extra large</td></tr>
+      <tr><td><code>rounded-full</code></td><td><code>border-radius: 9999px</code></td><td>Pill shape / circle</td></tr>
+      <tr><td><code>shadow-sm</code></td><td>Small box shadow</td><td>Subtle elevation</td></tr>
+      <tr><td><code>shadow-md</code></td><td>Medium box shadow</td><td>Card elevation</td></tr>
+      <tr><td><code>shadow-lg</code></td><td>Large box shadow</td><td>Modal/popup elevation</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== RESPONSIVE ===== -->
+  <h2>Responsive Design</h2>
+
+  <p>Tailwind is <strong>mobile-first</strong>. Unprefixed classes apply to all screen sizes. Prefixed classes apply at that breakpoint <em>and above</em>.</p>
+
+  <table>
+    <thead>
+      <tr><th>Prefix</th><th>Min-width</th><th>Typical device</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>(none)</td><td>0px</td><td>All / mobile</td></tr>
+      <tr><td><code>sm:</code></td><td>640px</td><td>Large phones / small tablets</td></tr>
+      <tr><td><code>md:</code></td><td>768px</td><td>Tablets</td></tr>
+      <tr><td><code>lg:</code></td><td>1024px</td><td>Laptops</td></tr>
+      <tr><td><code>xl:</code></td><td>1280px</td><td>Desktops</td></tr>
+      <tr><td><code>2xl:</code></td><td>1536px</td><td>Large screens</td></tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">{/* Mobile: 1 column. Tablet+: 2 columns. Desktop+: 3 columns */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Card<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Card<span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;div&gt;</span>Card<span class="tag">&lt;/div&gt;</span>
+<span class="tag">&lt;/div&gt;</span>
+
+<span class="cm">{/* Mobile: stack. Desktop: side by side */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex flex-col lg:flex-row gap-4"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;aside</span> <span class="attr">className</span>=<span class="str">"lg:w-64"</span><span class="tag">&gt;</span>Sidebar<span class="tag">&lt;/aside&gt;</span>
+  <span class="tag">&lt;main</span> <span class="attr">className</span>=<span class="str">"flex-1"</span><span class="tag">&gt;</span>Content<span class="tag">&lt;/main&gt;</span>
+<span class="tag">&lt;/div&gt;</span>
+
+<span class="cm">{/* Hide on mobile, show on desktop */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"hidden lg:block"</span><span class="tag">&gt;</span>Desktop only<span class="tag">&lt;/div&gt;</span>
+
+<span class="cm">{/* Change text size at breakpoints */}</span>
+<span class="tag">&lt;h1</span> <span class="attr">className</span>=<span class="str">"text-2xl md:text-4xl lg:text-5xl"</span><span class="tag">&gt;</span>Responsive Heading<span class="tag">&lt;/h1&gt;</span></code></pre>
+
+  <div class="warn">
+    <strong>Mobile-first means:</strong> Write your base styles for mobile, then add <code>md:</code>/<code>lg:</code> overrides. Don't start with desktop and add <code>sm:</code> overrides downward.
+  </div>
+
+  <!-- ===== STATE VARIANTS ===== -->
+  <h2>State Variants</h2>
+
+  <table>
+    <thead>
+      <tr><th>Prefix</th><th>Triggers on</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>hover:</code></td><td>Mouse over element</td><td><code>hover:bg-blue-600</code></td></tr>
+      <tr><td><code>focus:</code></td><td>Element is focused</td><td><code>focus:ring-2 focus:ring-blue-500</code></td></tr>
+      <tr><td><code>active:</code></td><td>Being clicked/pressed</td><td><code>active:scale-95</code></td></tr>
+      <tr><td><code>disabled:</code></td><td>Disabled form elements</td><td><code>disabled:opacity-50 disabled:cursor-not-allowed</code></td></tr>
+      <tr><td><code>first:</code></td><td>First child</td><td><code>first:mt-0</code></td></tr>
+      <tr><td><code>last:</code></td><td>Last child</td><td><code>last:mb-0</code></td></tr>
+      <tr><td><code>odd:</code></td><td>Odd children</td><td><code>odd:bg-gray-800</code></td></tr>
+      <tr><td><code>group-hover:</code></td><td>Parent with <code>group</code> class is hovered</td><td>Highlight child when parent hovered</td></tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">{/* Interactive button */}</span>
+<span class="tag">&lt;button</span> <span class="attr">className</span>=<span class="str">"
+  bg-blue-500 text-white px-4 py-2 rounded-lg
+  hover:bg-blue-600
+  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+  active:scale-95
+  disabled:opacity-50 disabled:cursor-not-allowed
+  transition-all duration-150
+"</span><span class="tag">&gt;</span>
+  Click Me
+<span class="tag">&lt;/button&gt;</span>
+
+<span class="cm">{/* Group hover: show icon when card is hovered */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"group p-4 rounded-lg hover:bg-gray-800"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;h3&gt;</span>Card Title<span class="tag">&lt;/h3&gt;</span>
+  <span class="tag">&lt;span</span> <span class="attr">className</span>=<span class="str">"opacity-0 group-hover:opacity-100 transition-opacity"</span><span class="tag">&gt;</span>
+    Edit
+  <span class="tag">&lt;/span&gt;</span>
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <!-- ===== DARK MODE ===== -->
+  <h2>Dark Mode</h2>
+
+  <p>Use the <code>dark:</code> prefix to apply styles only when dark mode is active. By default in v4, Tailwind uses the <code>prefers-color-scheme</code> media query. You can switch to class-based strategy if you want manual control.</p>
+
+<pre><code><span class="cm">{/* Adapts to system dark mode */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"text-gray-600 dark:text-gray-400"</span><span class="tag">&gt;</span>
+    This text adapts to dark mode automatically.
+  <span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <p>For class-based dark mode control, add this to your CSS:</p>
+
+<pre><code><span class="cm">/* src/index.css */</span>
+<span class="kw">@import</span> <span class="str">"tailwindcss"</span>;
+
+<span class="kw">@custom-variant</span> dark (&amp;:where(.dark, .dark *));
+</code></pre>
+
+  <p>Then toggle by adding/removing the <code>dark</code> class on <code>&lt;html&gt;</code>:</p>
+
+<pre><code><span class="tag">&lt;html</span> <span class="attr">class</span>=<span class="str">"dark"</span><span class="tag">&gt;</span> <span class="cm">&lt;!-- dark mode on --&gt;</span>
+<span class="tag">&lt;html</span> <span class="attr">class</span>=<span class="str">""</span><span class="tag">&gt;</span>     <span class="cm">&lt;!-- light mode --&gt;</span></code></pre>
+
+  <!-- ===== TRANSITIONS ===== -->
+  <h2>Transitions &amp; Transforms</h2>
+
+  <table>
+    <thead>
+      <tr><th>Class</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>transition</code></td><td>Enable transitions on common properties (color, bg, shadow, transform)</td></tr>
+      <tr><td><code>transition-all</code></td><td>Transition all properties</td></tr>
+      <tr><td><code>transition-colors</code></td><td>Transition only colors</td></tr>
+      <tr><td><code>duration-150</code></td><td><code>transition-duration: 150ms</code></td></tr>
+      <tr><td><code>duration-300</code></td><td><code>transition-duration: 300ms</code></td></tr>
+      <tr><td><code>ease-in-out</code></td><td><code>transition-timing-function: ease-in-out</code></td></tr>
+      <tr><td><code>scale-95</code></td><td><code>transform: scale(0.95)</code></td></tr>
+      <tr><td><code>translate-x-2</code></td><td><code>transform: translateX(0.5rem)</code></td></tr>
+      <tr><td><code>rotate-45</code></td><td><code>transform: rotate(45deg)</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== COMMON PATTERNS ===== -->
+  <h2>Putting It All Together</h2>
+
+<pre><code><span class="cm">{/* Full-height app layout */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"min-h-screen bg-gray-950 text-gray-100"</span><span class="tag">&gt;</span>
+
+  <span class="cm">{/* Navbar */}</span>
+  <span class="tag">&lt;nav</span> <span class="attr">className</span>=<span class="str">"flex items-center justify-between px-6 py-4 border-b border-gray-800"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;span</span> <span class="attr">className</span>=<span class="str">"text-xl font-bold"</span><span class="tag">&gt;</span>MyApp<span class="tag">&lt;/span&gt;</span>
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"flex gap-4 text-sm text-gray-400"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="str">"#"</span> <span class="attr">className</span>=<span class="str">"hover:text-white transition-colors"</span><span class="tag">&gt;</span>Home<span class="tag">&lt;/a&gt;</span>
+      <span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="str">"#"</span> <span class="attr">className</span>=<span class="str">"hover:text-white transition-colors"</span><span class="tag">&gt;</span>About<span class="tag">&lt;/a&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;/nav&gt;</span>
+
+  <span class="cm">{/* Content container */}</span>
+  <span class="tag">&lt;main</span> <span class="attr">className</span>=<span class="str">"max-w-4xl mx-auto px-6 py-12"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;h1</span> <span class="attr">className</span>=<span class="str">"text-3xl font-bold mb-6"</span><span class="tag">&gt;</span>Dashboard<span class="tag">&lt;/h1&gt;</span>
+
+    <span class="cm">{/* Responsive card grid */}</span>
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"bg-gray-900 rounded-xl p-6 border border-gray-800"</span><span class="tag">&gt;</span>
+        <span class="tag">&lt;h2</span> <span class="attr">className</span>=<span class="str">"text-lg font-semibold mb-2"</span><span class="tag">&gt;</span>Users<span class="tag">&lt;/h2&gt;</span>
+        <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"text-4xl font-bold text-blue-400"</span><span class="tag">&gt;</span>1,234<span class="tag">&lt;/p&gt;</span>
+        <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"text-sm text-gray-500 mt-1"</span><span class="tag">&gt;</span>+12% from last week<span class="tag">&lt;/p&gt;</span>
+      <span class="tag">&lt;/div&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;/main&gt;</span>
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <div class="tip">
+    <strong>Learning approach:</strong> You don't need to memorize all of these. Install the VS Code IntelliSense extension, keep this page open as a reference, and build things. The classes will become second nature after a few projects.
+  </div>
+
+</body>
+</html>

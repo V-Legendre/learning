@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 — Conditional Rendering</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>07 — Conditional Rendering</h1>
+  <p class="subtitle">All the ways to show, hide, and switch UI based on state. In Python you have <code>if/else</code> and ternaries — React has the same tools, but inside JSX.</p>
+
+  <!-- ===== EARLY RETURN ===== -->
+  <h2>Early Return</h2>
+
+  <p>Check conditions at the <strong>top of your component</strong> and return early. The most readable pattern when a component has preconditions (loading, error, empty state) before showing the main UI.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python: Early return in a function</div>
+      <div class="comp-body">
+<pre><code><span class="kw">def</span> <span class="fn">get_user_display</span>(user: <span class="type">User</span> | <span class="kw">None</span>) -> <span class="type">str</span>:
+    <span class="kw">if</span> user <span class="kw">is None</span>:
+        <span class="kw">return</span> <span class="str">"Loading..."</span>
+    <span class="kw">if not</span> user.is_active:
+        <span class="kw">return</span> <span class="str">"Account disabled"</span>
+    <span class="kw">return</span> <span class="str">f"Welcome, {user.name}"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React: Early return in a component</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">UserProfile</span> = ({ user }: <span class="type">Props</span>) =&gt; {
+  <span class="kw">if</span> (!user) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+  <span class="kw">if</span> (!user.isActive) <span class="kw">return</span> <span class="tag">&lt;Disabled /&gt;</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>{user.name}<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{user.email}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best for:</strong> Loading states, error states, auth guards, empty data checks. Keep the "happy path" at the bottom of the function, unindented.
+  </div>
+
+  <!-- ===== && OPERATOR ===== -->
+  <h2><code>&&</code> Operator (Logical AND)</h2>
+
+  <p>Render something <strong>or nothing</strong>. If the left side is truthy, React renders the right side. If falsy, React skips it.</p>
+
+  <div class="panel">
+    <div class="panel-title">Basic usage</div>
+<pre><code><span class="kw">const</span> <span class="fn">Notification</span> = ({ count }: { count: <span class="type">number</span> }) =&gt; (
+  <span class="tag">&lt;div&gt;</span>
+    <span class="tag">&lt;h1&gt;</span>Dashboard<span class="tag">&lt;/h1&gt;</span>
+    {count &gt; <span class="num">0</span> &amp;&amp; (
+      <span class="tag">&lt;span</span> <span class="attr">className</span>=<span class="str">"badge"</span><span class="tag">&gt;</span>{count} new<span class="tag">&lt;/span&gt;</span>
+    )}
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>GOTCHA: The zero trap.</strong> JavaScript's <code>&&</code> returns the first falsy value, not <code>true</code>/<code>false</code>. React renders <code>0</code> and <code>NaN</code> as text. This is the single most common conditional rendering bug.
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bug: Renders "0" on screen</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// When count is 0:</span>
+<span class="cm">// 0 && &lt;Badge /&gt; evaluates to 0</span>
+<span class="cm">// React renders the number 0!</span>
+
+{count &amp;&amp; <span class="tag">&lt;Badge</span> <span class="attr">count</span>={count} <span class="tag">/&gt;</span>}
+
+<span class="cm">// User sees: "0" in the DOM</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Fix: Use boolean expression</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// count &gt; 0 is always a boolean</span>
+<span class="cm">// false && anything => nothing rendered</span>
+
+{count &gt; <span class="num">0</span> &amp;&amp; <span class="tag">&lt;Badge</span> <span class="attr">count</span>={count} <span class="tag">/&gt;</span>}
+
+<span class="cm">// Or use Boolean():</span>
+{<span class="fn">Boolean</span>(count) &amp;&amp; <span class="tag">&lt;Badge</span> <span class="attr">count</span>={count} <span class="tag">/&gt;</span>}
+
+<span class="cm">// Or double negation:</span>
+{!!count &amp;&amp; <span class="tag">&lt;Badge</span> <span class="attr">count</span>={count} <span class="tag">/&gt;</span>}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Falsy values in JavaScript — which ones React renders</div>
+    <table>
+      <thead>
+        <tr><th>Falsy value</th><th>Rendered by React?</th><th>What appears</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>false</code></td><td>No</td><td>Nothing</td></tr>
+        <tr><td><code>null</code></td><td>No</td><td>Nothing</td></tr>
+        <tr><td><code>undefined</code></td><td>No</td><td>Nothing</td></tr>
+        <tr><td><code>""</code> (empty string)</td><td>No</td><td>Nothing</td></tr>
+        <tr><td><code>0</code></td><td><strong>YES</strong></td><td>"0" text</td></tr>
+        <tr><td><code>NaN</code></td><td><strong>YES</strong></td><td>"NaN" text</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== TERNARY ===== -->
+  <h2>Ternary Operator</h2>
+
+  <p>Render <strong>one thing OR another</strong>. The either/or pattern. Works inline in JSX.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python ternary</div>
+      <div class="comp-body">
+<pre><code>label = <span class="str">"Admin"</span> <span class="kw">if</span> user.is_admin <span class="kw">else</span> <span class="str">"User"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">JSX ternary</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;span&gt;</span>{user.isAdmin ? <span class="str">"Admin"</span> : <span class="str">"User"</span>}<span class="tag">&lt;/span&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Common pattern: Loading vs Content</div>
+<pre><code><span class="kw">const</span> <span class="fn">Dashboard</span> = () =&gt; {
+  <span class="kw">const</span> { data, isLoading } = <span class="fn">useQuery</span>({ queryKey: [<span class="str">"stats"</span>], queryFn: fetchStats })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>Dashboard<span class="tag">&lt;/h1&gt;</span>
+      {isLoading ? (
+        <span class="tag">&lt;Skeleton</span> <span class="attr">lines</span>={<span class="num">5</span>} <span class="tag">/&gt;</span>
+      ) : (
+        <span class="tag">&lt;StatsTable</span> <span class="attr">data</span>={data} <span class="tag">/&gt;</span>
+      )}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Avoid nested ternaries.</strong> They're hard to read. If you have more than 2 branches, use early returns or the object lookup pattern (below).
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Nested ternaries</div>
+      <div class="comp-body">
+<pre><code>{status === <span class="str">"loading"</span>
+  ? <span class="tag">&lt;Spinner /&gt;</span>
+  : status === <span class="str">"error"</span>
+    ? <span class="tag">&lt;Error /&gt;</span>
+    : status === <span class="str">"empty"</span>
+      ? <span class="tag">&lt;Empty /&gt;</span>
+      : <span class="tag">&lt;Content /&gt;</span>}
+
+<span class="cm">// Unreadable. Don't do this.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Use alternatives</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Option 1: Early returns (top of component)</span>
+<span class="kw">if</span> (status === <span class="str">"loading"</span>) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+<span class="kw">if</span> (status === <span class="str">"error"</span>) <span class="kw">return</span> <span class="tag">&lt;Error /&gt;</span>
+<span class="kw">if</span> (status === <span class="str">"empty"</span>) <span class="kw">return</span> <span class="tag">&lt;Empty /&gt;</span>
+<span class="kw">return</span> <span class="tag">&lt;Content /&gt;</span>
+
+<span class="cm">// Option 2: Object lookup (next section)</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== OBJECT LOOKUP / SWITCH ===== -->
+  <h2>Object Lookup / Switch Pattern</h2>
+
+  <p>Map a value to a component using an object or <code>switch</code>. Much cleaner than nested ternaries when you have multiple branches. This is the <strong>React equivalent of Python's match/case</strong>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python match/case</div>
+      <div class="comp-body">
+<pre><code><span class="kw">match</span> status:
+    <span class="kw">case</span> <span class="str">"loading"</span>:
+        <span class="kw">return</span> <span class="fn">render_spinner</span>()
+    <span class="kw">case</span> <span class="str">"error"</span>:
+        <span class="kw">return</span> <span class="fn">render_error</span>(msg)
+    <span class="kw">case</span> <span class="str">"success"</span>:
+        <span class="kw">return</span> <span class="fn">render_data</span>(data)
+    <span class="kw">case</span> _:
+        <span class="kw">return</span> <span class="fn">render_empty</span>()</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React: Object lookup</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> statusMap: <span class="type">Record</span>&lt;<span class="type">Status</span>, <span class="type">React.ReactNode</span>&gt; = {
+  loading: <span class="tag">&lt;Spinner /&gt;</span>,
+  error: <span class="tag">&lt;ErrorBanner</span> <span class="attr">message</span>={msg} <span class="tag">/&gt;</span>,
+  success: <span class="tag">&lt;DataTable</span> <span class="attr">data</span>={data} <span class="tag">/&gt;</span>,
+  empty: <span class="tag">&lt;EmptyState /&gt;</span>,
+}
+
+<span class="kw">return</span> <span class="tag">&lt;div&gt;</span>{statusMap[status]}<span class="tag">&lt;/div&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Real example: Status badge with object lookup</div>
+<pre><code><span class="kw">type</span> <span class="type">OrderStatus</span> = <span class="str">"pending"</span> | <span class="str">"processing"</span> | <span class="str">"shipped"</span> | <span class="str">"delivered"</span> | <span class="str">"cancelled"</span>
+
+<span class="kw">const</span> statusConfig: <span class="type">Record</span>&lt;<span class="type">OrderStatus</span>, { label: <span class="type">string</span>; color: <span class="type">string</span> }&gt; = {
+  pending:    { label: <span class="str">"Pending"</span>,    color: <span class="str">"gray"</span> },
+  processing: { label: <span class="str">"Processing"</span>, color: <span class="str">"blue"</span> },
+  shipped:    { label: <span class="str">"Shipped"</span>,    color: <span class="str">"orange"</span> },
+  delivered:  { label: <span class="str">"Delivered"</span>,  color: <span class="str">"green"</span> },
+  cancelled:  { label: <span class="str">"Cancelled"</span>,  color: <span class="str">"red"</span> },
+}
+
+<span class="kw">const</span> <span class="fn">StatusBadge</span> = ({ status }: { status: <span class="type">OrderStatus</span> }) =&gt; {
+  <span class="kw">const</span> { label, color } = statusConfig[status]
+  <span class="kw">return</span> <span class="tag">&lt;span</span> <span class="attr">className</span>={<span class="str">`badge badge--</span>${color}<span class="str">`</span>}<span class="tag">&gt;</span>{label}<span class="tag">&lt;/span&gt;</span>
+}</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>TypeScript bonus:</strong> Using <code>Record&lt;Status, ...&gt;</code> ensures you handle every variant. If you add a new status to the union, TypeScript will error until you add it to the map. Exhaustiveness checking for free.
+  </div>
+
+  <!-- ===== LOADING / ERROR / SUCCESS ===== -->
+  <h2>Loading / Error / Success Pattern</h2>
+
+  <p>The most common real-world pattern. Almost every data-driven component goes through these three states. TanStack Query gives you this pattern built-in.</p>
+
+  <div class="panel">
+    <div class="panel-title">With TanStack Query (the standard approach)</div>
+<pre><code><span class="kw">const</span> <span class="fn">UserList</span> = () =&gt; {
+  <span class="kw">const</span> { data, isLoading, isError, error } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"users"</span>],
+    queryFn: <span class="fn">fetchUsers</span>,
+  })
+
+  <span class="cm">// Early returns for each state</span>
+  <span class="kw">if</span> (isLoading) <span class="kw">return</span> <span class="tag">&lt;UserListSkeleton /&gt;</span>
+  <span class="kw">if</span> (isError) <span class="kw">return</span> <span class="tag">&lt;ErrorMessage</span> <span class="attr">error</span>={error} <span class="tag">/&gt;</span>
+  <span class="kw">if</span> (data.length === <span class="num">0</span>) <span class="kw">return</span> <span class="tag">&lt;EmptyState</span> <span class="attr">message</span>=<span class="str">"No users found"</span> <span class="tag">/&gt;</span>
+
+  <span class="cm">// Happy path: we have data</span>
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {data.<span class="fn">map</span>(user =&gt; (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>{user.name}<span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like a standard API handler pattern: <code>try/except/else</code>. First check for loading (pending), then errors (except), then handle the success case (else).
+  </div>
+
+  <!-- ===== NULL TO RENDER NOTHING ===== -->
+  <h2>Returning <code>null</code></h2>
+
+  <p>A component can return <code>null</code> to render absolutely nothing. The component still exists in the tree and its hooks still run — it just produces no DOM output.</p>
+
+<pre><code><span class="kw">const</span> <span class="fn">AdminBanner</span> = ({ user }: { user: <span class="type">User</span> }) =&gt; {
+  <span class="kw">if</span> (!user.isAdmin) <span class="kw">return null</span>   <span class="cm">// renders nothing</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"admin-banner"</span><span class="tag">&gt;</span>
+      You have admin privileges
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="warn">
+    <strong>Important:</strong> Returning <code>null</code> doesn't unmount the component. Hooks still execute. If you want to completely remove a component (and its hooks), conditionally render it from the <em>parent</em>: <code>{isAdmin && &lt;AdminBanner /&gt;}</code>.
+  </div>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>Which Approach When?</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>Syntax</th><th>Best For</th><th>Watch Out</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Early return</strong></td>
+        <td><code>if (...) return &lt;X /&gt;</code></td>
+        <td>Preconditions: loading, error, auth guards</td>
+        <td>Only works at top level of component, not inside JSX</td>
+      </tr>
+      <tr>
+        <td><strong><code>&&</code></strong></td>
+        <td><code>{flag && &lt;X /&gt;}</code></td>
+        <td>Show or hide a single element</td>
+        <td><code>0</code> and <code>NaN</code> render as text. Use <code>boolean &&</code></td>
+      </tr>
+      <tr>
+        <td><strong>Ternary</strong></td>
+        <td><code>{flag ? &lt;A /&gt; : &lt;B /&gt;}</code></td>
+        <td>Either/or within JSX</td>
+        <td>Don't nest. Max one level deep</td>
+      </tr>
+      <tr>
+        <td><strong>Object lookup</strong></td>
+        <td><code>{map[key]}</code></td>
+        <td>Multiple branches based on a string/enum</td>
+        <td>Define outside the component or memoize</td>
+      </tr>
+      <tr>
+        <td><strong><code>null</code></strong></td>
+        <td><code>return null</code></td>
+        <td>Component decides itself to render nothing</td>
+        <td>Hooks still run. Not the same as unmounting</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== REAL-WORLD EXAMPLE ===== -->
+  <h2>Putting It All Together</h2>
+
+  <div class="panel">
+    <div class="panel-title">Real-world component using multiple patterns</div>
+<pre><code><span class="kw">type</span> <span class="type">Props</span> = {
+  userId: <span class="type">string</span>
+  showActions?: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserProfile</span> = ({ userId, showActions = <span class="kw">true</span> }: <span class="type">Props</span>) =&gt; {
+  <span class="kw">const</span> { data: user, isLoading, isError, error } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"user"</span>, userId],
+    queryFn: () =&gt; <span class="fn">fetchUser</span>(userId),
+  })
+
+  <span class="cm">// Early return: loading state</span>
+  <span class="kw">if</span> (isLoading) <span class="kw">return</span> <span class="tag">&lt;ProfileSkeleton /&gt;</span>
+
+  <span class="cm">// Early return: error state</span>
+  <span class="kw">if</span> (isError) <span class="kw">return</span> <span class="tag">&lt;Alert</span> <span class="attr">variant</span>=<span class="str">"error"</span><span class="tag">&gt;</span>{error.message}<span class="tag">&lt;/Alert&gt;</span>
+
+  <span class="cm">// Object lookup: role badge</span>
+  <span class="kw">const</span> roleBadge: <span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">string</span>&gt; = {
+    admin: <span class="str">"bg-red"</span>,
+    editor: <span class="str">"bg-blue"</span>,
+    viewer: <span class="str">"bg-gray"</span>,
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"profile"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>{user.name}<span class="tag">&lt;/h2&gt;</span>
+
+      <span class="cm">{/* Ternary: verified vs unverified */}</span>
+      <span class="tag">&lt;span&gt;</span>{user.verified ? <span class="str">"Verified"</span> : <span class="str">"Unverified"</span>}<span class="tag">&lt;/span&gt;</span>
+
+      <span class="cm">{/* Object lookup */}</span>
+      <span class="tag">&lt;span</span> <span class="attr">className</span>={roleBadge[user.role]}<span class="tag">&gt;</span>{user.role}<span class="tag">&lt;/span&gt;</span>
+
+      <span class="cm">{/* && operator: optional section */}</span>
+      {user.bio &amp;&amp; <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"bio"</span><span class="tag">&gt;</span>{user.bio}<span class="tag">&lt;/p&gt;</span>}
+
+      <span class="cm">{/* && with boolean prop */}</span>
+      {showActions &amp;&amp; (
+        <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"actions"</span><span class="tag">&gt;</span>
+          <span class="tag">&lt;Button&gt;</span>Message<span class="tag">&lt;/Button&gt;</span>
+          <span class="tag">&lt;Button&gt;</span>Follow<span class="tag">&lt;/Button&gt;</span>
+        <span class="tag">&lt;/div&gt;</span>
+      )}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Readability rule:</strong> If your conditional rendering logic makes the JSX hard to scan, extract it into a variable or a sub-component above the <code>return</code> statement. Keep the JSX tree clean and declarative.
+  </div>
+
+</body>
+</html>

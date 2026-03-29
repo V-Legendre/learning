@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 — Routes &amp; Navigation</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>09 — Routes &amp; Navigation</h1>
+  <p class="subtitle">Defining routes, type-safe links, URL params, search params with Zod, nested layouts, and programmatic navigation.</p>
+
+  <!-- ===== ROUTE DEFINITIONS ===== -->
+  <h2>Route Definitions</h2>
+
+  <p>Every route file exports a <code>Route</code> object created with <code>createFileRoute</code>. The string you pass matches the file's position in the <code>src/routes/</code> tree. The Vite plugin auto-generates this string, so you get a compile error if the path doesn't match.</p>
+
+<pre><code><span class="cm">// src/routes/users/index.tsx</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/'</span>)({
+  <span class="prop">component</span>: <span class="fn">UsersPage</span>,
+})
+
+<span class="kw">function</span> <span class="fn">UsersPage</span>() {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>All Users<span class="tag">&lt;/h1&gt;</span>
+      <span class="cm">{/* user list here */}</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Route options (what you can pass to <code>createFileRoute</code>)</div>
+    <table>
+      <thead>
+        <tr><th>Option</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>component</code></td><td>The React component to render</td></tr>
+        <tr><td><code>loader</code></td><td>Fetch data before rendering (covered in data-loading.html)</td></tr>
+        <tr><td><code>validateSearch</code></td><td>Zod schema for search/query params</td></tr>
+        <tr><td><code>beforeLoad</code></td><td>Guard: runs before loader (auth checks)</td></tr>
+        <tr><td><code>errorComponent</code></td><td>Rendered when loader/component throws</td></tr>
+        <tr><td><code>pendingComponent</code></td><td>Rendered while loader is pending</td></tr>
+        <tr><td><code>notFoundComponent</code></td><td>Rendered for 404s within this route</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== LINK COMPONENT ===== -->
+  <h2>The <code>&lt;Link&gt;</code> Component</h2>
+
+  <p>Never use <code>&lt;a href="..."&gt;</code> for internal navigation. That would trigger a full page reload, losing all React state. Use <code>&lt;Link&gt;</code> instead — it intercepts the click, updates the URL via the History API, and lets React handle the transition.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Wrong: HTML anchor</div>
+      <div class="comp-body">
+<pre><code><span class="cm">&lt;!-- Full page reload! --&gt;</span>
+<span class="cm">&lt;!-- All React state lost --&gt;</span>
+<span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="str">"/users/42"</span><span class="tag">&gt;</span>View User<span class="tag">&lt;/a&gt;</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Correct: Link component</div>
+      <div class="comp-body">
+<pre><code><span class="cm">{/* SPA navigation */}</span>
+<span class="cm">{/* Type-safe: TS errors if path invalid */}</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users/$userId"</span>
+  <span class="attr">params</span>={{ <span class="prop">userId</span>: <span class="str">'42'</span> }}
+<span class="tag">&gt;</span>
+  View User
+<span class="tag">&lt;/Link&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Link examples</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">Link</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="cm">// Static route — simple</span>
+<span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/"</span><span class="tag">&gt;</span>Home<span class="tag">&lt;/Link&gt;</span>
+<span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/about"</span><span class="tag">&gt;</span>About<span class="tag">&lt;/Link&gt;</span>
+
+<span class="cm">// Dynamic route — must provide params</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users/$userId"</span>
+  <span class="attr">params</span>={{ <span class="prop">userId</span>: <span class="str">'42'</span> }}
+<span class="tag">&gt;</span>
+  View Profile
+<span class="tag">&lt;/Link&gt;</span>
+
+<span class="cm">// With search params (query string)</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users"</span>
+  <span class="attr">search</span>={{ <span class="prop">page</span>: <span class="num">2</span>, <span class="prop">sort</span>: <span class="str">'name'</span> }}
+<span class="tag">&gt;</span>
+  Page 2
+<span class="tag">&lt;/Link&gt;</span>
+<span class="cm">{/* Renders as: /users?page=2&sort=name */}</span>
+
+<span class="cm">// With hash</span>
+<span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/docs"</span> <span class="attr">hash</span>=<span class="str">"installation"</span><span class="tag">&gt;</span>Jump to Install<span class="tag">&lt;/Link&gt;</span></code></pre>
+
+  <div class="tip">
+    <strong>Type safety in action:</strong> If you write <code>&lt;Link to="/users/$userId"&gt;</code> without the <code>params</code> prop, TypeScript will error. If you write <code>params={{ usrId: '42' }}</code> (typo), TypeScript will error. The router knows every valid route and its expected params.
+  </div>
+
+  <!-- ===== URL PARAMS ===== -->
+  <h2>URL Params (Dynamic Segments)</h2>
+
+  <p>Dynamic segments are the <code>$paramName</code> parts in your route path. They capture a variable portion of the URL.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Flask</div>
+      <div class="comp-body">
+<pre><code><span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/users/&lt;user_id&gt;"</span>)
+<span class="kw">def</span> <span class="fn">user</span>(user_id: <span class="type">str</span>):
+    <span class="cm"># user_id comes from the URL</span>
+    <span class="kw">return</span> <span class="fn">get_user</span>(user_id)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// src/routes/users/$userId.tsx</span>
+<span class="cm">// File name IS the param</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(
+  <span class="str">'/users/$userId'</span>
+)({
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Accessing params with <code>useParams()</code></h3>
+
+<pre><code><span class="cm">// Inside the route component:</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">useParams</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/$userId'</span>)({
+  <span class="prop">component</span>: <span class="fn">UserDetail</span>,
+})
+
+<span class="kw">function</span> <span class="fn">UserDetail</span>() {
+  <span class="cm">// Fully typed! TypeScript knows userId is a string.</span>
+  <span class="kw">const</span> { userId } = <span class="fn">Route</span>.<span class="fn">useParams</span>()
+
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>User: {userId}<span class="tag">&lt;/h1&gt;</span>
+}
+
+<span class="cm">// URL: /users/42</span>
+<span class="cm">// userId === "42"  (always a string, just like Flask)</span></code></pre>
+
+  <div class="note">
+    <strong>Params are always strings.</strong> Just like Flask/FastAPI path params, URL segments are strings. If you need a number, parse it: <code>Number(userId)</code> or validate in the loader.
+  </div>
+
+  <!-- ===== SEARCH PARAMS WITH ZOD ===== -->
+  <h2>Search Params with Zod</h2>
+
+  <p>Search params are the <code>?key=value</code> portion of the URL. In most frameworks, these are untyped strings. TanStack Router lets you validate and type them with Zod — your schema defines the shape, defaults, and types.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">FastAPI (Pydantic)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> fastapi <span class="kw">import</span> Query
+
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/users"</span>)
+<span class="kw">def</span> <span class="fn">list_users</span>(
+    page: <span class="type">int</span> = Query(<span class="num">1</span>),
+    sort: <span class="type">str</span> = Query(<span class="str">"name"</span>),
+):
+    <span class="cm"># Validated &amp; typed!</span>
+    ...</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router (Zod)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="kw">const</span> searchSchema = z.<span class="fn">object</span>({
+  <span class="prop">page</span>: z.<span class="fn">number</span>().<span class="fn">default</span>(<span class="num">1</span>),
+  <span class="prop">sort</span>: z.<span class="fn">string</span>().<span class="fn">default</span>(<span class="str">'name'</span>),
+})
+
+<span class="cm">// Validated &amp; typed!</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Full search params example</h3>
+
+<pre><code><span class="cm">// src/routes/users/index.tsx</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="kw">const</span> usersSearchSchema = z.<span class="fn">object</span>({
+  <span class="prop">page</span>: z.<span class="fn">number</span>().<span class="fn">catch</span>(<span class="num">1</span>),           <span class="cm">// default 1, ignore bad values</span>
+  <span class="prop">sort</span>: z.<span class="fn">enum</span>([<span class="str">'name'</span>, <span class="str">'date'</span>]).<span class="fn">catch</span>(<span class="str">'name'</span>),
+  <span class="prop">filter</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),       <span class="cm">// not required</span>
+})
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/users/'</span>)({
+  <span class="prop">validateSearch</span>: usersSearchSchema,     <span class="cm">// &lt;-- Zod schema here</span>
+  <span class="prop">component</span>: <span class="fn">UsersPage</span>,
+})
+
+<span class="kw">function</span> <span class="fn">UsersPage</span>() {
+  <span class="cm">// Fully typed! { page: number, sort: 'name' | 'date', filter?: string }</span>
+  <span class="kw">const</span> { page, sort, filter } = <span class="fn">Route</span>.<span class="fn">useSearch</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;p&gt;</span>Page: {page}, Sort: {sort}<span class="tag">&lt;/p&gt;</span>
+      {filter &amp;&amp; <span class="tag">&lt;p&gt;</span>Filtering by: {filter}<span class="tag">&lt;/p&gt;</span>}
+
+      <span class="cm">{/* Links update search params */}</span>
+      <span class="tag">&lt;Link</span>
+        <span class="attr">to</span>=<span class="str">"/users"</span>
+        <span class="attr">search</span>={(prev) =&gt; ({ ...prev, <span class="prop">page</span>: prev.page + <span class="num">1</span> })}
+      <span class="tag">&gt;</span>
+        Next Page
+      <span class="tag">&lt;/Link&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Why <code>.catch()</code> instead of <code>.default()</code>?</strong> In search params, <code>.catch(defaultValue)</code> silently uses the default if the URL value is invalid (e.g., <code>?page=abc</code>). <code>.default()</code> only applies when the key is missing. Use <code>.catch()</code> for search params — it's more resilient to user-edited URLs.
+  </div>
+
+  <!-- ===== NESTED LAYOUTS ===== -->
+  <h2>Nested Layouts</h2>
+
+  <p>Layouts let you share UI (navigation, sidebars, headers) across multiple routes. Child routes render inside the parent's <code>&lt;Outlet /&gt;</code>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Jinja2 template inheritance</div>
+      <div class="comp-body">
+<pre><code><span class="cm">{# base.html #}</span>
+<span class="tag">&lt;nav&gt;</span>...<span class="tag">&lt;/nav&gt;</span>
+{% block content %}{% endblock %}
+<span class="tag">&lt;footer&gt;</span>...<span class="tag">&lt;/footer&gt;</span>
+
+<span class="cm">{# users.html #}</span>
+{% extends "base.html" %}
+{% block content %}
+  <span class="tag">&lt;h1&gt;</span>Users<span class="tag">&lt;/h1&gt;</span>
+{% endblock %}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">TanStack Router layouts</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// __root.tsx (parent)</span>
+<span class="tag">&lt;nav&gt;</span>...<span class="tag">&lt;/nav&gt;</span>
+<span class="tag">&lt;Outlet /&gt;</span>  <span class="cm">{/* child here */}</span>
+<span class="tag">&lt;footer&gt;</span>...<span class="tag">&lt;/footer&gt;</span>
+
+<span class="cm">// routes/users.tsx renders</span>
+<span class="cm">// inside that Outlet</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Layout route example</h3>
+
+<pre><code><span class="cm">// src/routes/dashboard.tsx — This is BOTH a layout AND a route</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">Outlet</span>, <span class="fn">Link</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/dashboard'</span>)({
+  <span class="prop">component</span>: <span class="fn">DashboardLayout</span>,
+})
+
+<span class="kw">function</span> <span class="fn">DashboardLayout</span>() {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">style</span>={{ <span class="prop">display</span>: <span class="str">'flex'</span> }}<span class="tag">&gt;</span>
+      <span class="tag">&lt;aside&gt;</span>
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/dashboard/analytics"</span><span class="tag">&gt;</span>Analytics<span class="tag">&lt;/Link&gt;</span>
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/dashboard/settings"</span><span class="tag">&gt;</span>Settings<span class="tag">&lt;/Link&gt;</span>
+      <span class="tag">&lt;/aside&gt;</span>
+      <span class="tag">&lt;main&gt;</span>
+        <span class="tag">&lt;Outlet /&gt;</span>  <span class="cm">{/* analytics or settings renders here */}</span>
+      <span class="tag">&lt;/main&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="cm">// src/routes/dashboard/analytics.tsx</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/dashboard/analytics'</span>)({
+  <span class="prop">component</span>: () =&gt; <span class="tag">&lt;h2&gt;</span>Analytics<span class="tag">&lt;/h2&gt;</span>,
+})
+
+<span class="cm">// src/routes/dashboard/settings.tsx</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/dashboard/settings'</span>)({
+  <span class="prop">component</span>: () =&gt; <span class="tag">&lt;h2&gt;</span>Settings<span class="tag">&lt;/h2&gt;</span>,
+})</code></pre>
+
+  <h3>Pathless layouts (<code>_layout</code> prefix)</h3>
+
+  <p>Sometimes you want a layout that groups routes without adding a URL segment. Prefix the file/folder with <code>_</code>:</p>
+
+<pre><code><span class="cm">// File: src/routes/_authenticated.tsx</span>
+<span class="cm">// This does NOT add "/authenticated" to the URL</span>
+<span class="cm">// It just wraps child routes in a shared layout</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/_authenticated'</span>)({
+  <span class="prop">component</span>: () =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;AuthHeader /&gt;</span>
+      <span class="tag">&lt;Outlet /&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+})
+
+<span class="cm">// src/routes/_authenticated/dashboard.tsx  →  URL: /dashboard</span>
+<span class="cm">// src/routes/_authenticated/settings.tsx   →  URL: /settings</span></code></pre>
+
+  <!-- ===== PROGRAMMATIC NAVIGATION ===== -->
+  <h2>Programmatic Navigation</h2>
+
+  <p>Sometimes you need to navigate in response to an event (form submit, button click, after an API call) rather than a link click. Use <code>useNavigate()</code>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Flask (redirect)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> flask <span class="kw">import</span> redirect
+
+<span class="kw">@app</span>.<span class="fn">post</span>(<span class="str">"/login"</span>)
+<span class="kw">def</span> <span class="fn">login</span>():
+    <span class="cm"># After auth...</span>
+    <span class="kw">return</span> <span class="fn">redirect</span>(<span class="str">"/dashboard"</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> navigate = <span class="fn">useNavigate</span>()
+
+<span class="kw">const</span> <span class="fn">handleLogin</span> = <span class="kw">async</span> () =&gt; {
+  <span class="kw">await</span> <span class="fn">login</span>(credentials)
+  <span class="fn">navigate</span>({ <span class="prop">to</span>: <span class="str">'/dashboard'</span> })
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3><code>useNavigate()</code> examples</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useNavigate</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">function</span> <span class="fn">CreateUserForm</span>() {
+  <span class="kw">const</span> navigate = <span class="fn">useNavigate</span>()
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = <span class="kw">async</span> (data: <span class="type">FormData</span>) =&gt; {
+    <span class="kw">const</span> user = <span class="kw">await</span> <span class="fn">createUser</span>(data)
+
+    <span class="cm">// Navigate to the new user's page</span>
+    <span class="fn">navigate</span>({
+      <span class="prop">to</span>: <span class="str">'/users/$userId'</span>,
+      <span class="prop">params</span>: { <span class="prop">userId</span>: user.id },
+    })
+  }
+
+  <span class="cm">// Navigate with search params</span>
+  <span class="kw">const</span> <span class="fn">goToPage</span> = (page: <span class="type">number</span>) =&gt; {
+    <span class="fn">navigate</span>({
+      <span class="prop">to</span>: <span class="str">'/users'</span>,
+      <span class="prop">search</span>: { <span class="prop">page</span> },
+    })
+  }
+
+  <span class="cm">// Replace history (back button skips this page)</span>
+  <span class="fn">navigate</span>({
+    <span class="prop">to</span>: <span class="str">'/dashboard'</span>,
+    <span class="prop">replace</span>: <span class="kw">true</span>,  <span class="cm">// like Flask's redirect with 302 vs 301</span>
+  })
+}</code></pre>
+
+  <!-- ===== ACTIVE LINKS ===== -->
+  <h2>Active Links</h2>
+
+  <p>Style the currently active navigation link so users know where they are. <code>&lt;Link&gt;</code> supports <code>activeProps</code> and <code>activeOptions</code>.</p>
+
+<pre><code><span class="cm">// Active link with inline styles</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users"</span>
+  <span class="attr">activeProps</span>={{
+    <span class="prop">style</span>: { <span class="prop">fontWeight</span>: <span class="str">'bold'</span>, <span class="prop">color</span>: <span class="str">'#e94560'</span> },
+  }}
+<span class="tag">&gt;</span>
+  Users
+<span class="tag">&lt;/Link&gt;</span>
+
+<span class="cm">// Active link with CSS class</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users"</span>
+  <span class="attr">activeProps</span>={{ <span class="prop">className</span>: <span class="str">'nav-active'</span> }}
+  <span class="attr">inactiveProps</span>={{ <span class="prop">className</span>: <span class="str">'nav-link'</span> }}
+<span class="tag">&gt;</span>
+  Users
+<span class="tag">&lt;/Link&gt;</span>
+
+<span class="cm">// Exact matching (default: true for index routes)</span>
+<span class="tag">&lt;Link</span>
+  <span class="attr">to</span>=<span class="str">"/users"</span>
+  <span class="attr">activeOptions</span>={{
+    <span class="prop">exact</span>: <span class="kw">true</span>,            <span class="cm">// only /users, not /users/42</span>
+    <span class="prop">includeSearch</span>: <span class="kw">false</span>,   <span class="cm">// ignore search params for matching</span>
+  }}
+  <span class="attr">activeProps</span>={{ <span class="prop">className</span>: <span class="str">'active'</span> }}
+<span class="tag">&gt;</span>
+  Users
+<span class="tag">&lt;/Link&gt;</span></code></pre>
+
+  <h3>Building a nav bar</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">NavBar</span> = () =&gt; {
+  <span class="kw">const</span> links = [
+    { <span class="prop">to</span>: <span class="str">'/'</span>, <span class="prop">label</span>: <span class="str">'Home'</span> },
+    { <span class="prop">to</span>: <span class="str">'/users'</span>, <span class="prop">label</span>: <span class="str">'Users'</span> },
+    { <span class="prop">to</span>: <span class="str">'/about'</span>, <span class="prop">label</span>: <span class="str">'About'</span> },
+  ] <span class="kw">as const</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;nav&gt;</span>
+      {links.<span class="fn">map</span>((link) =&gt; (
+        <span class="tag">&lt;Link</span>
+          <span class="attr">key</span>={link.to}
+          <span class="attr">to</span>={link.to}
+          <span class="attr">activeProps</span>={{ <span class="prop">className</span>: <span class="str">'active'</span> }}
+          <span class="attr">activeOptions</span>={{ <span class="prop">exact</span>: link.to === <span class="str">'/'</span> }}
+        <span class="tag">&gt;</span>
+          {link.label}
+        <span class="tag">&lt;/Link&gt;</span>
+      ))}
+    <span class="tag">&lt;/nav&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== PUTTING IT TOGETHER ===== -->
+  <h2>Full Example: Blog App Routes</h2>
+
+  <div class="panel">
+    <div class="panel-title">Complete file structure</div>
+    <div class="file-tree">
+      <span class="dir">src/routes/</span><br>
+      &nbsp;&nbsp;<span class="highlight">__root.tsx</span>         &larr; Nav bar + &lt;Outlet /&gt;<br>
+      &nbsp;&nbsp;<span class="file">index.tsx</span>           &larr; <code>/</code> Home page<br>
+      &nbsp;&nbsp;<span class="dir">posts/</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.tsx</span>         &larr; <code>/posts</code> List with search params<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">$postId.tsx</span>       &larr; <code>/posts/:postId</code> Single post
+    </div>
+  </div>
+
+<pre><code><span class="cm">// src/routes/posts/index.tsx — List with pagination</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">Link</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+
+<span class="kw">const</span> searchSchema = z.<span class="fn">object</span>({
+  <span class="prop">page</span>: z.<span class="fn">number</span>().<span class="fn">catch</span>(<span class="num">1</span>),
+  <span class="prop">tag</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),
+})
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/posts/'</span>)({
+  <span class="prop">validateSearch</span>: searchSchema,
+  <span class="prop">component</span>: <span class="fn">PostList</span>,
+})
+
+<span class="kw">function</span> <span class="fn">PostList</span>() {
+  <span class="kw">const</span> { page, tag } = <span class="fn">Route</span>.<span class="fn">useSearch</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>Posts {tag &amp;&amp; <span class="tag">&lt;span&gt;</span>tagged: {tag}<span class="tag">&lt;/span&gt;</span>}<span class="tag">&lt;/h1&gt;</span>
+
+      <span class="cm">{/* Post list would go here */}</span>
+
+      <span class="tag">&lt;Link</span>
+        <span class="attr">to</span>=<span class="str">"/posts"</span>
+        <span class="attr">search</span>={(prev) =&gt; ({ ...prev, <span class="prop">page</span>: prev.page + <span class="num">1</span> })}
+      <span class="tag">&gt;</span>
+        Next &amp;rarr;
+      <span class="tag">&lt;/Link&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="cm">// src/routes/posts/$postId.tsx — Single post</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/posts/$postId'</span>)({
+  <span class="prop">component</span>: <span class="fn">PostDetail</span>,
+})
+
+<span class="kw">function</span> <span class="fn">PostDetail</span>() {
+  <span class="kw">const</span> { postId } = <span class="fn">Route</span>.<span class="fn">useParams</span>()
+  <span class="kw">const</span> navigate = <span class="fn">useNavigate</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;article&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>Post #{postId}<span class="tag">&lt;/h1&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">navigate</span>({ <span class="prop">to</span>: <span class="str">'/posts'</span> })}<span class="tag">&gt;</span>
+        &amp;larr; Back to list
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/article&gt;</span>
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>Key pattern:</strong> Use <code>Route.useParams()</code> and <code>Route.useSearch()</code> (called on the Route object) for the best type inference. The generic <code>useParams()</code> from the router package works too, but requires you to specify the route type manually.
+  </div>
+
+</body>
+</html>

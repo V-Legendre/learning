@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 — Component Composition</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>07 — Component Composition</h1>
+  <p class="subtitle">Building complex UIs by combining simple components. The React equivalent of Unix pipes — small, focused pieces that snap together.</p>
+
+  <!-- ===== CHILDREN PROP ===== -->
+  <h2>The <code>children</code> Prop</h2>
+
+  <p>The most fundamental composition pattern. Whatever you put <strong>between</strong> a component's opening and closing tags becomes its <code>children</code> prop. Type it as <code>React.ReactNode</code>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Context manager wraps arbitrary code</span>
+<span class="kw">with</span> <span class="fn">open_db_connection</span>() <span class="kw">as</span> conn:
+    <span class="cm"># anything goes here</span>
+    conn.<span class="fn">execute</span>(<span class="str">"SELECT ..."</span>)
+    conn.<span class="fn">execute</span>(<span class="str">"INSERT ..."</span>)
+
+<span class="cm"># The `with` block wraps content</span>
+<span class="cm"># without knowing what's inside.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React children</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Card wraps arbitrary content</span>
+<span class="tag">&lt;Card&gt;</span>
+  <span class="tag">&lt;h2&gt;</span>User Profile<span class="tag">&lt;/h2&gt;</span>
+  <span class="tag">&lt;p&gt;</span>Any content goes here<span class="tag">&lt;/p&gt;</span>
+  <span class="tag">&lt;Button&gt;</span>Edit<span class="tag">&lt;/Button&gt;</span>
+<span class="tag">&lt;/Card&gt;</span>
+
+<span class="cm">// Card doesn't know or care</span>
+<span class="cm">// what's inside it.</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Implementing the Card component</div>
+<pre><code><span class="kw">type</span> <span class="type">CardProps</span> = {
+  children: <span class="type">React.ReactNode</span>  <span class="cm">// accepts anything renderable</span>
+  variant?: <span class="str">"default"</span> | <span class="str">"outlined"</span>
+}
+
+<span class="kw">const</span> <span class="fn">Card</span> = ({ children, variant = <span class="str">"default"</span> }: <span class="type">CardProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="str">`card card--</span>${variant}<span class="str">`</span>}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>React.ReactNode</strong> is the broadest type for renderable content: strings, numbers, JSX elements, arrays of elements, <code>null</code>, <code>undefined</code>, booleans. Use this when you want to accept "anything React can render."
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Hardcoded content</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Rigid. Can only show title + description.</span>
+<span class="kw">type</span> <span class="type">CardProps</span> = {
+  title: <span class="type">string</span>
+  description: <span class="type">string</span>
+  buttonText: <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">Card</span> = ({ title, description, buttonText }: <span class="type">CardProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"card"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;h2&gt;</span>{title}<span class="tag">&lt;/h2&gt;</span>
+    <span class="tag">&lt;p&gt;</span>{description}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;button&gt;</span>{buttonText}<span class="tag">&lt;/button&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// What if I need an image? A list?</span>
+<span class="cm">// More props = more rigidity.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Composition with children</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Flexible. Card handles layout,</span>
+<span class="cm">// consumer decides content.</span>
+<span class="kw">type</span> <span class="type">CardProps</span> = {
+  children: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">const</span> <span class="fn">Card</span> = ({ children }: <span class="type">CardProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"card"</span><span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Now anything works:</span>
+<span class="tag">&lt;Card&gt;&lt;img</span> <span class="attr">src</span>=<span class="str">"..."</span> <span class="tag">/&gt;&lt;/Card&gt;</span>
+<span class="tag">&lt;Card&gt;&lt;UserProfile</span> <span class="tag">/&gt;&lt;/Card&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SLOTS VIA PROPS ===== -->
+  <h2>Slots via Props</h2>
+
+  <p>When you need <strong>multiple insertion points</strong>, pass JSX as named props. More explicit than <code>children</code> alone. Think of them as named slots in a template.</p>
+
+  <div class="panel">
+    <div class="panel-title">Page layout with named slots</div>
+<pre><code><span class="kw">type</span> <span class="type">PageLayoutProps</span> = {
+  header: <span class="type">React.ReactNode</span>
+  sidebar: <span class="type">React.ReactNode</span>
+  children: <span class="type">React.ReactNode</span>   <span class="cm">// main content</span>
+  footer?: <span class="type">React.ReactNode</span>   <span class="cm">// optional slot</span>
+}
+
+<span class="kw">const</span> <span class="fn">PageLayout</span> = ({ header, sidebar, children, footer }: <span class="type">PageLayoutProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"page"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;header&gt;</span>{header}<span class="tag">&lt;/header&gt;</span>
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"page__body"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;aside&gt;</span>{sidebar}<span class="tag">&lt;/aside&gt;</span>
+      <span class="tag">&lt;main&gt;</span>{children}<span class="tag">&lt;/main&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+    {footer &amp;&amp; <span class="tag">&lt;footer&gt;</span>{footer}<span class="tag">&lt;/footer&gt;</span>}
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+  </div>
+
+  <h3>Usage</h3>
+<pre><code><span class="tag">&lt;PageLayout</span>
+  <span class="attr">header</span>={<span class="tag">&lt;NavBar</span> <span class="attr">user</span>={currentUser} <span class="tag">/&gt;</span>}
+  <span class="attr">sidebar</span>={<span class="tag">&lt;FilterPanel</span> <span class="attr">filters</span>={filters} <span class="tag">/&gt;</span>}
+  <span class="attr">footer</span>={<span class="tag">&lt;Copyright /&gt;</span>}
+<span class="tag">&gt;</span>
+  <span class="tag">&lt;DashboardContent</span> <span class="attr">data</span>={data} <span class="tag">/&gt;</span>
+<span class="tag">&lt;/PageLayout&gt;</span></code></pre>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> Use <code>children</code> for the primary content. Use named props for secondary/auxiliary slots (header, footer, icon, actions).
+  </div>
+
+  <!-- ===== COMPOUND COMPONENTS ===== -->
+  <h2>Compound Components</h2>
+
+  <p>A group of components that <strong>work together</strong> and share implicit state. The classic example: <code>&lt;select&gt;</code> + <code>&lt;option&gt;</code> in HTML. The parent manages state; children participate without prop drilling.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: One monolithic component</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Rigid API with config objects</span>
+<span class="tag">&lt;Tabs</span>
+  <span class="attr">tabs</span>={[
+    { label: <span class="str">"Profile"</span>, content: <span class="tag">&lt;Profile /&gt;</span> },
+    { label: <span class="str">"Settings"</span>, content: <span class="tag">&lt;Settings /&gt;</span> },
+    { label: <span class="str">"Billing"</span>, content: <span class="tag">&lt;Billing /&gt;</span>,
+      disabled: <span class="kw">true</span> },
+  ]}
+<span class="tag">/&gt;</span>
+
+<span class="cm">// Hard to customize individual tabs.</span>
+<span class="cm">// What if one tab needs an icon?</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Compound components</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Flexible, composable API</span>
+<span class="tag">&lt;Tabs</span> <span class="attr">defaultValue</span>=<span class="str">"profile"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;Tabs.List&gt;</span>
+    <span class="tag">&lt;Tabs.Trigger</span> <span class="attr">value</span>=<span class="str">"profile"</span><span class="tag">&gt;</span>
+      Profile
+    <span class="tag">&lt;/Tabs.Trigger&gt;</span>
+    <span class="tag">&lt;Tabs.Trigger</span> <span class="attr">value</span>=<span class="str">"settings"</span><span class="tag">&gt;</span>
+      Settings
+    <span class="tag">&lt;/Tabs.Trigger&gt;</span>
+  <span class="tag">&lt;/Tabs.List&gt;</span>
+  <span class="tag">&lt;Tabs.Content</span> <span class="attr">value</span>=<span class="str">"profile"</span><span class="tag">&gt;</span>
+    <span class="tag">&lt;Profile /&gt;</span>
+  <span class="tag">&lt;/Tabs.Content&gt;</span>
+<span class="tag">&lt;/Tabs&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Implementing compound components with Context</div>
+<pre><code><span class="kw">import</span> { createContext, useContext, useState } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="cm">// 1. Internal context (not exported)</span>
+<span class="kw">type</span> <span class="type">TabsContextType</span> = {
+  activeTab: <span class="type">string</span>
+  setActiveTab: (value: <span class="type">string</span>) =&gt; <span class="type">void</span>
+}
+
+<span class="kw">const</span> TabsContext = <span class="fn">createContext</span>&lt;<span class="type">TabsContextType</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+<span class="kw">const</span> <span class="fn">useTabsContext</span> = () =&gt; {
+  <span class="kw">const</span> ctx = <span class="fn">useContext</span>(TabsContext)
+  <span class="kw">if</span> (!ctx) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">"Tab components must be used within &lt;Tabs&gt;"</span>)
+  <span class="kw">return</span> ctx
+}
+
+<span class="cm">// 2. Parent component provides context</span>
+<span class="kw">const</span> <span class="fn">Tabs</span> = ({ defaultValue, children }: {
+  defaultValue: <span class="type">string</span>
+  children: <span class="type">React.ReactNode</span>
+}) =&gt; {
+  <span class="kw">const</span> [activeTab, setActiveTab] = <span class="fn">useState</span>(defaultValue)
+  <span class="kw">return</span> (
+    <span class="tag">&lt;TabsContext.Provider</span> <span class="attr">value</span>={{ activeTab, setActiveTab }}<span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/TabsContext.Provider&gt;</span>
+  )
+}
+
+<span class="cm">// 3. Child components consume context</span>
+<span class="kw">const</span> <span class="fn">Trigger</span> = ({ value, children }: {
+  value: <span class="type">string</span>; children: <span class="type">React.ReactNode</span>
+}) =&gt; {
+  <span class="kw">const</span> { activeTab, setActiveTab } = <span class="fn">useTabsContext</span>()
+  <span class="kw">return</span> (
+    <span class="tag">&lt;button</span>
+      <span class="attr">className</span>={activeTab === value ? <span class="str">"active"</span> : <span class="str">""</span>}
+      <span class="attr">onClick</span>={() =&gt; <span class="fn">setActiveTab</span>(value)}
+    <span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/button&gt;</span>
+  )
+}
+
+<span class="kw">const</span> <span class="fn">Content</span> = ({ value, children }: {
+  value: <span class="type">string</span>; children: <span class="type">React.ReactNode</span>
+}) =&gt; {
+  <span class="kw">const</span> { activeTab } = <span class="fn">useTabsContext</span>()
+  <span class="kw">return</span> activeTab === value ? <span class="tag">&lt;&gt;</span>{children}<span class="tag">&lt;/&gt;</span> : <span class="kw">null</span>
+}
+
+<span class="cm">// 4. Attach sub-components as properties</span>
+Tabs.Trigger = Trigger
+Tabs.Content = Content</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Compound components are like Python's <code>unittest.TestCase</code> where <code>setUp</code>, <code>tearDown</code>, and test methods implicitly share the test instance state. Or like SQLAlchemy's <code>Session</code> where queries, adds, and commits all operate on shared session state without passing it explicitly.
+  </div>
+
+  <!-- ===== CONTAINER / PRESENTATIONAL ===== -->
+  <h2>Container / Presentational</h2>
+
+  <p>Separate <strong>data logic</strong> from <strong>UI rendering</strong>. The container fetches data and manages state. The presentational component is a pure function of its props — easy to test, easy to reuse in Storybook.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Mixed concerns</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">UserList</span> = () =&gt; {
+  <span class="kw">const</span> { data, isLoading } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"users"</span>],
+    queryFn: fetchUsers,
+  })
+
+  <span class="kw">if</span> (isLoading) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul</span> <span class="attr">className</span>=<span class="str">"user-list"</span><span class="tag">&gt;</span>
+      {data.<span class="fn">map</span>(user =&gt; (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>
+          <span class="tag">&lt;img</span> <span class="attr">src</span>={user.avatar} <span class="tag">/&gt;</span>
+          <span class="tag">&lt;span&gt;</span>{user.name}<span class="tag">&lt;/span&gt;</span>
+        <span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}
+
+<span class="cm">// Data fetching + rendering = tangled.</span>
+<span class="cm">// Hard to test UI without mocking API.</span>
+<span class="cm">// Can't reuse UI with different data source.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Separated</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Presentational — pure UI, easy to test</span>
+<span class="kw">type</span> <span class="type">UserListViewProps</span> = {
+  users: <span class="type">User</span>[]
+}
+
+<span class="kw">const</span> <span class="fn">UserListView</span> = ({ users }: <span class="type">UserListViewProps</span>) =&gt; (
+  <span class="tag">&lt;ul</span> <span class="attr">className</span>=<span class="str">"user-list"</span><span class="tag">&gt;</span>
+    {users.<span class="fn">map</span>(user =&gt; (
+      <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>
+        <span class="tag">&lt;img</span> <span class="attr">src</span>={user.avatar} <span class="tag">/&gt;</span>
+        <span class="tag">&lt;span&gt;</span>{user.name}<span class="tag">&lt;/span&gt;</span>
+      <span class="tag">&lt;/li&gt;</span>
+    ))}
+  <span class="tag">&lt;/ul&gt;</span>
+)
+
+<span class="cm">// Container — handles data</span>
+<span class="kw">const</span> <span class="fn">UserList</span> = () =&gt; {
+  <span class="kw">const</span> { data, isLoading } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"users"</span>],
+    queryFn: fetchUsers,
+  })
+  <span class="kw">if</span> (isLoading) <span class="kw">return</span> <span class="tag">&lt;Spinner /&gt;</span>
+  <span class="kw">return</span> <span class="tag">&lt;UserListView</span> <span class="attr">users</span>={data} <span class="tag">/&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like separating your SQLAlchemy repository layer (data access) from your Jinja2 templates (presentation). The repository fetches data; the template renders it. Neither knows the other's implementation.
+  </div>
+
+  <!-- ===== RENDER PROPS ===== -->
+  <h2>Render Props (Legacy-ish)</h2>
+
+  <p>A component receives a <strong>function as a prop</strong> and calls it to render UI. This was the primary composition pattern before hooks. You'll still see it in some libraries (e.g., Formik, React Router's older API).</p>
+
+  <div class="panel">
+    <div class="panel-title">Mouse tracker with render prop</div>
+<pre><code><span class="kw">type</span> <span class="type">MouseTrackerProps</span> = {
+  render: (position: { x: <span class="type">number</span>; y: <span class="type">number</span> }) =&gt; <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">const</span> <span class="fn">MouseTracker</span> = ({ render }: <span class="type">MouseTrackerProps</span>) =&gt; {
+  <span class="kw">const</span> [pos, setPos] = <span class="fn">useState</span>({ x: <span class="num">0</span>, y: <span class="num">0</span> })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">onMouseMove</span>={e =&gt; <span class="fn">setPos</span>({ x: e.clientX, y: e.clientY })}<span class="tag">&gt;</span>
+      {<span class="fn">render</span>(pos)}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="cm">// Usage</span>
+<span class="tag">&lt;MouseTracker</span>
+  <span class="attr">render</span>={({ x, y }) =&gt; <span class="tag">&lt;p&gt;</span>Mouse at {x}, {y}<span class="tag">&lt;/p&gt;</span>}
+<span class="tag">/&gt;</span></code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Before: Render props</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;MouseTracker</span>
+  <span class="attr">render</span>={({ x, y }) =&gt; (
+    <span class="tag">&lt;Tooltip</span> <span class="attr">x</span>={x} <span class="attr">y</span>={y} <span class="tag">/&gt;</span>
+  )}
+<span class="tag">/&gt;</span>
+
+<span class="cm">// Nesting = "callback hell"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">After: Custom hook (preferred)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">MyComponent</span> = () =&gt; {
+  <span class="kw">const</span> { x, y } = <span class="fn">useMousePosition</span>()
+  <span class="kw">return</span> <span class="tag">&lt;Tooltip</span> <span class="attr">x</span>={x} <span class="attr">y</span>={y} <span class="tag">/&gt;</span>
+}
+
+<span class="cm">// Flat, readable, composable</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Modern advice:</strong> Prefer custom hooks over render props for new code. But know the pattern — you'll encounter it in existing codebases and library APIs.
+  </div>
+
+  <!-- ===== LAYOUT COMPONENTS ===== -->
+  <h2>Layout Components</h2>
+
+  <p>Components whose sole job is <strong>arranging other components</strong> on screen. They handle spacing, alignment, and responsive behavior. Content components never worry about their own positioning.</p>
+
+  <div class="panel">
+    <div class="panel-title">Common layout components</div>
+<pre><code><span class="cm">// Stack: vertical or horizontal spacing</span>
+<span class="kw">type</span> <span class="type">StackProps</span> = {
+  direction?: <span class="str">"vertical"</span> | <span class="str">"horizontal"</span>
+  gap?: <span class="type">number</span>
+  children: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">const</span> <span class="fn">Stack</span> = ({ direction = <span class="str">"vertical"</span>, gap = <span class="num">16</span>, children }: <span class="type">StackProps</span>) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{
+    display: <span class="str">"flex"</span>,
+    flexDirection: direction === <span class="str">"vertical"</span> ? <span class="str">"column"</span> : <span class="str">"row"</span>,
+    gap: <span class="str">`</span>${gap}<span class="str">px`</span>,
+  }}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Center: horizontally and vertically center content</span>
+<span class="kw">const</span> <span class="fn">Center</span> = ({ children }: { children: <span class="type">React.ReactNode</span> }) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{
+    display: <span class="str">"flex"</span>,
+    alignItems: <span class="str">"center"</span>,
+    justifyContent: <span class="str">"center"</span>,
+  }}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Container: max-width wrapper with auto margins</span>
+<span class="kw">const</span> <span class="fn">Container</span> = ({ children, maxWidth = <span class="num">1200</span> }: {
+  children: <span class="type">React.ReactNode</span>; maxWidth?: <span class="type">number</span>
+}) =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{ maxWidth, margin: <span class="str">"0 auto"</span>, padding: <span class="str">"0 16px"</span> }}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+  </div>
+
+  <h3>Usage: Layout separates from content</h3>
+<pre><code><span class="kw">const</span> <span class="fn">Dashboard</span> = () =&gt; (
+  <span class="tag">&lt;Container&gt;</span>
+    <span class="tag">&lt;Stack</span> <span class="attr">gap</span>={<span class="num">24</span>}<span class="tag">&gt;</span>
+      <span class="tag">&lt;Header /&gt;</span>                     <span class="cm">{/* doesn't know about spacing */}</span>
+      <span class="tag">&lt;Stack</span> <span class="attr">direction</span>=<span class="str">"horizontal"</span> <span class="attr">gap</span>={<span class="num">16</span>}<span class="tag">&gt;</span>
+        <span class="tag">&lt;Sidebar /&gt;</span>                  <span class="cm">{/* doesn't know it's beside Main */}</span>
+        <span class="tag">&lt;Main /&gt;</span>
+      <span class="tag">&lt;/Stack&gt;</span>
+      <span class="tag">&lt;Footer /&gt;</span>
+    <span class="tag">&lt;/Stack&gt;</span>
+  <span class="tag">&lt;/Container&gt;</span>
+)</code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Content handles own spacing</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> <span class="fn">UserCard</span> = () =&gt; (
+  <span class="tag">&lt;div</span> <span class="attr">style</span>={{
+    marginBottom: <span class="num">16</span>,
+    marginLeft: <span class="num">24</span>,
+    <span class="cm">// This card "knows" about the</span>
+    <span class="cm">// layout it lives in. Fragile.</span>
+  }}<span class="tag">&gt;</span>
+    ...
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Layout handles spacing</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// UserCard has zero layout knowledge</span>
+<span class="kw">const</span> <span class="fn">UserCard</span> = () =&gt; (
+  <span class="tag">&lt;div&gt;</span>...<span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Parent decides spacing</span>
+<span class="tag">&lt;Stack</span> <span class="attr">gap</span>={<span class="num">16</span>}<span class="tag">&gt;</span>
+  <span class="tag">&lt;UserCard /&gt;</span>
+  <span class="tag">&lt;UserCard /&gt;</span>
+  <span class="tag">&lt;UserCard /&gt;</span>
+<span class="tag">&lt;/Stack&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like separating orchestration from business logic. Your Airflow DAG defines task order and dependencies (layout); each task does its own work without knowing where it sits in the pipeline.
+  </div>
+
+  <!-- ===== SUMMARY TABLE ===== -->
+  <h2>Pattern Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>When to Use</th><th>Key Benefit</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>children</strong></td>
+        <td>Wrapping arbitrary content</td>
+        <td>Maximum flexibility</td>
+      </tr>
+      <tr>
+        <td><strong>Named slots</strong></td>
+        <td>Multiple insertion points (header, footer, icon)</td>
+        <td>Explicit, self-documenting API</td>
+      </tr>
+      <tr>
+        <td><strong>Compound</strong></td>
+        <td>Components that share implicit state (Tabs, Accordion, Menu)</td>
+        <td>Clean API, no prop drilling between siblings</td>
+      </tr>
+      <tr>
+        <td><strong>Container / Presentational</strong></td>
+        <td>Separating data from UI</td>
+        <td>Testability, reusability</td>
+      </tr>
+      <tr>
+        <td><strong>Render props</strong></td>
+        <td>Legacy code, some library APIs</td>
+        <td>Dynamic rendering (prefer hooks)</td>
+      </tr>
+      <tr>
+        <td><strong>Layout components</strong></td>
+        <td>Spacing, alignment, responsive structure</td>
+        <td>Content components stay layout-agnostic</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>The golden rule of composition:</strong> A component should do one thing well. If it's handling data, layout, AND rendering — break it apart. Composition beats configuration every time.
+  </div>
+
+</body>
+</html>

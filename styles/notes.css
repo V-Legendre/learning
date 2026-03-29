@@ -151,10 +151,18 @@ td {
   letter-spacing: 1px;
 }
 
-.comp-header.ts    { background: #3178c633; color: #60a5fa; }
-.comp-header.py    { background: #30699833; color: #ffd43b; }
-.comp-header.figma { background: #7c3aed33; color: #a78bfa; }
-.comp-header.code  { background: #e9456033; color: #e94560; }
+.comp-header.ts     { background: #3178c633; color: #60a5fa; }
+.comp-header.py     { background: #30699833; color: #ffd43b; }
+.comp-header.figma  { background: #7c3aed33; color: #a78bfa; }
+.comp-header.code   { background: #e9456033; color: #e94560; }
+.comp-header.html   { background: #e4552233; color: #f07178; }
+.comp-header.jsx    { background: #61dafb33; color: #61dafb; }
+.comp-header.css    { background: #264de433; color: #60a5fa; }
+.comp-header.js     { background: #f7df1e33; color: #ffd43b; }
+.comp-header.good   { background: #34d39933; color: #34d399; }
+.comp-header.bad    { background: #ef444433; color: #f87171; }
+.comp-header.before { background: #f59e0b33; color: #fbbf24; }
+.comp-header.after  { background: #34d39933; color: #34d399; }
 
 .comp-body { padding: 16px; }
 
@@ -316,6 +324,57 @@ td {
   font-size: 14px;
   font-weight: bold;
 }
+
+/* --- File tree --- */
+.file-tree {
+  background: #0d0d1a;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 16px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #888;
+}
+.file-tree .dir { color: #82aaff; }
+.file-tree .file { color: #e0e0e0; }
+.file-tree .highlight { color: #c3e88d; font-weight: bold; }
+
+/* --- Terminal output --- */
+.terminal {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: #34d399;
+}
+.terminal .prompt { color: #888; }
+.terminal .output { color: #e0e0e0; }
+
+/* --- Callout variants --- */
+.warn {
+  background: #ef444415;
+  border-left: 3px solid #ef4444;
+  padding: 12px 16px;
+  margin: 15px 0;
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+  color: #ccc;
+}
+.warn strong { color: #f87171; }
+
+.tip {
+  background: #34d39915;
+  border-left: 3px solid #34d399;
+  padding: 12px 16px;
+  margin: 15px 0;
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+  color: #ccc;
+}
+.tip strong { color: #34d399; }
 
 /* --- Links --- */
 a { color: #82aaff; }

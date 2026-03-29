@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — Redux</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>16 — Redux</h1>
+  <p class="subtitle">The OG state management library: what it is, how Redux Toolkit works, and why we chose Zustand instead.</p>
+
+  <!-- ===== WHAT IS REDUX ===== -->
+  <h2>What Is Redux?</h2>
+
+  <p>Redux is a predictable state container for JavaScript apps. It was the dominant React state library for years (2015-2020) and is still used in many production codebases. Understanding it helps you read existing code and makes you appreciate simpler alternatives.</p>
+
+  <h3>Core concepts</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Store</div>
+      <div class="desc">Single object holds ALL app state</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Action</div>
+      <div class="desc">Plain object describing what happened</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Dispatch</div>
+      <div class="desc">Send action to the store</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Reducer</div>
+      <div class="desc">Pure function: state + action = new state</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Re-render</div>
+      <div class="desc">Components subscribed to state update</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Redux principles</div>
+    <ul>
+      <li><strong>Single source of truth</strong> &mdash; one store, one state tree</li>
+      <li><strong>State is read-only</strong> &mdash; the only way to change it is to dispatch an action</li>
+      <li><strong>Changes via pure functions</strong> &mdash; reducers take (state, action) and return new state, no side effects</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Think of Redux like an event-sourced system. Actions are events (like database audit logs). Reducers are event handlers. The store is the current projected state. You can replay all actions to reconstruct any point in time.
+  </div>
+
+  <!-- ===== CLASSIC REDUX ===== -->
+  <h2>Classic Redux (the verbose way)</h2>
+
+  <p>This is what Redux looked like before Redux Toolkit. You'll still see this in older codebases.</p>
+
+<pre><code><span class="cm">// Action types (string constants)</span>
+<span class="kw">const</span> <span class="prop">INCREMENT</span> = <span class="str">'counter/increment'</span>
+<span class="kw">const</span> <span class="prop">DECREMENT</span> = <span class="str">'counter/decrement'</span>
+
+<span class="cm">// Action creators (functions that return action objects)</span>
+<span class="kw">const</span> <span class="fn">increment</span> = (<span class="prop">amount</span>: <span class="type">number</span>) =&gt; ({
+  <span class="prop">type</span>: <span class="prop">INCREMENT</span>,
+  <span class="prop">payload</span>: amount,
+})
+
+<span class="cm">// Reducer (pure function, switch statement)</span>
+<span class="kw">const</span> <span class="fn">counterReducer</span> = (
+  <span class="prop">state</span> = { <span class="prop">value</span>: <span class="num">0</span> },
+  <span class="prop">action</span>: { <span class="prop">type</span>: <span class="type">string</span>; <span class="prop">payload</span>?: <span class="type">number</span> }
+) =&gt; {
+  <span class="kw">switch</span> (<span class="prop">action</span>.<span class="prop">type</span>) {
+    <span class="kw">case</span> <span class="prop">INCREMENT</span>:
+      <span class="kw">return</span> { ...<span class="prop">state</span>, <span class="prop">value</span>: <span class="prop">state</span>.<span class="prop">value</span> + (<span class="prop">action</span>.<span class="prop">payload</span> ?? <span class="num">1</span>) }
+    <span class="kw">case</span> <span class="prop">DECREMENT</span>:
+      <span class="kw">return</span> { ...<span class="prop">state</span>, <span class="prop">value</span>: <span class="prop">state</span>.<span class="prop">value</span> - <span class="num">1</span> }
+    <span class="kw">default</span>:
+      <span class="kw">return</span> <span class="prop">state</span>
+  }
+}
+
+<span class="cm">// Usage in component</span>
+<span class="kw">const</span> <span class="prop">value</span> = <span class="fn">useSelector</span>((<span class="prop">state</span>) =&gt; <span class="prop">state</span>.<span class="prop">counter</span>.<span class="prop">value</span>)
+<span class="kw">const</span> <span class="prop">dispatch</span> = <span class="fn">useDispatch</span>()
+<span class="fn">dispatch</span>(<span class="fn">increment</span>(<span class="num">5</span>))</code></pre>
+
+  <p>For this trivial counter, that's about 30 lines. This "boilerplate problem" is why Redux got a bad reputation.</p>
+
+  <!-- ===== REDUX TOOLKIT ===== -->
+  <h2>Redux Toolkit (RTK) &mdash; Modern Redux</h2>
+
+  <p>Redux Toolkit is the official recommended way to write Redux. It dramatically reduces boilerplate.</p>
+
+<pre><code><span class="cm">// features/counter/counterSlice.ts</span>
+<span class="kw">import</span> { <span class="fn">createSlice</span> } <span class="kw">from</span> <span class="str">'@reduxjs/toolkit'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">PayloadAction</span> } <span class="kw">from</span> <span class="str">'@reduxjs/toolkit'</span>
+
+<span class="kw">interface</span> <span class="type">CounterState</span> {
+  <span class="prop">value</span>: <span class="type">number</span>
+}
+
+<span class="kw">const</span> <span class="prop">counterSlice</span> = <span class="fn">createSlice</span>({
+  <span class="prop">name</span>: <span class="str">'counter'</span>,
+  <span class="prop">initialState</span>: { <span class="prop">value</span>: <span class="num">0</span> } <span class="kw">as</span> <span class="type">CounterState</span>,
+  <span class="prop">reducers</span>: {
+    <span class="cm">// RTK uses Immer internally &mdash; you can "mutate" state directly</span>
+    <span class="fn">increment</span>(<span class="prop">state</span>, <span class="prop">action</span>: <span class="type">PayloadAction</span>&lt;<span class="type">number</span>&gt;) {
+      <span class="prop">state</span>.<span class="prop">value</span> += <span class="prop">action</span>.<span class="prop">payload</span>
+    },
+    <span class="fn">decrement</span>(<span class="prop">state</span>) {
+      <span class="prop">state</span>.<span class="prop">value</span> -= <span class="num">1</span>
+    },
+  },
+})
+
+<span class="cm">// Auto-generated action creators and action types</span>
+<span class="kw">export const</span> { <span class="fn">increment</span>, <span class="fn">decrement</span> } = <span class="prop">counterSlice</span>.<span class="prop">actions</span>
+<span class="kw">export default</span> <span class="prop">counterSlice</span>.<span class="prop">reducer</span></code></pre>
+
+<pre><code><span class="cm">// store.ts</span>
+<span class="kw">import</span> { <span class="fn">configureStore</span> } <span class="kw">from</span> <span class="str">'@reduxjs/toolkit'</span>
+<span class="kw">import</span> <span class="prop">counterReducer</span> <span class="kw">from</span> <span class="str">'./features/counter/counterSlice'</span>
+
+<span class="kw">export const</span> <span class="prop">store</span> = <span class="fn">configureStore</span>({
+  <span class="prop">reducer</span>: {
+    <span class="prop">counter</span>: <span class="prop">counterReducer</span>,
+  },
+})
+
+<span class="cm">// Infer types from the store itself</span>
+<span class="kw">export type</span> <span class="type">RootState</span> = <span class="type">ReturnType</span>&lt;<span class="kw">typeof</span> <span class="prop">store</span>.<span class="prop">getState</span>&gt;
+<span class="kw">export type</span> <span class="type">AppDispatch</span> = <span class="kw">typeof</span> <span class="prop">store</span>.<span class="prop">dispatch</span></code></pre>
+
+  <div class="tip">
+    <strong>Immer under the hood:</strong> Notice the <code>state.value += action.payload</code>? In classic Redux, you'd need to return a new object (<code>{ ...state, value: state.value + action.payload }</code>). RTK uses Immer to let you write "mutating" code that produces immutable updates.
+  </div>
+
+  <!-- ===== RTK QUERY ===== -->
+  <h2>RTK Query</h2>
+
+  <p>RTK Query is Redux's answer to TanStack Query &mdash; data fetching with caching, built into the Redux store.</p>
+
+<pre><code><span class="cm">// features/api/apiSlice.ts</span>
+<span class="kw">import</span> { <span class="fn">createApi</span>, <span class="fn">fetchBaseQuery</span> } <span class="kw">from</span> <span class="str">'@reduxjs/toolkit/query/react'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'../types'</span>
+
+<span class="kw">export const</span> <span class="prop">apiSlice</span> = <span class="fn">createApi</span>({
+  <span class="prop">reducerPath</span>: <span class="str">'api'</span>,
+  <span class="prop">baseQuery</span>: <span class="fn">fetchBaseQuery</span>({ <span class="prop">baseUrl</span>: <span class="str">'/api'</span> }),
+  <span class="prop">endpoints</span>: (<span class="prop">builder</span>) =&gt; ({
+    <span class="fn">getUsers</span>: <span class="prop">builder</span>.<span class="fn">query</span>&lt;<span class="type">User</span>[], <span class="type">void</span>&gt;({
+      <span class="prop">query</span>: () =&gt; <span class="str">'/users'</span>,
+    }),
+    <span class="fn">getUserById</span>: <span class="prop">builder</span>.<span class="fn">query</span>&lt;<span class="type">User</span>, <span class="type">string</span>&gt;({
+      <span class="prop">query</span>: (<span class="prop">id</span>) =&gt; <span class="str">`/users/</span>${id}<span class="str">`</span>,
+    }),
+  }),
+})
+
+<span class="cm">// Auto-generated hooks</span>
+<span class="kw">export const</span> { <span class="fn">useGetUsersQuery</span>, <span class="fn">useGetUserByIdQuery</span> } = <span class="prop">apiSlice</span></code></pre>
+
+  <!-- ===== WHEN REDUX MAKES SENSE ===== -->
+  <h2>When Redux Makes Sense</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Redux is worth it for...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Very large teams</strong> &mdash; Redux enforces patterns. Everyone follows the same action/reducer/dispatch structure.</li>
+          <li><strong>Complex shared state</strong> &mdash; many parts of the app reading and writing the same data with many different actions</li>
+          <li><strong>Existing Redux codebase</strong> &mdash; if the app is already on Redux, migrating is often not worth it</li>
+          <li><strong>Time-travel debugging</strong> &mdash; Redux DevTools can replay state changes step by step</li>
+          <li><strong>Middleware ecosystem</strong> &mdash; saga, thunk, logging, analytics &mdash; mature middleware library</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Skip Redux when...</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Small to medium apps</strong> &mdash; the ceremony isn't worth it for most projects</li>
+          <li><strong>Mostly server state</strong> &mdash; if 80% of your state is API data, TanStack Query handles it better</li>
+          <li><strong>Small team</strong> &mdash; the enforced patterns are overhead without many developers</li>
+          <li><strong>Starting a new project</strong> &mdash; Zustand + TanStack Query covers 95% of use cases with 90% less code</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WHY ZUSTAND ===== -->
+  <h2>Why We Picked Zustand Over Redux</h2>
+
+  <p>For our learning path, Zustand is the better choice. Here's the same counter implemented in both:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Redux Toolkit</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// counterSlice.ts</span>
+<span class="kw">import</span> { <span class="fn">createSlice</span> } <span class="kw">from</span> <span class="str">'@reduxjs/toolkit'</span>
+
+<span class="kw">const</span> <span class="prop">slice</span> = <span class="fn">createSlice</span>({
+  <span class="prop">name</span>: <span class="str">'counter'</span>,
+  <span class="prop">initialState</span>: { <span class="prop">value</span>: <span class="num">0</span> },
+  <span class="prop">reducers</span>: {
+    <span class="fn">increment</span>(<span class="prop">state</span>) {
+      <span class="prop">state</span>.<span class="prop">value</span> += <span class="num">1</span>
+    },
+  },
+})
+
+<span class="kw">export const</span> { <span class="fn">increment</span> } = <span class="prop">slice</span>.<span class="prop">actions</span>
+<span class="kw">export default</span> <span class="prop">slice</span>.<span class="prop">reducer</span>
+
+<span class="cm">// store.ts (separate file)</span>
+<span class="kw">import</span> { <span class="fn">configureStore</span> } <span class="kw">from</span> <span class="str">'...'</span>
+
+<span class="cm">// Provider required in App.tsx</span>
+<span class="cm">// useSelector + useDispatch in components</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Zustand</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// counterStore.ts</span>
+<span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+
+<span class="kw">export const</span> <span class="fn">useCounter</span> = <span class="fn">create</span>(() =&gt; ({
+  <span class="prop">value</span>: <span class="num">0</span>,
+  <span class="fn">increment</span>: () =&gt;
+    <span class="fn">set</span>((<span class="prop">s</span>) =&gt; ({
+      <span class="prop">value</span>: <span class="prop">s</span>.<span class="prop">value</span> + <span class="num">1</span>
+    })),
+}))
+
+<span class="cm">// That's it. No store config.</span>
+<span class="cm">// No Provider.</span>
+<span class="cm">// Use directly in components:</span>
+<span class="cm">// const value = useCounter(s => s.value)</span>
+<span class="cm">// const increment = useCounter(s => s.increment)</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>Redux vs Zustand Feature Comparison</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Redux (RTK)</th>
+        <th>Zustand</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Bundle size</td>
+        <td>~11KB (RTK) + ~2KB (react-redux)</td>
+        <td>~1.2KB</td>
+      </tr>
+      <tr>
+        <td>Boilerplate</td>
+        <td>Medium (much better than classic Redux)</td>
+        <td>Minimal</td>
+      </tr>
+      <tr>
+        <td>Provider required</td>
+        <td>Yes &mdash; wraps app in <code>&lt;Provider store={store}&gt;</code></td>
+        <td>No &mdash; just import and use</td>
+      </tr>
+      <tr>
+        <td>TypeScript DX</td>
+        <td>Good (needs RootState/AppDispatch types)</td>
+        <td>Excellent (inferred from create)</td>
+      </tr>
+      <tr>
+        <td>DevTools</td>
+        <td>Redux DevTools (excellent, time-travel)</td>
+        <td>Redux DevTools (via middleware)</td>
+      </tr>
+      <tr>
+        <td>Data fetching</td>
+        <td>RTK Query (built-in)</td>
+        <td>Use TanStack Query separately</td>
+      </tr>
+      <tr>
+        <td>Middleware</td>
+        <td>Rich ecosystem (saga, thunk, logger)</td>
+        <td>Simple middleware API</td>
+      </tr>
+      <tr>
+        <td>Learning curve</td>
+        <td>Steeper (actions, reducers, dispatch, selectors)</td>
+        <td>Gentle (just a hook that returns state)</td>
+      </tr>
+      <tr>
+        <td>Team enforcement</td>
+        <td>Strong patterns and conventions</td>
+        <td>Flexible (can be too flexible for large teams)</td>
+      </tr>
+      <tr>
+        <td>Access outside React</td>
+        <td><code>store.getState()</code></td>
+        <td><code>useStore.getState()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Bottom line:</strong> Redux is not bad. Modern Redux (RTK) is actually quite good. But for most new projects, Zustand + TanStack Query gives you the same capabilities with dramatically less code. Learn Redux concepts (they're everywhere), but reach for Zustand in practice.
+  </div>
+
+</body>
+</html>

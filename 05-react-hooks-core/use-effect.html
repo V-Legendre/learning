@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 — useEffect</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>05 — useEffect</h1>
+  <p class="subtitle">Synchronize your component with external systems. Not a lifecycle method.</p>
+
+  <!-- ===== MENTAL MODEL ===== -->
+  <h2>Mental Model</h2>
+
+  <p>The correct way to think about <code>useEffect</code>: <strong>"Run this side effect whenever these dependencies change."</strong></p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Wrong mental model (lifecycle)</div>
+      <div class="comp-body">
+        <p>"Run on mount, update, and unmount."</p>
+        <p>This comes from class components. It leads you to write effects that do too much, track irrelevant lifecycle events, and fight the framework.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Correct mental model (sync)</div>
+      <div class="comp-body">
+        <p>"Synchronize with this external thing whenever these values change."</p>
+        <p>Each effect has a purpose: keep some external system in sync with your component's state/props.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Like a context manager that re-runs</span>
+<span class="cm"># when inputs change</span>
+
+<span class="kw">class</span> <span class="type">Effect</span>:
+    <span class="kw">def</span> <span class="fn">__enter__</span>(self):
+        <span class="cm"># Setup (subscribe, connect, etc.)</span>
+        self.conn = <span class="fn">connect_websocket</span>(url)
+
+    <span class="kw">def</span> <span class="fn">__exit__</span>(self, *args):
+        <span class="cm"># Cleanup (unsubscribe, disconnect)</span>
+        self.conn.<span class="fn">close</span>()</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React useEffect</div>
+      <div class="comp-body">
+<pre><code><span class="fn">useEffect</span>(() => {
+  <span class="cm">// Setup (__enter__)</span>
+  <span class="kw">const</span> conn = <span class="fn">connectWebSocket</span>(url)
+
+  <span class="kw">return</span> () => {
+    <span class="cm">// Cleanup (__exit__)</span>
+    conn.<span class="fn">close</span>()
+  }
+}, [url]) <span class="cm">// Re-run when url changes</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BASIC SYNTAX ===== -->
+  <h2>Basic Syntax</h2>
+
+<pre><code><span class="kw">import</span> { useEffect } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="fn">useEffect</span>(
+  () => {            <span class="cm">// Effect function (runs the side effect)</span>
+    <span class="cm">// ... do something</span>
+
+    <span class="kw">return</span> () => {   <span class="cm">// Cleanup function (optional)</span>
+      <span class="cm">// ... undo what you did</span>
+    }
+  },
+  [dep1, dep2]       <span class="cm">// Dependency array (when to re-run)</span>
+)</code></pre>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Component renders</div>
+      <div class="desc">JSX is computed, DOM updates</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Effect runs</div>
+      <div class="desc">After paint, not blocking UI</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Deps change?</div>
+      <div class="desc">React compares dependency values</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Cleanup, then re-run</div>
+      <div class="desc">Old cleanup first, then new effect</div>
+    </div>
+  </div>
+
+  <!-- ===== DEPENDENCY ARRAY ===== -->
+  <h2>Dependency Array Rules</h2>
+
+  <table>
+    <thead>
+      <tr><th>Dependency Array</th><th>When Effect Runs</th><th>Use Case</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>[a, b]</code></td>
+        <td>After first render, then whenever <code>a</code> or <code>b</code> changes</td>
+        <td>Most effects: sync when specific values change</td>
+      </tr>
+      <tr>
+        <td><code>[]</code></td>
+        <td>After first render only</td>
+        <td>One-time setup: connect to WebSocket, start animation</td>
+      </tr>
+      <tr>
+        <td>Omitted entirely</td>
+        <td>After <em>every</em> render</td>
+        <td>Rarely useful. Usually a mistake.</td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">// Runs when `userId` changes — fetches new user data</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> <span class="fn">fetchUser</span> = <span class="kw">async</span> () => {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">`/api/users/${userId}`</span>)
+    <span class="kw">const</span> data = <span class="kw">await</span> res.<span class="fn">json</span>()
+    <span class="fn">setUser</span>(data)
+  }
+  <span class="fn">fetchUser</span>()
+}, [userId])
+
+<span class="cm">// Runs once after first render — set up event listener</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> <span class="fn">handleResize</span> = () => <span class="fn">setWidth</span>(window.innerWidth)
+  window.<span class="fn">addEventListener</span>(<span class="str">"resize"</span>, handleResize)
+  <span class="kw">return</span> () => window.<span class="fn">removeEventListener</span>(<span class="str">"resize"</span>, handleResize)
+}, [])
+
+<span class="cm">// Runs after every render (no dependency array) — almost never want this</span>
+<span class="fn">useEffect</span>(() => {
+  console.<span class="fn">log</span>(<span class="str">"Rendered!"</span>)
+})</code></pre>
+
+  <div class="warn">
+    <strong>Dependency rule:</strong> Every reactive value (props, state, variables derived from them) used inside the effect must be in the dependency array. The <code>eslint-plugin-react-hooks</code> enforces this. Don't suppress the warning — fix the code instead.
+  </div>
+
+  <!-- ===== CLEANUP ===== -->
+  <h2>Cleanup Function</h2>
+
+  <p>Return a function from your effect to clean up. React calls this function:</p>
+  <ul>
+    <li><strong>Before the next time the effect runs</strong> (when deps change)</li>
+    <li><strong>When the component unmounts</strong> (removed from DOM)</li>
+  </ul>
+
+<pre><code><span class="cm">// Example: Chat room subscription</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> connection = <span class="fn">createConnection</span>(roomId)
+  connection.<span class="fn">connect</span>()
+
+  <span class="kw">return</span> () => {
+    <span class="cm">// Runs before next effect OR on unmount</span>
+    connection.<span class="fn">disconnect</span>()
+  }
+}, [roomId])
+
+<span class="cm">// What happens when roomId changes from "general" to "random":</span>
+<span class="cm">// 1. Cleanup: disconnect from "general"</span>
+<span class="cm">// 2. Effect: connect to "random"</span></code></pre>
+
+  <h3>Common cleanup patterns</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Event listeners</div>
+<pre><code><span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> <span class="fn">handler</span> = (e: <span class="type">KeyboardEvent</span>) => {
+    <span class="kw">if</span> (e.key === <span class="str">"Escape"</span>) <span class="fn">onClose</span>()
+  }
+  document.<span class="fn">addEventListener</span>(<span class="str">"keydown"</span>, handler)
+  <span class="kw">return</span> () => document.<span class="fn">removeEventListener</span>(<span class="str">"keydown"</span>, handler)
+}, [onClose])</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Intervals / Timers</div>
+<pre><code><span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> id = <span class="fn">setInterval</span>(() => {
+    <span class="fn">setSeconds</span>(s => s + <span class="num">1</span>)
+  }, <span class="num">1000</span>)
+  <span class="kw">return</span> () => <span class="fn">clearInterval</span>(id)
+}, [])</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Abort fetch on cleanup</div>
+<pre><code><span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> controller = <span class="kw">new</span> <span class="type">AbortController</span>()
+
+  <span class="fn">fetch</span>(<span class="str">`/api/data/${id}`</span>, {
+    <span class="prop">signal</span>: controller.signal
+  })
+    .<span class="fn">then</span>(r => r.<span class="fn">json</span>())
+    .<span class="fn">then</span>(data => <span class="fn">setData</span>(data))
+    .<span class="fn">catch</span>(e => {
+      <span class="kw">if</span> (e.name !== <span class="str">"AbortError"</span>) <span class="kw">throw</span> e
+    })
+
+  <span class="kw">return</span> () => controller.<span class="fn">abort</span>()
+}, [id])</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Boolean flag pattern</div>
+<pre><code><span class="fn">useEffect</span>(() => {
+  <span class="kw">let</span> cancelled = <span class="kw">false</span>
+
+  <span class="fn">fetchData</span>(id).<span class="fn">then</span>(data => {
+    <span class="kw">if</span> (!cancelled) <span class="fn">setData</span>(data)
+  })
+
+  <span class="kw">return</span> () => { cancelled = <span class="kw">true</span> }
+}, [id])</code></pre>
+    </div>
+  </div>
+
+  <!-- ===== WHEN NOT TO USE ===== -->
+  <h2>When NOT to Use useEffect (Critical)</h2>
+
+  <p>The most common React mistake is overusing <code>useEffect</code>. Many things that feel like "effects" are actually better handled by other patterns.</p>
+
+  <div class="panel">
+    <div class="panel-title">1. Don't use for derived/computed state</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Anti-pattern</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>(list)
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+<span class="cm">// WRONG: syncing derived state</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">setCount</span>(items.length)
+}, [items])</code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Just compute it</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>(list)
+
+<span class="cm">// RIGHT: compute during render</span>
+<span class="kw">const</span> count = items.length</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">2. Don't use for event handling</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Anti-pattern</div>
+        <div class="comp-body">
+<pre><code><span class="cm">// WRONG: effect watches for state change</span>
+<span class="kw">const</span> [submitted, setSubmitted] = <span class="fn">useState</span>(<span class="kw">false</span>)
+
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">if</span> (submitted) {
+    <span class="fn">sendToApi</span>(formData)
+  }
+}, [submitted])</code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Use event handler</div>
+        <div class="comp-body">
+<pre><code><span class="cm">// RIGHT: just do it in the handler</span>
+<span class="kw">const</span> <span class="fn">handleSubmit</span> = () => {
+  <span class="fn">sendToApi</span>(formData)
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">3. Don't use to "sync" two state variables</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Anti-pattern</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> [firstName, setFirstName] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [fullName, setFullName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">setFullName</span>(firstName + <span class="str">" "</span> + lastName)
+}, [firstName, lastName])</code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Derive during render</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> [firstName, setFirstName] = <span class="fn">useState</span>(<span class="str">""</span>)
+
+<span class="cm">// Derive it, don't sync it</span>
+<span class="kw">const</span> fullName = firstName + <span class="str">" "</span> + lastName</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">4. Don't use for data transformation</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header bad">Anti-pattern</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> [filtered, setFiltered] = <span class="fn">useState</span>([])
+
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">setFiltered</span>(
+    items.<span class="fn">filter</span>(i => i.active)
+  )
+}, [items])</code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header good">Compute or useMemo</div>
+        <div class="comp-body">
+<pre><code><span class="cm">// Simple: just compute it</span>
+<span class="kw">const</span> filtered = items.<span class="fn">filter</span>(i => i.active)
+
+<span class="cm">// Expensive? Use useMemo</span>
+<span class="kw">const</span> filtered = <span class="fn">useMemo</span>(
+  () => items.<span class="fn">filter</span>(i => i.active),
+  [items]
+)</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When TO Use useEffect</h2>
+
+  <table>
+    <thead>
+      <tr><th>Use Case</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>External subscriptions</td><td>WebSocket connections, browser event listeners, IntersectionObserver</td></tr>
+      <tr><td>DOM APIs</td><td>Focus management, scroll position, measuring element sizes</td></tr>
+      <tr><td>Third-party libraries</td><td>Initializing a chart library, map instance, video player</td></tr>
+      <tr><td>Data fetching</td><td>API calls (though TanStack Query is preferred for production)</td></tr>
+      <tr><td>Logging / Analytics</td><td>Page view tracking, performance monitoring</td></tr>
+      <tr><td>Document title</td><td><code>document.title = pageTitle</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Litmus test:</strong> "Am I synchronizing with something <em>outside</em> React?" If yes, <code>useEffect</code> is appropriate. If you're just transforming data or reacting to user events, you don't need it.
+  </div>
+
+  <!-- ===== COMMON MISTAKES ===== -->
+  <h2>Common Mistakes</h2>
+
+  <div class="panel">
+    <div class="panel-title">Infinite loop: effect updates its own dependency</div>
+<pre><code><span class="cm">// INFINITE LOOP: setData changes data, which re-triggers effect</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">setData</span>(<span class="fn">transform</span>(data))  <span class="cm">// data is a dependency AND is being set</span>
+}, [data])
+
+<span class="cm">// FIX: Use updater function or compute during render</span>
+<span class="kw">const</span> transformed = <span class="fn">transform</span>(data)  <span class="cm">// compute during render instead</span></code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Object/array dependencies that change every render</div>
+<pre><code><span class="cm">// BUG: options is a new object every render</span>
+<span class="kw">const</span> options = { <span class="prop">method</span>: <span class="str">"GET"</span>, <span class="prop">headers</span>: {} }
+
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">fetchData</span>(url, options)
+}, [url, options])  <span class="cm">// options is "new" every render = infinite loop!</span>
+
+<span class="cm">// FIX 1: Move the object inside the effect</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> options = { <span class="prop">method</span>: <span class="str">"GET"</span>, <span class="prop">headers</span>: {} }
+  <span class="fn">fetchData</span>(url, options)
+}, [url])
+
+<span class="cm">// FIX 2: Memoize with useMemo (if it must be outside)</span></code></pre>
+  </div>
+
+  <!-- ===== COMPLETE EXAMPLE ===== -->
+  <h2>Complete Example: Window Size Tracker</h2>
+
+<pre><code><span class="kw">import</span> { useState, useEffect } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">WindowSize</span> = () => {
+  <span class="kw">const</span> [size, setSize] = <span class="fn">useState</span>({
+    <span class="prop">width</span>: window.innerWidth,
+    <span class="prop">height</span>: window.innerHeight,
+  })
+
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">const</span> <span class="fn">handleResize</span> = () => {
+      <span class="fn">setSize</span>({
+        <span class="prop">width</span>: window.innerWidth,
+        <span class="prop">height</span>: window.innerHeight,
+      })
+    }
+
+    window.<span class="fn">addEventListener</span>(<span class="str">"resize"</span>, handleResize)
+
+    <span class="cm">// Cleanup: remove listener when component unmounts</span>
+    <span class="kw">return</span> () => {
+      window.<span class="fn">removeEventListener</span>(<span class="str">"resize"</span>, handleResize)
+    }
+  }, []) <span class="cm">// Empty deps = set up once, clean up on unmount</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;p&gt;</span>
+      Window: {size.width} x {size.height}
+    <span class="tag">&lt;/p&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Key pattern:</strong> The effect <em>subscribes</em> to an external system (browser resize events), and the cleanup <em>unsubscribes</em>. This is the canonical useEffect use case. Everything else should make you question whether you actually need an effect.
+  </div>
+
+  <!-- ===== DEV MODE NOTE ===== -->
+  <h2>React Strict Mode &amp; Double Effects</h2>
+
+  <p>In development mode with <code>&lt;StrictMode&gt;</code>, React intentionally runs every effect <strong>twice</strong> (mount &rarr; unmount &rarr; mount) to help you find missing cleanup functions. If your effect breaks on the second run, you have a cleanup bug.</p>
+
+<pre><code><span class="cm">// If you see your effect running twice in dev, it's intentional.</span>
+<span class="cm">// Don't remove StrictMode — fix your cleanup instead.</span>
+<span class="cm">// In production, effects only run once per mount.</span></code></pre>
+
+</body>
+</html>

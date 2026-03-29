@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 — TypeScript Patterns for React</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>07 — TypeScript Patterns for React</h1>
+  <p class="subtitle">Advanced TS techniques that make React components type-safe, self-documenting, and impossible to misuse. These patterns show why TypeScript + React is greater than the sum of its parts.</p>
+
+  <!-- ===== DISCRIMINATED UNION PROPS ===== -->
+  <h2>Discriminated Union Props</h2>
+
+  <p>One of the most powerful patterns in TypeScript React. A component's props change shape based on a "tag" field. TypeScript narrows the type automatically, so you can't pass invalid combinations.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy: Tagged unions / Literal types</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> typing <span class="kw">import</span> Literal, Union
+<span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+
+<span class="cm">@dataclass</span>
+<span class="kw">class</span> <span class="type">TextInput</span>:
+    variant: Literal[<span class="str">"text"</span>]
+    value: <span class="type">str</span>
+    placeholder: <span class="type">str</span>
+
+<span class="cm">@dataclass</span>
+<span class="kw">class</span> <span class="type">NumberInput</span>:
+    variant: Literal[<span class="str">"number"</span>]
+    value: <span class="type">int</span>
+    min: <span class="type">int</span>
+    max: <span class="type">int</span>
+
+<span class="type">InputConfig</span> = Union[TextInput, NumberInput]</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript: Discriminated union</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">InputProps</span> =
+  | {
+      variant: <span class="str">"text"</span>
+      value: <span class="type">string</span>
+      placeholder?: <span class="type">string</span>
+    }
+  | {
+      variant: <span class="str">"number"</span>
+      value: <span class="type">number</span>
+      min?: <span class="type">number</span>
+      max?: <span class="type">number</span>
+    }
+  | {
+      variant: <span class="str">"select"</span>
+      value: <span class="type">string</span>
+      options: <span class="type">string</span>[]
+    }</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The component narrows based on variant</div>
+<pre><code><span class="kw">const</span> <span class="fn">Input</span> = (props: <span class="type">InputProps</span>) =&gt; {
+  <span class="kw">switch</span> (props.variant) {
+    <span class="kw">case</span> <span class="str">"text"</span>:
+      <span class="cm">// TypeScript knows: props.placeholder exists, props.min does NOT</span>
+      <span class="kw">return</span> <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"text"</span> <span class="attr">value</span>={props.value} <span class="attr">placeholder</span>={props.placeholder} <span class="tag">/&gt;</span>
+    <span class="kw">case</span> <span class="str">"number"</span>:
+      <span class="cm">// TypeScript knows: props.min, props.max exist</span>
+      <span class="kw">return</span> <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"number"</span> <span class="attr">value</span>={props.value} <span class="attr">min</span>={props.min} <span class="attr">max</span>={props.max} <span class="tag">/&gt;</span>
+    <span class="kw">case</span> <span class="str">"select"</span>:
+      <span class="cm">// TypeScript knows: props.options exists</span>
+      <span class="kw">return</span> (
+        <span class="tag">&lt;select</span> <span class="attr">value</span>={props.value}<span class="tag">&gt;</span>
+          {props.options.<span class="fn">map</span>(opt =&gt; (
+            <span class="tag">&lt;option</span> <span class="attr">key</span>={opt} <span class="attr">value</span>={opt}<span class="tag">&gt;</span>{opt}<span class="tag">&lt;/option&gt;</span>
+          ))}
+        <span class="tag">&lt;/select&gt;</span>
+      )
+  }
+}</code></pre>
+  </div>
+
+  <h3>Usage — TypeScript catches invalid combinations</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Valid: Props match variant</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"text"</span> <span class="attr">value</span>=<span class="str">"hello"</span> <span class="tag">/&gt;</span>
+<span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"number"</span> <span class="attr">value</span>={<span class="num">42</span>} <span class="attr">min</span>={<span class="num">0</span>} <span class="tag">/&gt;</span>
+<span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"select"</span> <span class="attr">value</span>=<span class="str">"a"</span>
+  <span class="attr">options</span>={[<span class="str">"a"</span>, <span class="str">"b"</span>]} <span class="tag">/&gt;</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Type error: Invalid combinations</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Error: 'min' doesn't exist on text</span>
+<span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"text"</span> <span class="attr">value</span>=<span class="str">"hi"</span> <span class="attr">min</span>={<span class="num">0</span>} <span class="tag">/&gt;</span>
+
+<span class="cm">// Error: value must be number for "number"</span>
+<span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"number"</span> <span class="attr">value</span>=<span class="str">"hi"</span> <span class="tag">/&gt;</span>
+
+<span class="cm">// Error: 'options' required for "select"</span>
+<span class="tag">&lt;Input</span> <span class="attr">variant</span>=<span class="str">"select"</span> <span class="attr">value</span>=<span class="str">"a"</span> <span class="tag">/&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>This is the killer pattern.</strong> Use discriminated unions whenever a component has modes, variants, or types that change which props are valid. It makes impossible states impossible.
+  </div>
+
+  <!-- ===== EVENT HANDLER TYPES ===== -->
+  <h2>Event Handler Types</h2>
+
+  <p>React wraps native DOM events in <code>SyntheticEvent</code> wrappers. The type includes which element triggered the event. You'll use these constantly for forms, clicks, and keyboard handling.</p>
+
+  <table>
+    <thead>
+      <tr><th>Event</th><th>Type</th><th>Common use</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Click</td>
+        <td><code>React.MouseEvent&lt;HTMLButtonElement&gt;</code></td>
+        <td>Button clicks, link clicks</td>
+      </tr>
+      <tr>
+        <td>Input change</td>
+        <td><code>React.ChangeEvent&lt;HTMLInputElement&gt;</code></td>
+        <td>Text input, checkbox, radio</td>
+      </tr>
+      <tr>
+        <td>Select change</td>
+        <td><code>React.ChangeEvent&lt;HTMLSelectElement&gt;</code></td>
+        <td>Dropdown selection</td>
+      </tr>
+      <tr>
+        <td>Form submit</td>
+        <td><code>React.FormEvent&lt;HTMLFormElement&gt;</code></td>
+        <td>Form submission</td>
+      </tr>
+      <tr>
+        <td>Key press</td>
+        <td><code>React.KeyboardEvent&lt;HTMLInputElement&gt;</code></td>
+        <td>Keyboard shortcuts, enter key</td>
+      </tr>
+      <tr>
+        <td>Focus/Blur</td>
+        <td><code>React.FocusEvent&lt;HTMLInputElement&gt;</code></td>
+        <td>Validation on blur</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Common event handler patterns</div>
+<pre><code><span class="cm">// Click handler</span>
+<span class="kw">const</span> <span class="fn">handleClick</span> = (e: <span class="type">React.MouseEvent&lt;HTMLButtonElement&gt;</span>) =&gt; {
+  e.<span class="fn">preventDefault</span>()
+  console.<span class="fn">log</span>(<span class="str">"clicked"</span>, e.currentTarget.name)
+}
+
+<span class="cm">// Input change — e.target.value is typed as string</span>
+<span class="kw">const</span> <span class="fn">handleChange</span> = (e: <span class="type">React.ChangeEvent&lt;HTMLInputElement&gt;</span>) =&gt; {
+  <span class="fn">setQuery</span>(e.target.value)
+}
+
+<span class="cm">// Form submission</span>
+<span class="kw">const</span> <span class="fn">handleSubmit</span> = (e: <span class="type">React.FormEvent&lt;HTMLFormElement&gt;</span>) =&gt; {
+  e.<span class="fn">preventDefault</span>()  <span class="cm">// prevent page reload</span>
+  <span class="kw">const</span> formData = <span class="kw">new</span> <span class="type">FormData</span>(e.currentTarget)
+  <span class="cm">// process form...</span>
+}
+
+<span class="cm">// Keyboard handler — check which key</span>
+<span class="kw">const</span> <span class="fn">handleKeyDown</span> = (e: <span class="type">React.KeyboardEvent&lt;HTMLInputElement&gt;</span>) =&gt; {
+  <span class="kw">if</span> (e.key === <span class="str">"Enter"</span>) <span class="fn">submitSearch</span>()
+  <span class="kw">if</span> (e.key === <span class="str">"Escape"</span>) <span class="fn">clearInput</span>()
+}</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Shortcut:</strong> Instead of typing the event parameter, you can type the handler function itself: <code>const handleChange: React.ChangeEventHandler&lt;HTMLInputElement&gt; = (e) =&gt; { ... }</code>. TypeScript infers <code>e</code> automatically.
+  </div>
+
+  <!-- ===== GENERIC COMPONENTS ===== -->
+  <h2>Generic Components</h2>
+
+  <p>Components that work with <strong>any data type</strong> while maintaining type safety. Like Python's <code>Generic[T]</code> from <code>typing</code>, but for JSX.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python generic</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> typing <span class="kw">import</span> Generic, TypeVar, Callable
+
+T = TypeVar(<span class="str">"T"</span>)
+
+<span class="kw">class</span> <span class="type">DataList</span>(Generic[T]):
+    <span class="kw">def</span> <span class="fn">__init__</span>(
+        self,
+        items: <span class="type">list</span>[T],
+        render_item: Callable[[T], <span class="type">str</span>],
+    ):
+        self.items = items
+        self.render = render_item</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">React generic component</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">ListProps</span>&lt;T&gt; = {
+  items: T[]
+  renderItem: (item: T) =&gt; <span class="type">React.ReactNode</span>
+  keyExtractor: (item: T) =&gt; <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">List</span> = &lt;T,&gt;({
+  items,
+  renderItem,
+  keyExtractor,
+}: <span class="type">ListProps</span>&lt;T&gt;) =&gt; (
+  <span class="tag">&lt;ul&gt;</span>
+    {items.<span class="fn">map</span>(item =&gt; (
+      <span class="tag">&lt;li</span> <span class="attr">key</span>={<span class="fn">keyExtractor</span>(item)}<span class="tag">&gt;</span>
+        {<span class="fn">renderItem</span>(item)}
+      <span class="tag">&lt;/li&gt;</span>
+    ))}
+  <span class="tag">&lt;/ul&gt;</span>
+)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Usage — TypeScript infers T from the items</h3>
+<pre><code><span class="kw">type</span> <span class="type">User</span> = { id: <span class="type">string</span>; name: <span class="type">string</span>; email: <span class="type">string</span> }
+
+<span class="cm">// T is inferred as User from the `items` prop</span>
+<span class="tag">&lt;List</span>
+  <span class="attr">items</span>={users}
+  <span class="attr">keyExtractor</span>={user =&gt; user.id}
+  <span class="attr">renderItem</span>={user =&gt; (
+    <span class="cm">// `user` is fully typed as User here</span>
+    <span class="tag">&lt;span&gt;</span>{user.name} ({user.email})<span class="tag">&lt;/span&gt;</span>
+  )}
+<span class="tag">/&gt;</span></code></pre>
+
+  <div class="warn">
+    <strong>Syntax note:</strong> The trailing comma in <code>&lt;T,&gt;</code> is required in <code>.tsx</code> files. Without it, the parser confuses the generic <code>&lt;T&gt;</code> with a JSX tag. In <code>.ts</code> files, <code>&lt;T&gt;</code> works fine.
+  </div>
+
+  <!-- ===== COMPONENT PROPS EXTRACTION ===== -->
+  <h2><code>React.ComponentProps</code></h2>
+
+  <p>Extract the props type from any component without importing its props type directly. Essential when wrapping third-party components or building higher-order components.</p>
+
+<pre><code><span class="cm">// Extract props from a custom component</span>
+<span class="kw">type</span> <span class="type">ButtonProps</span> = <span class="type">React.ComponentProps</span>&lt;<span class="kw">typeof</span> Button&gt;
+
+<span class="cm">// Extract props from an HTML element</span>
+<span class="kw">type</span> <span class="type">InputProps</span> = <span class="type">React.ComponentProps</span>&lt;<span class="str">"input"</span>&gt;
+<span class="kw">type</span> <span class="type">DivProps</span> = <span class="type">React.ComponentProps</span>&lt;<span class="str">"div"</span>&gt;
+
+<span class="cm">// Practical use: wrap a component and add props</span>
+<span class="kw">type</span> <span class="type">EnhancedButtonProps</span> = <span class="type">React.ComponentProps</span>&lt;<span class="kw">typeof</span> Button&gt; &amp; {
+  isLoading?: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">EnhancedButton</span> = ({ isLoading, children, ...rest }: <span class="type">EnhancedButtonProps</span>) =&gt; (
+  <span class="tag">&lt;Button</span> {...rest} <span class="attr">disabled</span>={isLoading || rest.disabled}<span class="tag">&gt;</span>
+    {isLoading ? <span class="tag">&lt;Spinner /&gt;</span> : children}
+  <span class="tag">&lt;/Button&gt;</span>
+)</code></pre>
+
+  <!-- ===== REACTNODE VS REACTELEMENT ===== -->
+  <h2><code>ReactNode</code> vs <code>ReactElement</code> vs <code>JSX.Element</code></h2>
+
+  <p>Three similar types that often cause confusion. Here's when to use each.</p>
+
+  <table>
+    <thead>
+      <tr><th>Type</th><th>Includes</th><th>Use when</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>React.ReactNode</code></td>
+        <td>Everything: elements, strings, numbers, <code>null</code>, <code>undefined</code>, booleans, arrays</td>
+        <td>Accepting <code>children</code>, any renderable prop</td>
+      </tr>
+      <tr>
+        <td><code>React.ReactElement</code></td>
+        <td>Only JSX elements (not strings, numbers, null)</td>
+        <td>When you specifically need a JSX element (e.g., <code>cloneElement</code>)</td>
+      </tr>
+      <tr>
+        <td><code>JSX.Element</code></td>
+        <td>Same as <code>ReactElement</code> but less explicit</td>
+        <td>Rarely. Prefer <code>ReactElement</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><code><span class="cm">// ReactNode: accepts anything renderable (most common)</span>
+<span class="kw">type</span> <span class="type">CardProps</span> = { children: <span class="type">React.ReactNode</span> }
+
+<span class="cm">// ReactElement: must be actual JSX (not a string)</span>
+<span class="kw">type</span> <span class="type">TabProps</span> = { icon: <span class="type">React.ReactElement</span> }
+<span class="cm">// Usage: &lt;Tab icon={&lt;HomeIcon /&gt;} /&gt;  OK</span>
+<span class="cm">// Usage: &lt;Tab icon="home" /&gt;  ERROR</span></code></pre>
+
+  <div class="tip">
+    <strong>Default to <code>React.ReactNode</code></strong> unless you have a specific reason to require a JSX element. It's the most flexible and the standard for <code>children</code>.
+  </div>
+
+  <!-- ===== EXTENDING HTML ELEMENTS ===== -->
+  <h2>Extending HTML Elements</h2>
+
+  <p>When building a custom Button, Input, etc., you want it to accept all the native HTML attributes <strong>plus</strong> your custom props. Extend the HTML attribute types.</p>
+
+  <div class="panel">
+    <div class="panel-title">Custom button that extends native &lt;button&gt;</div>
+<pre><code><span class="kw">type</span> <span class="type">ButtonProps</span> = <span class="type">React.ButtonHTMLAttributes</span>&lt;<span class="type">HTMLButtonElement</span>&gt; &amp; {
+  variant?: <span class="str">"primary"</span> | <span class="str">"secondary"</span> | <span class="str">"danger"</span>
+  size?: <span class="str">"sm"</span> | <span class="str">"md"</span> | <span class="str">"lg"</span>
+  isLoading?: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">Button</span> = ({
+  variant = <span class="str">"primary"</span>,
+  size = <span class="str">"md"</span>,
+  isLoading,
+  className,
+  children,
+  disabled,
+  ...rest  <span class="cm">// all remaining native button props</span>
+}: <span class="type">ButtonProps</span>) =&gt; (
+  <span class="tag">&lt;button</span>
+    <span class="attr">className</span>={<span class="str">`btn btn--</span>${variant}<span class="str"> btn--</span>${size}<span class="str"> </span>${className ?? <span class="str">""</span>}<span class="str">`</span>}
+    <span class="attr">disabled</span>={disabled || isLoading}
+    {...rest}  <span class="cm">{/* spreads onClick, type, aria-*, etc. */}</span>
+  <span class="tag">&gt;</span>
+    {isLoading ? <span class="tag">&lt;Spinner /&gt;</span> : children}
+  <span class="tag">&lt;/button&gt;</span>
+)</code></pre>
+  </div>
+
+  <h3>Now it accepts everything a native button does</h3>
+<pre><code><span class="tag">&lt;Button</span> <span class="attr">variant</span>=<span class="str">"danger"</span> <span class="attr">onClick</span>={handleDelete}<span class="tag">&gt;</span>Delete<span class="tag">&lt;/Button&gt;</span>
+<span class="tag">&lt;Button</span> <span class="attr">type</span>=<span class="str">"submit"</span> <span class="attr">form</span>=<span class="str">"myForm"</span><span class="tag">&gt;</span>Save<span class="tag">&lt;/Button&gt;</span>
+<span class="tag">&lt;Button</span> <span class="attr">aria-label</span>=<span class="str">"Close"</span> <span class="attr">disabled</span><span class="tag">&gt;</span>X<span class="tag">&lt;/Button&gt;</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Common HTML attribute types</div>
+    <table>
+      <thead>
+        <tr><th>Element</th><th>Attribute type</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>&lt;button&gt;</code></td><td><code>React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code></td></tr>
+        <tr><td><code>&lt;input&gt;</code></td><td><code>React.InputHTMLAttributes&lt;HTMLInputElement&gt;</code></td></tr>
+        <tr><td><code>&lt;a&gt;</code></td><td><code>React.AnchorHTMLAttributes&lt;HTMLAnchorElement&gt;</code></td></tr>
+        <tr><td><code>&lt;div&gt;</code></td><td><code>React.HTMLAttributes&lt;HTMLDivElement&gt;</code></td></tr>
+        <tr><td>Any element</td><td><code>React.ComponentProps&lt;"elementName"&gt;</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== AS CONST ===== -->
+  <h2><code>as const</code> Assertions</h2>
+
+  <p>Make values read-only with literal types instead of wide types. Crucial for config objects and dropdown options.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Without as const</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> SIZES = [<span class="str">"sm"</span>, <span class="str">"md"</span>, <span class="str">"lg"</span>]
+<span class="cm">// Type: string[]</span>
+<span class="cm">// TypeScript only knows it's an array of strings.</span>
+<span class="cm">// Can't use as a union type.</span>
+
+<span class="kw">const</span> CONFIG = { maxRetries: <span class="num">3</span> }
+<span class="cm">// Type: { maxRetries: number }</span>
+<span class="cm">// Could be mutated. Type is wide.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">With as const</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> SIZES = [<span class="str">"sm"</span>, <span class="str">"md"</span>, <span class="str">"lg"</span>] <span class="kw">as const</span>
+<span class="cm">// Type: readonly ["sm", "md", "lg"]</span>
+<span class="cm">// Now we can derive a union type:</span>
+<span class="kw">type</span> <span class="type">Size</span> = (<span class="kw">typeof</span> SIZES)[<span class="type">number</span>]
+<span class="cm">// Type: "sm" | "md" | "lg"</span>
+
+<span class="kw">const</span> CONFIG = { maxRetries: <span class="num">3</span> } <span class="kw">as const</span>
+<span class="cm">// Type: { readonly maxRetries: 3 }</span>
+<span class="cm">// Immutable. Literal type 3, not number.</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Practical use: Dropdown from as const array</div>
+<pre><code><span class="kw">const</span> ROLES = [<span class="str">"admin"</span>, <span class="str">"editor"</span>, <span class="str">"viewer"</span>] <span class="kw">as const</span>
+<span class="kw">type</span> <span class="type">Role</span> = (<span class="kw">typeof</span> ROLES)[<span class="type">number</span>]  <span class="cm">// "admin" | "editor" | "viewer"</span>
+
+<span class="kw">type</span> <span class="type">RoleSelectProps</span> = {
+  value: <span class="type">Role</span>
+  onChange: (role: <span class="type">Role</span>) =&gt; <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">RoleSelect</span> = ({ value, onChange }: <span class="type">RoleSelectProps</span>) =&gt; (
+  <span class="tag">&lt;select</span>
+    <span class="attr">value</span>={value}
+    <span class="attr">onChange</span>={e =&gt; <span class="fn">onChange</span>(e.target.value <span class="kw">as</span> <span class="type">Role</span>)}
+  <span class="tag">&gt;</span>
+    {ROLES.<span class="fn">map</span>(role =&gt; (
+      <span class="tag">&lt;option</span> <span class="attr">key</span>={role} <span class="attr">value</span>={role}<span class="tag">&gt;</span>
+        {role.<span class="fn">charAt</span>(<span class="num">0</span>).<span class="fn">toUpperCase</span>() + role.<span class="fn">slice</span>(<span class="num">1</span>)}
+      <span class="tag">&lt;/option&gt;</span>
+    ))}
+  <span class="tag">&lt;/select&gt;</span>
+)
+
+<span class="cm">// Single source of truth: the ROLES array defines both</span>
+<span class="cm">// the type AND the runtime values. No duplication.</span></code></pre>
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Pattern Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>When to Use</th><th>Python Equivalent</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Discriminated unions</strong></td>
+        <td>Component has modes/variants with different valid props</td>
+        <td><code>Union[TypeA, TypeB]</code> with a <code>Literal</code> discriminant</td>
+      </tr>
+      <tr>
+        <td><strong>Event types</strong></td>
+        <td>Any event handler (click, change, submit, keydown)</td>
+        <td>No direct analog — Python web frameworks abstract events away</td>
+      </tr>
+      <tr>
+        <td><strong>Generic components</strong></td>
+        <td>Data-agnostic components (List, Table, Select)</td>
+        <td><code>class MyClass(Generic[T])</code></td>
+      </tr>
+      <tr>
+        <td><strong>ComponentProps</strong></td>
+        <td>Wrapping existing components, adding props</td>
+        <td><code>get_type_hints(some_function)</code></td>
+      </tr>
+      <tr>
+        <td><strong>Extending HTML</strong></td>
+        <td>Custom components that wrap native elements</td>
+        <td>No equivalent — Python doesn't have HTML attributes</td>
+      </tr>
+      <tr>
+        <td><strong>as const</strong></td>
+        <td>Config objects, dropdown options, route maps</td>
+        <td><code>tuple</code> + <code>Literal</code> types, or <code>Enum</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>11 — State Mental Model</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>11 — State Mental Model</h1>
+  <p class="subtitle">Understanding the different types of state and when to use each tool.</p>
+
+  <!-- ===== TWO TYPES OF STATE ===== -->
+  <h2>Server State vs Client State</h2>
+
+  <p>The single most important distinction in React state management. These are <strong>fundamentally different problems</strong> with different solutions. Mixing them up is the #1 source of state management pain.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header jsx">Server State</div>
+      <div class="comp-body">
+        <p><strong>Data that lives on a server.</strong></p>
+        <ul>
+          <li>Fetched asynchronously (API calls)</li>
+          <li>Can be <strong>stale</strong> — someone else may have changed it</li>
+          <li>Needs caching, deduplication, background refetching</li>
+          <li>Has loading/error/success states</li>
+          <li>Shared across many components</li>
+        </ul>
+        <p style="margin-top: 12px; color: #60a5fa;"><strong>Tool: TanStack Query</strong></p>
+        <p style="color: #999; font-size: 13px;">Examples: user profile, product list, search results, dashboard data</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">Client State</div>
+      <div class="comp-body">
+        <p><strong>Data that exists only in the browser.</strong></p>
+        <ul>
+          <li>Synchronous — always up to date</li>
+          <li>Never stale — you own it completely</li>
+          <li>No caching needed</li>
+          <li>Immediate updates, no loading states</li>
+          <li>Often local to one component or section</li>
+        </ul>
+        <p style="margin-top: 12px; color: #60a5fa;"><strong>Tool: useState, Zustand</strong></p>
+        <p style="color: #999; font-size: 13px;">Examples: dark mode toggle, sidebar open/closed, form inputs, modal visibility</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p><strong>Server state</strong> is like your database + cache layer. Think PostgreSQL with Redis in front. The data is "the truth" but your local copy might be stale. You need invalidation strategies, TTLs, and retry logic.</p>
+        <p style="margin-top: 8px;"><strong>Client state</strong> is like in-memory app state or session data. A Python dict you keep in your FastAPI/Flask app's memory. You own it, it's always fresh, and it disappears when the process dies.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">The Mistake</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// DON'T: Storing server data in client state</span>
+<span class="kw">const</span> [users, setUsers] = <span class="fn">useState</span>([])
+
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">fetch</span>(<span class="str">'/api/users'</span>)
+    .<span class="fn">then</span>(r => r.<span class="fn">json</span>())
+    .<span class="fn">then</span>(setUsers)
+}, [])
+<span class="cm">// No caching, no loading state, no error</span>
+<span class="cm">// handling, no refetch on focus, no dedup</span></code></pre>
+        <p style="color: #999; font-size: 13px; margin-top: 8px;">Use TanStack Query for server data. It handles all the complexity for you.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DECISION TREE ===== -->
+  <h2>The State Decision Tree</h2>
+
+  <p>When you need state in a React app, walk through this decision tree top to bottom. Pick the <strong>simplest tool that fits</strong>.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Is it from an API?</div>
+      <div class="desc">Server data, fetched async</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">TanStack Query</div>
+      <div class="desc">Caching, loading, error, refetch</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Used by one component?</div>
+      <div class="desc">Toggle, form input, local UI</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">useState</div>
+      <div class="desc">Simple, local, component-scoped</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Complex local logic?</div>
+      <div class="desc">Multiple related state transitions</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">useReducer</div>
+      <div class="desc">State machine, action/dispatch</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Shared by a few nearby components?</div>
+      <div class="desc">Parent + 1-2 children</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">Lift State Up</div>
+      <div class="desc">Move state to common parent, pass via props</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Rarely-changing global data?</div>
+      <div class="desc">Theme, auth, locale</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">React Context</div>
+      <div class="desc">Provider/consumer, avoid for frequent updates</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Complex shared client state?</div>
+      <div class="desc">Shopping cart, multi-step form, notifications</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">Zustand</div>
+      <div class="desc">External store, selectors, middleware</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Common mistake:</strong> Putting everything in a global store. Most state is <strong>local</strong>. In a typical app, 80%+ of state is local <code>useState</code> and server state handled by TanStack Query. Only a small fraction needs Zustand.
+  </div>
+
+  <!-- ===== DECISION TABLE ===== -->
+  <h2>Quick Reference Table</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>When</th>
+        <th>Scope</th>
+        <th>Examples</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>useState</code></td>
+        <td>Simple local state</td>
+        <td>Single component</td>
+        <td>Toggle, form input, counter</td>
+      </tr>
+      <tr>
+        <td><code>useReducer</code></td>
+        <td>Complex local state with transitions</td>
+        <td>Single component</td>
+        <td>Multi-step form, state machine</td>
+      </tr>
+      <tr>
+        <td>Props (lift up)</td>
+        <td>Shared by nearby components</td>
+        <td>Parent + children</td>
+        <td>Selected item in a list</td>
+      </tr>
+      <tr>
+        <td>Context</td>
+        <td>Rare-changing global data</td>
+        <td>Subtree</td>
+        <td>Theme, auth user, locale</td>
+      </tr>
+      <tr>
+        <td>Zustand</td>
+        <td>Complex shared client state</td>
+        <td>Global / cross-cutting</td>
+        <td>Cart, notifications, preferences</td>
+      </tr>
+      <tr>
+        <td>TanStack Query</td>
+        <td>Server data</td>
+        <td>Global (cached)</td>
+        <td>API responses, user profiles</td>
+      </tr>
+      <tr>
+        <td>URL params</td>
+        <td>Shareable/bookmarkable state</td>
+        <td>Global (URL)</td>
+        <td>Search, filters, pagination</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== URL AS STATE ===== -->
+  <h2>URL as State</h2>
+
+  <p>Search params, filters, pagination, and sorting should live in the <strong>URL</strong> — not in component state. This makes the state shareable, bookmarkable, and the back button works correctly.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">In component state</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// State lost on page refresh</span>
+<span class="cm">// Can't share a link to this view</span>
+<span class="cm">// Back button doesn't work</span>
+<span class="kw">const</span> [search, setSearch] = <span class="fn">useState</span>(<span class="str">''</span>)
+<span class="kw">const</span> [page, setPage] = <span class="fn">useState</span>(<span class="num">1</span>)
+<span class="kw">const</span> [sort, setSort] = <span class="fn">useState</span>(<span class="str">'name'</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">In the URL</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// /products?search=shirt&page=2&sort=name</span>
+<span class="cm">// Shareable, bookmarkable, back button works</span>
+<span class="kw">const</span> [searchParams, setSearchParams] =
+  <span class="fn">useSearchParams</span>()
+
+<span class="kw">const</span> search = searchParams.<span class="fn">get</span>(<span class="str">'search'</span>) ?? <span class="str">''</span>
+<span class="kw">const</span> page = <span class="fn">Number</span>(searchParams.<span class="fn">get</span>(<span class="str">'page'</span>) ?? <span class="num">1</span>)
+<span class="kw">const</span> sort = searchParams.<span class="fn">get</span>(<span class="str">'sort'</span>) ?? <span class="str">'name'</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> If a user would want to bookmark or share the current view, that state belongs in the URL. Think search results pages, filter configurations, and paginated lists.
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Analogy</div>
+      <div class="comp-body">
+        <p>URL state is like query parameters in a REST API endpoint. In Flask/FastAPI:</p>
+<pre><code><span class="cm"># GET /products?search=shirt&page=2</span>
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/products"</span>)
+<span class="kw">def</span> <span class="fn">list_products</span>(
+    search: <span class="type">str</span> = <span class="str">""</span>,
+    page: <span class="type">int</span> = <span class="num">1</span>,
+    sort: <span class="type">str</span> = <span class="str">"name"</span>
+):
+    ...</code></pre>
+        <p style="color: #999; font-size: 13px; margin-top: 8px;">Same idea in the browser: the URL drives what data the page shows.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React Router equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Read from URL</span>
+<span class="kw">const</span> [params] = <span class="fn">useSearchParams</span>()
+<span class="kw">const</span> search = params.<span class="fn">get</span>(<span class="str">'search'</span>) ?? <span class="str">''</span>
+
+<span class="cm">// Write to URL</span>
+<span class="kw">const</span> <span class="fn">updateSearch</span> = (<span class="prop">value</span>: <span class="type">string</span>) => {
+  <span class="fn">setSearchParams</span>(prev => {
+    prev.<span class="fn">set</span>(<span class="str">'search'</span>, value)
+    prev.<span class="fn">set</span>(<span class="str">'page'</span>, <span class="str">'1'</span>) <span class="cm">// reset page</span>
+    <span class="kw">return</span> prev
+  })
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WHAT GOES WHERE ===== -->
+  <h2>Visual: Where State Lives</h2>
+
+  <div class="panel">
+    <div class="panel-title">Typical App State Distribution</div>
+    <div class="grid-3">
+      <div style="background: #1e293b; padding: 16px; border-radius: 8px; border-left: 3px solid #60a5fa; text-align: center;">
+        <p style="color: #60a5fa; font-weight: bold; font-size: 24px;">~50%</p>
+        <p style="font-weight: bold; color: #fff;">Server State</p>
+        <p style="color: #999; font-size: 12px;">TanStack Query</p>
+        <p style="color: #888; font-size: 12px; margin-top: 6px;">API data, user profiles, lists, search results</p>
+      </div>
+      <div style="background: #1e293b; padding: 16px; border-radius: 8px; border-left: 3px solid #34d399; text-align: center;">
+        <p style="color: #34d399; font-weight: bold; font-size: 24px;">~35%</p>
+        <p style="font-weight: bold; color: #fff;">Local State</p>
+        <p style="color: #999; font-size: 12px;">useState / useReducer</p>
+        <p style="color: #888; font-size: 12px; margin-top: 6px;">Form inputs, toggles, modals, dropdowns</p>
+      </div>
+      <div style="background: #1e293b; padding: 16px; border-radius: 8px; border-left: 3px solid #e94560; text-align: center;">
+        <p style="color: #e94560; font-weight: bold; font-size: 24px;">~15%</p>
+        <p style="font-weight: bold; color: #fff;">Global Client State</p>
+        <p style="color: #999; font-size: 12px;">Zustand / Context / URL</p>
+        <p style="color: #888; font-size: 12px; margin-top: 6px;">Theme, auth, cart, filters</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> If you find yourself reaching for Zustand or Context for most of your state, you're probably overcomplicating things. Start with <code>useState</code> and TanStack Query. Only reach for more when you genuinely need it.
+  </div>
+
+  <!-- ===== CONTEXT PITFALLS ===== -->
+  <h2>Why Context Is Not a State Manager</h2>
+
+  <p>React Context is often misused as a state manager. It works fine for <strong>rarely-changing data</strong> (theme, auth, locale), but has a fundamental problem with frequent updates:</p>
+
+  <div class="panel">
+    <div class="panel-title">The Re-render Problem</div>
+<pre><code><span class="cm">// Every component consuming this context re-renders</span>
+<span class="cm">// when ANY value in it changes</span>
+<span class="kw">const</span> <span class="type">AppContext</span> = <span class="fn">createContext</span>({
+  theme: <span class="str">'dark'</span>,
+  user: <span class="kw">null</span>,
+  notifications: [],   <span class="cm">// changes frequently!</span>
+  sidebarOpen: <span class="kw">false</span>,
+  cartItems: [],        <span class="cm">// changes frequently!</span>
+})
+
+<span class="cm">// Component only reads theme, but re-renders when</span>
+<span class="cm">// notifications or cartItems change too</span>
+<span class="kw">const</span> <span class="fn">Header</span> = () => {
+  <span class="kw">const</span> { theme } = <span class="fn">useContext</span>(<span class="type">AppContext</span>)
+  <span class="cm">// ^^^ re-renders on EVERY context change</span>
+}</code></pre>
+    <p style="color: #999; margin-top: 10px;">Zustand solves this with <strong>selectors</strong> — components only re-render when their selected slice changes.</p>
+  </div>
+
+  <!-- ===== MENTAL MODEL SUMMARY ===== -->
+  <h2>Summary: The Mental Model</h2>
+
+  <div class="panel">
+    <div class="panel-title">Think of state as three buckets</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong style="color: #60a5fa;">Does this data come from a server?</strong>
+          <p style="color: #999; font-size: 13px;">Use TanStack Query. Don't put API data in useState or Zustand.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong style="color: #34d399;">Is it only used by this component (or nearby children)?</strong>
+          <p style="color: #999; font-size: 13px;">Use useState/useReducer. Lift state up if needed. Keep it local.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong style="color: #e94560;">Is it truly global client-only state?</strong>
+          <p style="color: #999; font-size: 13px;">Use Zustand for complex state, Context for simple rarely-changing values, URL for shareable state.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Start simple.</strong> Begin with <code>useState</code> everywhere. Only "promote" state to a higher-level tool when you feel the pain. Premature state management abstraction is just as bad as premature optimization.
+  </div>
+
+</body>
+</html>

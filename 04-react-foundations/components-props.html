@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 — Components & Props</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>04 — Components & Props</h1>
+  <p class="subtitle">Components are functions. Props are their typed arguments. Composition replaces inheritance.</p>
+
+  <!-- ===== COMPONENTS ARE FUNCTIONS ===== -->
+  <h2>Components Are Functions</h2>
+
+  <p>A React component is a <strong>regular TypeScript function</strong> that returns JSX. That's it. No magic, no special base class.</p>
+
+<pre><code><span class="cm">// Simplest possible component</span>
+<span class="kw">const</span> <span class="fn">Greeting</span> = () => {
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>Hello, world!<span class="tag">&lt;/h1&gt;</span>
+}
+
+<span class="cm">// Use it like an HTML tag</span>
+<span class="tag">&lt;Greeting /&gt;</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Component rules</div>
+    <table>
+      <thead>
+        <tr><th>Rule</th><th>Example</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Name must be uppercase</strong></td>
+          <td><code>UserCard</code>, not <code>userCard</code></td>
+          <td>Lowercase = HTML element (<code>&lt;div&gt;</code>). Uppercase = React component.</td>
+        </tr>
+        <tr>
+          <td><strong>Must return JSX or null</strong></td>
+          <td><code>return &lt;div&gt;...&lt;/div&gt;</code></td>
+          <td>Returning <code>null</code> renders nothing (useful for conditional rendering)</td>
+        </tr>
+        <tr>
+          <td><strong>Pure during render</strong></td>
+          <td>No side effects in the return path</td>
+          <td>Given same props/state, same output. Side effects go in hooks.</td>
+        </tr>
+        <tr>
+          <td><strong>One component per file</strong></td>
+          <td><code>UserCard.tsx</code> exports <code>UserCard</code></td>
+          <td>Convention for organization (small helpers can coexist)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># A function that produces output</span>
+<span class="kw">def</span> <span class="fn">greeting</span>() -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">"&lt;h1&gt;Hello, world!&lt;/h1&gt;"</span>
+
+<span class="cm"># Calling it</span>
+html = <span class="fn">greeting</span>()</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// A function that produces UI</span>
+<span class="kw">const</span> <span class="fn">Greeting</span> = () => {
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>Hello, world!<span class="tag">&lt;/h1&gt;</span>
+}
+
+<span class="cm">// "Calling" it (React does this for you)</span>
+<span class="tag">&lt;Greeting /&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PROPS ===== -->
+  <h2>Props = Function Arguments</h2>
+
+  <p>Props (short for "properties") are how you pass data from a parent component to a child. They're the component's <strong>function arguments</strong>, typed with a TypeScript interface.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> dataclasses <span class="kw">import</span> dataclass
+
+<span class="kw">@dataclass</span>
+<span class="kw">class</span> <span class="type">UserCardProps</span>:
+    name: <span class="type">str</span>
+    age: <span class="type">int</span>
+    email: <span class="type">str</span> | <span class="type">None</span> = <span class="val">None</span>
+
+<span class="kw">def</span> <span class="fn">user_card</span>(props: <span class="type">UserCardProps</span>) -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">f"&lt;div&gt;{props.name}&lt;/div&gt;"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript / React</div>
+      <div class="comp-body">
+<pre><code><span class="kw">interface</span> <span class="type">UserCardProps</span> {
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">age</span>: <span class="type">number</span>
+  <span class="prop">email</span>?: <span class="type">string</span>  <span class="cm">// optional</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserCard</span> = ({ name, age, email }: <span class="type">UserCardProps</span>) => {
+  <span class="kw">return</span> <span class="tag">&lt;div&gt;</span>{name}<span class="tag">&lt;/div&gt;</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Passing props</h3>
+
+<pre><code><span class="cm">// Parent passes data down via attributes</span>
+<span class="kw">const</span> <span class="fn">App</span> = () => {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;UserCard</span> <span class="attr">name</span>=<span class="str">"Alice"</span> <span class="attr">age</span>={<span class="num">30</span>} <span class="attr">email</span>=<span class="str">"alice@example.com"</span> <span class="tag">/&gt;</span>
+      <span class="tag">&lt;UserCard</span> <span class="attr">name</span>=<span class="str">"Bob"</span> <span class="attr">age</span>={<span class="num">25</span>} <span class="tag">/&gt;</span>   <span class="cm">{/* email is optional, omitted */}</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Props type patterns</div>
+<pre><code><span class="kw">interface</span> <span class="type">ButtonProps</span> {
+  <span class="prop">label</span>: <span class="type">string</span>                          <span class="cm">// required string</span>
+  <span class="prop">size</span>?: <span class="str">"sm"</span> | <span class="str">"md"</span> | <span class="str">"lg"</span>               <span class="cm">// optional union type</span>
+  <span class="prop">disabled</span>?: <span class="type">boolean</span>                     <span class="cm">// optional boolean</span>
+  <span class="prop">onClick</span>: () => <span class="type">void</span>                    <span class="cm">// required callback function</span>
+  <span class="prop">icon</span>?: <span class="type">React.ReactNode</span>                 <span class="cm">// optional JSX element</span>
+  <span class="prop">style</span>?: <span class="type">React.CSSProperties</span>             <span class="cm">// optional CSS object</span>
+  <span class="prop">items</span>: <span class="type">string</span>[]                         <span class="cm">// required array</span>
+  <span class="prop">config</span>: { <span class="prop">theme</span>: <span class="type">string</span>; <span class="prop">debug</span>: <span class="type">boolean</span> }  <span class="cm">// required object</span>
+}</code></pre>
+  </div>
+
+  <h3>Default prop values</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">AlertProps</span> {
+  <span class="prop">message</span>: <span class="type">string</span>
+  <span class="prop">severity</span>?: <span class="str">"info"</span> | <span class="str">"warn"</span> | <span class="str">"error"</span>
+}
+
+<span class="cm">// Use destructuring defaults — same as Python default args</span>
+<span class="kw">const</span> <span class="fn">Alert</span> = ({ message, severity = <span class="str">"info"</span> }: <span class="type">AlertProps</span>) => {
+  <span class="kw">return</span> <span class="tag">&lt;div</span> <span class="attr">className</span>={<span class="str">`alert-${severity}`</span>}<span class="tag">&gt;</span>{message}<span class="tag">&lt;/div&gt;</span>
+}
+
+<span class="cm">// Usage:</span>
+<span class="tag">&lt;Alert</span> <span class="attr">message</span>=<span class="str">"Saved"</span> <span class="tag">/&gt;</span>               <span class="cm">{/* severity defaults to "info" */}</span>
+<span class="tag">&lt;Alert</span> <span class="attr">message</span>=<span class="str">"Uh oh"</span> <span class="attr">severity</span>=<span class="str">"error"</span> <span class="tag">/&gt;</span></code></pre>
+
+  <!-- ===== CHILDREN PROP ===== -->
+  <h2>The Children Prop</h2>
+
+  <p>The <code>children</code> prop represents whatever you put <strong>between</strong> a component's opening and closing tags. It's how you build wrapper/layout components.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Like a decorator/wrapper function</span>
+<span class="kw">def</span> <span class="fn">with_border</span>(content: <span class="type">str</span>) -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">f"""
+    &lt;div class="border"&gt;
+      {content}
+    &lt;/div&gt;
+    """</span>
+
+<span class="cm"># Content passed as argument</span>
+<span class="fn">with_border</span>(<span class="str">"&lt;p&gt;Hello&lt;/p&gt;"</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React children</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Wrapper component</span>
+<span class="kw">interface</span> <span class="type">CardProps</span> {
+  <span class="prop">children</span>: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">const</span> <span class="fn">Card</span> = ({ children }: <span class="type">CardProps</span>) => (
+  <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"card"</span><span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Content passed between tags</span>
+<span class="tag">&lt;Card&gt;</span>
+  <span class="tag">&lt;p&gt;</span>Hello<span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;/Card&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">React.ReactNode — what can children be?</div>
+    <p><code>React.ReactNode</code> is the type for anything renderable:</p>
+    <ul>
+      <li>JSX elements: <code>&lt;p&gt;text&lt;/p&gt;</code></li>
+      <li>Strings and numbers: <code>"hello"</code>, <code>42</code></li>
+      <li>Arrays of elements: <code>[&lt;p&gt;a&lt;/p&gt;, &lt;p&gt;b&lt;/p&gt;]</code></li>
+      <li>Fragments: <code>&lt;&gt;...&lt;/&gt;</code></li>
+      <li><code>null</code>, <code>undefined</code>, <code>false</code> (render nothing)</li>
+    </ul>
+  </div>
+
+  <h3>Combining children with other props</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">PanelProps</span> {
+  <span class="prop">title</span>: <span class="type">string</span>
+  <span class="prop">variant</span>?: <span class="str">"default"</span> | <span class="str">"highlighted"</span>
+  <span class="prop">children</span>: <span class="type">React.ReactNode</span>
+}
+
+<span class="kw">const</span> <span class="fn">Panel</span> = ({ title, variant = <span class="str">"default"</span>, children }: <span class="type">PanelProps</span>) => (
+  <span class="tag">&lt;section</span> <span class="attr">className</span>={<span class="str">`panel panel-${variant}`</span>}<span class="tag">&gt;</span>
+    <span class="tag">&lt;h2&gt;</span>{title}<span class="tag">&lt;/h2&gt;</span>
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"panel-body"</span><span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/div&gt;</span>
+  <span class="tag">&lt;/section&gt;</span>
+)
+
+<span class="cm">// Usage: title is a prop, everything between tags is children</span>
+<span class="tag">&lt;Panel</span> <span class="attr">title</span>=<span class="str">"User Details"</span> <span class="attr">variant</span>=<span class="str">"highlighted"</span><span class="tag">&gt;</span>
+  <span class="tag">&lt;p&gt;</span>Name: Alice<span class="tag">&lt;/p&gt;</span>
+  <span class="tag">&lt;p&gt;</span>Email: alice@example.com<span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;/Panel&gt;</span></code></pre>
+
+  <!-- ===== COMPOSITION ===== -->
+  <h2>Composition Over Inheritance</h2>
+
+  <p>React has <strong>no inheritance</strong>. You never extend a base component. Instead, you compose components together — small pieces combined into bigger pieces.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Inheritance (NOT how React works)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// DON'T do this. This is not React.</span>
+<span class="kw">class</span> <span class="type">Button</span> <span class="kw">extends</span> <span class="type">BaseComponent</span> { }
+<span class="kw">class</span> <span class="type">DangerButton</span> <span class="kw">extends</span> <span class="type">Button</span> { }
+<span class="kw">class</span> <span class="type">IconDangerButton</span> <span class="kw">extends</span> <span class="type">DangerButton</span> { }
+
+<span class="cm">// Deep inheritance chains = fragile,</span>
+<span class="cm">// hard to change, tightly coupled.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Composition (the React way)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Compose small components into bigger ones</span>
+<span class="kw">const</span> <span class="fn">Button</span> = ({ children, ...props }: <span class="type">Props</span>) =>
+  <span class="tag">&lt;button</span> {...props}<span class="tag">&gt;</span>{children}<span class="tag">&lt;/button&gt;</span>
+
+<span class="kw">const</span> <span class="fn">DangerButton</span> = ({ children, ...props }: <span class="type">Props</span>) =>
+  <span class="tag">&lt;Button</span> <span class="attr">className</span>=<span class="str">"danger"</span> {...props}<span class="tag">&gt;</span>
+    {children}
+  <span class="tag">&lt;/Button&gt;</span>
+
+<span class="kw">const</span> <span class="fn">IconButton</span> = ({ icon, children }: <span class="type">Props</span>) =>
+  <span class="tag">&lt;Button&gt;</span>{icon} {children}<span class="tag">&lt;/Button&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> This is like preferring composition over inheritance in Python. Instead of deep class hierarchies, you inject dependencies and compose behaviors. A <code>DangerButton</code> is just a <code>Button</code> with specific props, not a subclass.
+  </div>
+
+  <!-- ===== ONE-WAY DATA FLOW ===== -->
+  <h2>One-Way Data Flow</h2>
+
+  <p>Props are <strong>read-only</strong>. A child component cannot modify its props. To communicate back to the parent, the parent passes a <strong>callback function</strong> as a prop.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Parent</div>
+      <div class="desc">Owns state and passes data + callbacks down</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Props (down)</div>
+      <div class="desc"><code>name="Alice"</code>, <code>onDelete={fn}</code></div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Child</div>
+      <div class="desc">Renders data, calls callbacks on user action</div>
+    </div>
+  </div>
+
+<pre><code><span class="cm">// Parent owns the state, passes data and callbacks down</span>
+<span class="kw">const</span> <span class="fn">TodoApp</span> = () => {
+  <span class="kw">const</span> [todos, setTodos] = <span class="fn">useState</span>([
+    { <span class="prop">id</span>: <span class="num">1</span>, <span class="prop">text</span>: <span class="str">"Learn React"</span> },
+    { <span class="prop">id</span>: <span class="num">2</span>, <span class="prop">text</span>: <span class="str">"Build something"</span> },
+  ])
+
+  <span class="kw">const</span> <span class="fn">handleDelete</span> = (id: <span class="type">number</span>) => {
+    <span class="fn">setTodos</span>(prev => prev.<span class="fn">filter</span>(t => t.id !== id))
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {todos.<span class="fn">map</span>(todo => (
+        <span class="tag">&lt;TodoItem</span>
+          <span class="attr">key</span>={todo.id}
+          <span class="attr">text</span>={todo.text}
+          <span class="attr">onDelete</span>={() => <span class="fn">handleDelete</span>(todo.id)}
+        <span class="tag">/&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}
+
+<span class="cm">// Child receives data and callback via props</span>
+<span class="kw">interface</span> <span class="type">TodoItemProps</span> {
+  <span class="prop">text</span>: <span class="type">string</span>
+  <span class="prop">onDelete</span>: () => <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">TodoItem</span> = ({ text, onDelete }: <span class="type">TodoItemProps</span>) => (
+  <span class="tag">&lt;li&gt;</span>
+    {text}
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={onDelete}<span class="tag">&gt;</span>Delete<span class="tag">&lt;/button&gt;</span>
+  <span class="tag">&lt;/li&gt;</span>
+)</code></pre>
+
+  <div class="warn">
+    <strong>Never mutate props:</strong> <code>props.name = "Bob"</code> is wrong and will cause bugs. Props are immutable from the child's perspective. If a child needs to change something, it calls a callback that lets the parent update its own state.
+  </div>
+
+  <!-- ===== COMPONENT ORGANIZATION ===== -->
+  <h2>Component Organization</h2>
+
+  <div class="panel">
+    <div class="panel-title">File structure conventions</div>
+    <div class="file-tree">
+      <span class="dir">src/</span><br>
+      &nbsp;&nbsp;<span class="dir">components/</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">UserCard.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># One component per file</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">UserList.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Named export: export { UserList }</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">TodoItem.tsx</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">TodoApp.tsx</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Button.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Reusable UI components</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">Panel.tsx</span><br>
+      &nbsp;&nbsp;<span class="file">App.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Root component</span><br>
+      &nbsp;&nbsp;<span class="file">main.tsx</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># Entry point</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Conventions</div>
+    <ul>
+      <li><strong>File name = component name</strong> — <code>UserCard.tsx</code> contains <code>UserCard</code></li>
+      <li><strong>Named exports</strong> — <code>export { UserCard }</code>, not <code>export default UserCard</code>. Named exports are easier to refactor and search for.</li>
+      <li><strong>Props interface defined in the same file</strong> — <code>interface UserCardProps</code> lives next to <code>UserCard</code></li>
+      <li><strong>Co-locate related files</strong> — put <code>UserCard.tsx</code>, <code>UserCard.css</code>, <code>UserCard.test.tsx</code> together</li>
+    </ul>
+  </div>
+
+  <!-- ===== REALISTIC EXAMPLE ===== -->
+  <h2>Realistic Example: UserList with UserCard</h2>
+
+  <p>Let's build a complete, typed example with multiple components working together.</p>
+
+  <h3>Types (types.ts)</h3>
+
+<pre><code><span class="cm">// Shared type definitions</span>
+<span class="kw">interface</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">number</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">role</span>: <span class="str">"admin"</span> | <span class="str">"user"</span> | <span class="str">"viewer"</span>
+  <span class="prop">active</span>: <span class="type">boolean</span>
+}
+
+<span class="kw">export type</span> { <span class="type">User</span> }</code></pre>
+
+  <h3>UserCard.tsx</h3>
+
+<pre><code><span class="kw">import type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+
+<span class="kw">interface</span> <span class="type">UserCardProps</span> {
+  <span class="prop">user</span>: <span class="type">User</span>
+  <span class="prop">onDelete</span>: (id: <span class="type">number</span>) => <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserCard</span> = ({ user, onDelete }: <span class="type">UserCardProps</span>) => {
+  <span class="kw">const</span> roleColors: <span class="type">Record</span>&lt;<span class="type">User</span>[<span class="str">"role"</span>], <span class="type">string</span>&gt; = {
+    <span class="prop">admin</span>: <span class="str">"#e94560"</span>,
+    <span class="prop">user</span>: <span class="str">"#82aaff"</span>,
+    <span class="prop">viewer</span>: <span class="str">"#888"</span>,
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"user-card"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"user-card-header"</span><span class="tag">&gt;</span>
+        <span class="tag">&lt;h3&gt;</span>{user.name}<span class="tag">&lt;/h3&gt;</span>
+        <span class="tag">&lt;span</span> <span class="attr">style</span>={{ <span class="prop">color</span>: roleColors[user.role] }}<span class="tag">&gt;</span>
+          {user.role}
+        <span class="tag">&lt;/span&gt;</span>
+      <span class="tag">&lt;/div&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{user.email}<span class="tag">&lt;/p&gt;</span>
+      {!user.active && <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"inactive"</span><span class="tag">&gt;</span>Inactive<span class="tag">&lt;/p&gt;</span>}
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() => <span class="fn">onDelete</span>(user.id)}<span class="tag">&gt;</span>
+        Remove
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="kw">export</span> { <span class="fn">UserCard</span> }</code></pre>
+
+  <h3>UserList.tsx</h3>
+
+<pre><code><span class="kw">import type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+<span class="kw">import</span> { <span class="fn">UserCard</span> } <span class="kw">from</span> <span class="str">'./UserCard'</span>
+
+<span class="kw">interface</span> <span class="type">UserListProps</span> {
+  <span class="prop">users</span>: <span class="type">User</span>[]
+  <span class="prop">onDeleteUser</span>: (id: <span class="type">number</span>) => <span class="type">void</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserList</span> = ({ users, onDeleteUser }: <span class="type">UserListProps</span>) => {
+  <span class="kw">if</span> (users.<span class="prop">length</span> === <span class="num">0</span>) {
+    <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>No users found.<span class="tag">&lt;/p&gt;</span>
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"user-list"</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>Users ({users.<span class="prop">length</span>})<span class="tag">&lt;/h2&gt;</span>
+      {users.<span class="fn">map</span>(user => (
+        <span class="tag">&lt;UserCard</span>
+          <span class="attr">key</span>={user.id}
+          <span class="attr">user</span>={user}
+          <span class="attr">onDelete</span>={onDeleteUser}
+        <span class="tag">/&gt;</span>
+      ))}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}
+
+<span class="kw">export</span> { <span class="fn">UserList</span> }</code></pre>
+
+  <h3>App.tsx (putting it together)</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useState</span> } <span class="kw">from</span> <span class="str">'react'</span>
+<span class="kw">import type</span> { <span class="type">User</span> } <span class="kw">from</span> <span class="str">'./types'</span>
+<span class="kw">import</span> { <span class="fn">UserList</span> } <span class="kw">from</span> <span class="str">'./UserList'</span>
+
+<span class="kw">const</span> <span class="fn">App</span> = () => {
+  <span class="kw">const</span> [users, setUsers] = <span class="fn">useState</span>&lt;<span class="type">User</span>[]&gt;([
+    { <span class="prop">id</span>: <span class="num">1</span>, <span class="prop">name</span>: <span class="str">"Alice"</span>, <span class="prop">email</span>: <span class="str">"alice@co.com"</span>, <span class="prop">role</span>: <span class="str">"admin"</span>, <span class="prop">active</span>: <span class="val">true</span> },
+    { <span class="prop">id</span>: <span class="num">2</span>, <span class="prop">name</span>: <span class="str">"Bob"</span>, <span class="prop">email</span>: <span class="str">"bob@co.com"</span>, <span class="prop">role</span>: <span class="str">"user"</span>, <span class="prop">active</span>: <span class="val">true</span> },
+    { <span class="prop">id</span>: <span class="num">3</span>, <span class="prop">name</span>: <span class="str">"Charlie"</span>, <span class="prop">email</span>: <span class="str">"charlie@co.com"</span>, <span class="prop">role</span>: <span class="str">"viewer"</span>, <span class="prop">active</span>: <span class="val">false</span> },
+  ])
+
+  <span class="kw">const</span> <span class="fn">handleDeleteUser</span> = (id: <span class="type">number</span>) => {
+    <span class="fn">setUsers</span>(prev => prev.<span class="fn">filter</span>(user => user.id !== id))
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;main&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>My App<span class="tag">&lt;/h1&gt;</span>
+      <span class="tag">&lt;UserList</span> <span class="attr">users</span>={users} <span class="attr">onDeleteUser</span>={handleDeleteUser} <span class="tag">/&gt;</span>
+    <span class="tag">&lt;/main&gt;</span>
+  )
+}
+
+<span class="kw">export</span> { <span class="fn">App</span> }</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Data flow in this example</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">App</div>
+        <div class="desc">Owns <code>users</code> state and <code>handleDeleteUser</code></div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">UserList</div>
+        <div class="desc">Receives <code>users[]</code> and <code>onDeleteUser</code>, maps over users</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">UserCard</div>
+        <div class="desc">Receives single <code>user</code> and <code>onDelete</code>, renders card + button</div>
+      </div>
+    </div>
+    <p>When the "Remove" button is clicked: <code>UserCard</code> calls <code>onDelete(id)</code> -> <code>UserList</code> passes it up -> <code>App</code>'s <code>handleDeleteUser</code> updates state -> React re-renders the tree with the new user list.</p>
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Quick Reference</h2>
+
+  <div class="panel">
+    <div class="panel-title">Components & props cheat sheet</div>
+    <table>
+      <thead>
+        <tr><th>Concept</th><th>Syntax</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Define a component</td><td><code>const MyComp = () => { return &lt;div&gt;...&lt;/div&gt; }</code></td></tr>
+        <tr><td>Type props</td><td><code>interface Props { name: string }</code></td></tr>
+        <tr><td>Destructure props</td><td><code>({ name, age }: Props)</code></td></tr>
+        <tr><td>Optional prop</td><td><code>email?: string</code></td></tr>
+        <tr><td>Default value</td><td><code>({ size = "md" }: Props)</code></td></tr>
+        <tr><td>Children</td><td><code>children: React.ReactNode</code></td></tr>
+        <tr><td>Callback prop</td><td><code>onDelete: (id: number) => void</code></td></tr>
+        <tr><td>Use a component</td><td><code>&lt;UserCard name="Alice" age={30} /&gt;</code></td></tr>
+        <tr><td>Named export</td><td><code>export { UserCard }</code></td></tr>
+        <tr><td>Import</td><td><code>import { UserCard } from './UserCard'</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>

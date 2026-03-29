@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 — Auth &amp; Protected Routes</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>09 — Auth &amp; Protected Routes</h1>
+  <p class="subtitle">Route guards with beforeLoad, auth context, layout-level protection, redirects, and role-based access.</p>
+
+  <!-- ===== THE PATTERN ===== -->
+  <h2>The Pattern</h2>
+
+  <p>Many routes in a real app require the user to be logged in. If they're not, redirect them to <code>/login</code>. After they log in, send them back to where they were trying to go. This is the same pattern as Flask's <code>@login_required</code> decorator.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Flask / FastAPI</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Flask: decorator-based guard</span>
+<span class="kw">@app</span>.<span class="fn">route</span>(<span class="str">"/dashboard"</span>)
+<span class="kw">@login_required</span>
+<span class="kw">def</span> <span class="fn">dashboard</span>():
+    <span class="kw">return</span> <span class="fn">render_template</span>(<span class="str">"dash.html"</span>)
+
+<span class="cm"># FastAPI: dependency injection</span>
+<span class="kw">@app</span>.<span class="fn">get</span>(<span class="str">"/dashboard"</span>)
+<span class="kw">async def</span> <span class="fn">dashboard</span>(
+    user: <span class="type">User</span> = <span class="fn">Depends</span>(get_current_user)
+):
+    <span class="kw">return</span> {<span class="str">"user"</span>: user}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TanStack Router</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// beforeLoad: runs before the loader</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(
+  <span class="str">'/dashboard'</span>
+)({
+  <span class="prop">beforeLoad</span>: ({ <span class="prop">context</span> }) =&gt; {
+    <span class="kw">if</span> (!context.auth.isAuthenticated) {
+      <span class="kw">throw</span> <span class="fn">redirect</span>({
+        <span class="prop">to</span>: <span class="str">'/login'</span>,
+      })
+    }
+  },
+  <span class="prop">component</span>: <span class="fn">Dashboard</span>,
+})</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BEFORE LOAD GUARD ===== -->
+  <h2>The <code>beforeLoad</code> Guard</h2>
+
+  <p><code>beforeLoad</code> runs <strong>before</strong> the route's loader and component. It's the first thing that executes when navigating to a route. If it throws a <code>redirect</code>, the navigation is cancelled and the user is sent elsewhere.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Navigation starts</div>
+      <div class="desc">User clicks link or enters URL</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">beforeLoad</div>
+      <div class="desc">Auth check here</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">loader</div>
+      <div class="desc">Fetch data</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">component</div>
+      <div class="desc">Render UI</div>
+    </div>
+  </div>
+
+  <h3>Complete <code>beforeLoad</code> example</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">redirect</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/dashboard'</span>)({
+  <span class="prop">beforeLoad</span>: <span class="kw">async</span> ({ <span class="prop">context</span>, <span class="prop">location</span> }) =&gt; {
+    <span class="cm">// context.auth comes from router context (set up in main.tsx)</span>
+    <span class="kw">if</span> (!context.auth.isAuthenticated) {
+      <span class="kw">throw</span> <span class="fn">redirect</span>({
+        <span class="prop">to</span>: <span class="str">'/login'</span>,
+        <span class="prop">search</span>: {
+          <span class="cm">// Save where they were trying to go</span>
+          <span class="prop">redirect</span>: location.href,
+        },
+      })
+    }
+  },
+  <span class="prop">loader</span>: <span class="kw">async</span> ({ <span class="prop">context</span> }) =&gt; {
+    <span class="cm">// If we get here, user is authenticated</span>
+    <span class="kw">return</span> { <span class="prop">dashboardData</span>: <span class="kw">await</span> <span class="fn">fetchDashboard</span>() }
+  },
+  <span class="prop">component</span>: <span class="fn">Dashboard</span>,
+})
+
+<span class="kw">function</span> <span class="fn">Dashboard</span>() {
+  <span class="kw">const</span> { dashboardData } = <span class="fn">Route</span>.<span class="fn">useLoaderData</span>()
+  <span class="kw">return</span> <span class="tag">&lt;h1&gt;</span>Welcome to your dashboard<span class="tag">&lt;/h1&gt;</span>
+}</code></pre>
+
+  <div class="warn">
+    <strong>throw, don't return:</strong> You must <code>throw redirect()</code>, not <code>return redirect()</code>. The throw is what short-circuits the route loading pipeline. If you return it, it's just a regular object and the route will try to render normally.
+  </div>
+
+  <!-- ===== AUTH CONTEXT ===== -->
+  <h2>Setting Up Auth Context</h2>
+
+  <p>The router needs access to auth state. You pass it via router context, which makes it available in every <code>beforeLoad</code> and <code>loader</code>.</p>
+
+  <h3>Step 1: Define the auth store</h3>
+
+<pre><code><span class="cm">// src/lib/auth.ts</span>
+<span class="kw">import</span> { <span class="fn">create</span> } <span class="kw">from</span> <span class="str">'zustand'</span>
+
+<span class="kw">type</span> <span class="type">User</span> = {
+  <span class="prop">id</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">role</span>: <span class="str">'admin'</span> | <span class="str">'user'</span>
+}
+
+<span class="kw">type</span> <span class="type">AuthState</span> = {
+  <span class="prop">user</span>: <span class="type">User</span> | <span class="kw">null</span>
+  <span class="prop">isAuthenticated</span>: <span class="type">boolean</span>
+  <span class="prop">login</span>: (email: <span class="type">string</span>, password: <span class="type">string</span>) =&gt; <span class="type">Promise</span>&lt;<span class="type">void</span>&gt;
+  <span class="prop">logout</span>: () =&gt; <span class="type">void</span>
+}
+
+<span class="kw">export const</span> useAuthStore = <span class="fn">create</span>&lt;<span class="type">AuthState</span>&gt;((set) =&gt; ({
+  <span class="prop">user</span>: <span class="kw">null</span>,
+  <span class="prop">isAuthenticated</span>: <span class="kw">false</span>,
+
+  <span class="prop">login</span>: <span class="kw">async</span> (email, password) =&gt; {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">'/api/login'</span>, {
+      <span class="prop">method</span>: <span class="str">'POST'</span>,
+      <span class="prop">body</span>: <span class="fn">JSON.stringify</span>({ email, password }),
+    })
+    <span class="kw">const</span> user = <span class="kw">await</span> res.<span class="fn">json</span>()
+    <span class="fn">set</span>({ <span class="prop">user</span>, <span class="prop">isAuthenticated</span>: <span class="kw">true</span> })
+  },
+
+  <span class="prop">logout</span>: () =&gt; {
+    <span class="fn">set</span>({ <span class="prop">user</span>: <span class="kw">null</span>, <span class="prop">isAuthenticated</span>: <span class="kw">false</span> })
+  },
+}))</code></pre>
+
+  <h3>Step 2: Pass auth to router context</h3>
+
+<pre><code><span class="cm">// src/main.tsx</span>
+<span class="kw">import</span> { <span class="fn">createRouter</span>, <span class="fn">RouterProvider</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { <span class="fn">routeTree</span> } <span class="kw">from</span> <span class="str">'./routeTree.gen'</span>
+<span class="kw">import</span> { useAuthStore } <span class="kw">from</span> <span class="str">'./lib/auth'</span>
+
+<span class="kw">const</span> router = <span class="fn">createRouter</span>({
+  <span class="prop">routeTree</span>,
+  <span class="prop">context</span>: {
+    <span class="prop">auth</span>: <span class="kw">undefined</span>!,  <span class="cm">// Will be set at render time</span>
+  },
+})
+
+<span class="kw">function</span> <span class="fn">App</span>() {
+  <span class="kw">const</span> auth = <span class="fn">useAuthStore</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;RouterProvider</span>
+      <span class="attr">router</span>={router}
+      <span class="attr">context</span>={{ <span class="prop">auth</span> }}  <span class="cm">{/* Fresh auth state on every render */}</span>
+    <span class="tag">/&gt;</span>
+  )
+}</code></pre>
+
+  <h3>Step 3: Type the context in <code>__root.tsx</code></h3>
+
+<pre><code><span class="cm">// src/routes/__root.tsx</span>
+<span class="kw">import</span> { <span class="fn">createRootRouteWithContext</span>, <span class="fn">Outlet</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">AuthState</span> } <span class="kw">from</span> <span class="str">'../lib/auth'</span>
+
+<span class="kw">type</span> <span class="type">RouterContext</span> = {
+  <span class="prop">auth</span>: <span class="type">AuthState</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createRootRouteWithContext</span>&lt;<span class="type">RouterContext</span>&gt;()({
+  <span class="prop">component</span>: () =&gt; (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;NavBar /&gt;</span>
+      <span class="tag">&lt;Outlet /&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  ),
+})</code></pre>
+
+  <div class="note">
+    <strong>Now every route has typed access to <code>context.auth</code></strong> in both <code>beforeLoad</code> and <code>loader</code>. TypeScript knows the exact shape of your auth state.
+  </div>
+
+  <!-- ===== LAYOUT-LEVEL PROTECTION ===== -->
+  <h2>Layout-Level Protection</h2>
+
+  <p>Instead of adding <code>beforeLoad</code> to every protected route, put the guard on a pathless layout. All child routes inherit the protection.</p>
+
+<pre><code><span class="cm">// src/routes/_authenticated.tsx — Protects ALL children</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">redirect</span>, <span class="fn">Outlet</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/_authenticated'</span>)({
+  <span class="prop">beforeLoad</span>: <span class="kw">async</span> ({ <span class="prop">context</span>, <span class="prop">location</span> }) =&gt; {
+    <span class="kw">if</span> (!context.auth.isAuthenticated) {
+      <span class="kw">throw</span> <span class="fn">redirect</span>({
+        <span class="prop">to</span>: <span class="str">'/login'</span>,
+        <span class="prop">search</span>: { <span class="prop">redirect</span>: location.href },
+      })
+    }
+  },
+  <span class="prop">component</span>: () =&gt; <span class="tag">&lt;Outlet /&gt;</span>,  <span class="cm">{/* Just passes through */}</span>
+})</code></pre>
+
+  <div class="file-tree">
+    <span class="dir">src/routes/</span><br>
+    &nbsp;&nbsp;<span class="file">__root.tsx</span><br>
+    &nbsp;&nbsp;<span class="file">index.tsx</span>              &larr; Public (<code>/</code>)<br>
+    &nbsp;&nbsp;<span class="file">login.tsx</span>              &larr; Public (<code>/login</code>)<br>
+    &nbsp;&nbsp;<span class="file">about.tsx</span>              &larr; Public (<code>/about</code>)<br>
+    &nbsp;&nbsp;<span class="highlight">_authenticated.tsx</span>     &larr; Guard: beforeLoad checks auth<br>
+    &nbsp;&nbsp;<span class="dir">_authenticated/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">dashboard.tsx</span>        &larr; Protected (<code>/dashboard</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">settings.tsx</span>         &larr; Protected (<code>/settings</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">profile.tsx</span>          &larr; Protected (<code>/profile</code>)
+  </div>
+
+  <div class="tip">
+    <strong>Key advantage:</strong> The <code>_authenticated</code> prefix means it doesn't add to the URL. <code>/dashboard</code> is the URL, not <code>/authenticated/dashboard</code>. The underscore prefix makes it a pathless layout — it only groups routes for shared behavior.
+  </div>
+
+  <!-- ===== REDIRECT AFTER LOGIN ===== -->
+  <h2>Redirect After Login</h2>
+
+  <p>When a user gets bounced to <code>/login</code>, save where they wanted to go. After successful login, send them back.</p>
+
+<pre><code><span class="cm">// src/routes/login.tsx</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">useNavigate</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">'zod'</span>
+<span class="kw">import</span> { useAuthStore } <span class="kw">from</span> <span class="str">'../lib/auth'</span>
+
+<span class="kw">const</span> loginSearchSchema = z.<span class="fn">object</span>({
+  <span class="prop">redirect</span>: z.<span class="fn">string</span>().<span class="fn">optional</span>(),
+})
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/login'</span>)({
+  <span class="prop">validateSearch</span>: loginSearchSchema,
+  <span class="prop">component</span>: <span class="fn">LoginPage</span>,
+})
+
+<span class="kw">function</span> <span class="fn">LoginPage</span>() {
+  <span class="kw">const</span> navigate = <span class="fn">useNavigate</span>()
+  <span class="kw">const</span> { redirect: redirectUrl } = <span class="fn">Route</span>.<span class="fn">useSearch</span>()
+  <span class="kw">const</span> login = <span class="fn">useAuthStore</span>((s) =&gt; s.login)
+
+  <span class="kw">const</span> <span class="fn">handleSubmit</span> = <span class="kw">async</span> (e: <span class="type">React.FormEvent</span>) =&gt; {
+    e.<span class="fn">preventDefault</span>()
+
+    <span class="kw">await</span> <span class="fn">login</span>(email, password)
+
+    <span class="cm">// Redirect to original destination, or dashboard as fallback</span>
+    <span class="fn">navigate</span>({
+      <span class="prop">to</span>: redirectUrl ?? <span class="str">'/dashboard'</span>,
+      <span class="prop">replace</span>: <span class="kw">true</span>,  <span class="cm">// Don't put login page in history</span>
+    })
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={handleSubmit}<span class="tag">&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>Login<span class="tag">&lt;/h1&gt;</span>
+      {redirectUrl &amp;&amp; (
+        <span class="tag">&lt;p</span> <span class="attr">className</span>=<span class="str">"notice"</span><span class="tag">&gt;</span>
+          Please log in to continue.
+        <span class="tag">&lt;/p&gt;</span>
+      )}
+      <span class="cm">{/* email &amp; password inputs */}</span>
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span><span class="tag">&gt;</span>Log in<span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">The redirect flow, step by step</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">Visit /dashboard</div>
+        <div class="desc">User not logged in</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">beforeLoad fires</div>
+        <div class="desc">Auth check fails</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Redirect to /login</div>
+        <div class="desc">?redirect=/dashboard</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">User logs in</div>
+        <div class="desc">Auth succeeds</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="num">5</div>
+        <div class="label">Navigate back</div>
+        <div class="desc">to /dashboard</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ROLE-BASED ACCESS ===== -->
+  <h2>Route-Level Permissions (Roles)</h2>
+
+  <p>Beyond just "logged in or not," you often need role-based access. Admins can access <code>/admin</code>, regular users can't.</p>
+
+<pre><code><span class="cm">// src/routes/_authenticated/_admin.tsx</span>
+<span class="cm">// Nested pathless layout: requires auth AND admin role</span>
+<span class="kw">import</span> { <span class="fn">createFileRoute</span>, <span class="fn">redirect</span>, <span class="fn">Outlet</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/_authenticated/_admin'</span>)({
+  <span class="prop">beforeLoad</span>: ({ <span class="prop">context</span> }) =&gt; {
+    <span class="cm">// Auth is already checked by parent _authenticated layout</span>
+    <span class="cm">// Here we just check the role</span>
+    <span class="kw">if</span> (context.auth.user?.role !== <span class="str">'admin'</span>) {
+      <span class="kw">throw</span> <span class="fn">redirect</span>({ <span class="prop">to</span>: <span class="str">'/dashboard'</span> })
+    }
+  },
+  <span class="prop">component</span>: () =&gt; <span class="tag">&lt;Outlet /&gt;</span>,
+})</code></pre>
+
+  <div class="file-tree">
+    <span class="dir">src/routes/</span><br>
+    &nbsp;&nbsp;<span class="file">_authenticated.tsx</span>            &larr; Auth guard<br>
+    &nbsp;&nbsp;<span class="dir">_authenticated/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">dashboard.tsx</span>               &larr; Any logged-in user (<code>/dashboard</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="highlight">_admin.tsx</span>                  &larr; Admin role guard<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">_admin/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">admin-panel.tsx</span>           &larr; Admins only (<code>/admin-panel</code>)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">user-management.tsx</span>       &larr; Admins only (<code>/user-management</code>)
+  </div>
+
+  <h3>Reusable guard helper</h3>
+
+  <p>If you have many role checks, create a helper function to keep routes DRY:</p>
+
+<pre><code><span class="cm">// src/lib/route-guards.ts</span>
+<span class="kw">import</span> { <span class="fn">redirect</span> } <span class="kw">from</span> <span class="str">'@tanstack/react-router'</span>
+<span class="kw">import</span> <span class="kw">type</span> { <span class="type">RouterContext</span> } <span class="kw">from</span> <span class="str">'../routes/__root'</span>
+
+<span class="kw">export const</span> <span class="fn">requireAuth</span> = ({ <span class="prop">context</span>, <span class="prop">location</span> }: {
+  <span class="prop">context</span>: <span class="type">RouterContext</span>
+  <span class="prop">location</span>: { <span class="prop">href</span>: <span class="type">string</span> }
+}) =&gt; {
+  <span class="kw">if</span> (!context.auth.isAuthenticated) {
+    <span class="kw">throw</span> <span class="fn">redirect</span>({
+      <span class="prop">to</span>: <span class="str">'/login'</span>,
+      <span class="prop">search</span>: { <span class="prop">redirect</span>: location.href },
+    })
+  }
+}
+
+<span class="kw">export const</span> <span class="fn">requireRole</span> = (
+  role: <span class="str">'admin'</span> | <span class="str">'user'</span>,
+  { <span class="prop">context</span> }: { <span class="prop">context</span>: <span class="type">RouterContext</span> }
+) =&gt; {
+  <span class="kw">if</span> (context.auth.user?.role !== role) {
+    <span class="kw">throw</span> <span class="fn">redirect</span>({ <span class="prop">to</span>: <span class="str">'/dashboard'</span> })
+  }
+}
+
+<span class="cm">// Usage in a route:</span>
+<span class="kw">export const</span> <span class="fn">Route</span> = <span class="fn">createFileRoute</span>(<span class="str">'/admin'</span>)({
+  <span class="prop">beforeLoad</span>: (opts) =&gt; {
+    <span class="fn">requireAuth</span>(opts)
+    <span class="fn">requireRole</span>(<span class="str">'admin'</span>, opts)
+  },
+  <span class="prop">component</span>: <span class="fn">AdminPanel</span>,
+})</code></pre>
+
+  <!-- ===== CONDITIONAL NAV ===== -->
+  <h2>Conditional Navigation UI</h2>
+
+  <p>Show or hide navigation items based on auth state. The nav bar should reflect what the user can access.</p>
+
+<pre><code><span class="cm">// In __root.tsx or a NavBar component</span>
+<span class="kw">import</span> { useAuthStore } <span class="kw">from</span> <span class="str">'../lib/auth'</span>
+
+<span class="kw">function</span> <span class="fn">NavBar</span>() {
+  <span class="kw">const</span> { isAuthenticated, user, logout } = <span class="fn">useAuthStore</span>()
+  <span class="kw">const</span> navigate = <span class="fn">useNavigate</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;nav&gt;</span>
+      <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/"</span><span class="tag">&gt;</span>Home<span class="tag">&lt;/Link&gt;</span>
+
+      {isAuthenticated ? (
+        <span class="tag">&lt;&gt;</span>
+          <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/dashboard"</span><span class="tag">&gt;</span>Dashboard<span class="tag">&lt;/Link&gt;</span>
+          {user?.role === <span class="str">'admin'</span> &amp;&amp; (
+            <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/admin-panel"</span><span class="tag">&gt;</span>Admin<span class="tag">&lt;/Link&gt;</span>
+          )}
+          <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt; {
+            <span class="fn">logout</span>()
+            <span class="fn">navigate</span>({ <span class="prop">to</span>: <span class="str">'/'</span> })
+          }}<span class="tag">&gt;</span>
+            Logout
+          <span class="tag">&lt;/button&gt;</span>
+        <span class="tag">&lt;/&gt;</span>
+      ) : (
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/login"</span><span class="tag">&gt;</span>Login<span class="tag">&lt;/Link&gt;</span>
+      )}
+    <span class="tag">&lt;/nav&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Auth Patterns Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>When to use</th><th>Implementation</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Per-route guard</td>
+        <td>One or two protected routes</td>
+        <td><code>beforeLoad</code> on each route</td>
+      </tr>
+      <tr>
+        <td>Layout-level guard</td>
+        <td>Many protected routes</td>
+        <td><code>_authenticated.tsx</code> pathless layout</td>
+      </tr>
+      <tr>
+        <td>Nested role guard</td>
+        <td>Role-based sections</td>
+        <td><code>_authenticated/_admin.tsx</code></td>
+      </tr>
+      <tr>
+        <td>Redirect after login</td>
+        <td>Always</td>
+        <td>Save URL in search params, navigate after login</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Python parallel:</strong> Layout-level guards are like applying <code>@login_required</code> to a Flask Blueprint. Every route in the blueprint is automatically protected. TanStack Router's pathless layouts achieve the same pattern, with the added benefit of shared UI (headers, sidebars) for the protected section.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 — Custom Hooks</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>08 — Custom Hooks</h1>
+  <p class="subtitle">Extracting reusable stateful logic from components. The React equivalent of Python utility functions, but with superpowers.</p>
+
+  <!-- ===== WHAT IS A CUSTOM HOOK ===== -->
+  <h2>What Is a Custom Hook?</h2>
+
+  <p>A custom hook is a <strong>regular function that starts with <code>use</code></strong> and calls other hooks. It extracts stateful logic out of a component into a reusable function. The component provides UI; the hook provides behavior.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python analogy: Reusable behavior</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Decorator adds behavior to any function</span>
+<span class="kw">def</span> <span class="fn">retry</span>(max_attempts=<span class="num">3</span>):
+    <span class="kw">def</span> <span class="fn">decorator</span>(func):
+        <span class="kw">def</span> <span class="fn">wrapper</span>(*args, **kwargs):
+            <span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(max_attempts):
+                <span class="kw">try</span>:
+                    <span class="kw">return</span> <span class="fn">func</span>(*args, **kwargs)
+                <span class="kw">except</span> <span class="type">Exception</span>:
+                    <span class="kw">if</span> i == max_attempts - <span class="num">1</span>:
+                        <span class="kw">raise</span>
+        <span class="kw">return</span> wrapper
+    <span class="kw">return</span> decorator
+
+<span class="cm"># Mixin adds behavior to any class</span>
+<span class="kw">class</span> <span class="type">TimestampMixin</span>:
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">React: Custom hook</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Custom hook adds behavior to any component</span>
+<span class="kw">const</span> <span class="fn">useToggle</span> = (initial = <span class="kw">false</span>) =&gt; {
+  <span class="kw">const</span> [value, setValue] = <span class="fn">useState</span>(initial)
+  <span class="kw">const</span> <span class="fn">toggle</span> = () =&gt; <span class="fn">setValue</span>(v =&gt; !v)
+  <span class="kw">const</span> <span class="fn">setTrue</span> = () =&gt; <span class="fn">setValue</span>(<span class="kw">true</span>)
+  <span class="kw">const</span> <span class="fn">setFalse</span> = () =&gt; <span class="fn">setValue</span>(<span class="kw">false</span>)
+  <span class="kw">return</span> { value, toggle, setTrue, setFalse }
+}
+
+<span class="cm">// Use in any component</span>
+<span class="kw">const</span> <span class="fn">Modal</span> = () =&gt; {
+  <span class="kw">const</span> { value: isOpen, toggle } = <span class="fn">useToggle</span>()
+  <span class="cm">// ...</span>
+}
+
+<span class="kw">const</span> <span class="fn">Sidebar</span> = () =&gt; {
+  <span class="kw">const</span> { value: expanded, toggle } = <span class="fn">useToggle</span>(<span class="kw">true</span>)
+  <span class="cm">// ...</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RULES ===== -->
+  <h2>Rules of Custom Hooks</h2>
+
+  <table>
+    <thead>
+      <tr><th>Rule</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Name must start with <code>use</code></td>
+        <td>React's linter enforces hook rules based on this prefix. Without it, hooks inside won't be checked.</td>
+      </tr>
+      <tr>
+        <td>Can call any hook (useState, useEffect, other custom hooks)</td>
+        <td>That's the whole point — encapsulate hook calls</td>
+      </tr>
+      <tr>
+        <td>Follows all hook rules (no conditionals, no loops)</td>
+        <td>Hooks must be called in the same order every render</td>
+      </tr>
+      <tr>
+        <td>Each call gets its own state</td>
+        <td>Two components using the same hook get independent state copies. Hooks share <em>logic</em>, not <em>state</em>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Custom hooks share logic, NOT state.</strong> If component A and component B both call <code>useToggle()</code>, they each get their own independent <code>useState</code>. To share state, you need Context or a state manager.
+  </div>
+
+  <!-- ===== EXAMPLE: useLocalStorage ===== -->
+  <h2>Example: <code>useLocalStorage</code></h2>
+
+  <p>Persist state to <code>localStorage</code>. Reads the initial value from storage, and syncs every update back. Fully generic.</p>
+
+  <div class="panel">
+    <div class="panel-title">useLocalStorage implementation</div>
+<pre><code><span class="kw">import</span> { useState, useEffect } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">useLocalStorage</span> = &lt;T,&gt;(
+  key: <span class="type">string</span>,
+  initialValue: T,
+): [T, (value: T | ((prev: T) =&gt; T)) =&gt; <span class="type">void</span>] =&gt; {
+  <span class="cm">// Read from localStorage on first render</span>
+  <span class="kw">const</span> [storedValue, setStoredValue] = <span class="fn">useState</span>&lt;T&gt;(() =&gt; {
+    <span class="kw">try</span> {
+      <span class="kw">const</span> item = window.localStorage.<span class="fn">getItem</span>(key)
+      <span class="kw">return</span> item ? JSON.<span class="fn">parse</span>(item) : initialValue
+    } <span class="kw">catch</span> {
+      <span class="kw">return</span> initialValue
+    }
+  })
+
+  <span class="cm">// Sync to localStorage whenever value changes</span>
+  <span class="fn">useEffect</span>(() =&gt; {
+    window.localStorage.<span class="fn">setItem</span>(key, JSON.<span class="fn">stringify</span>(storedValue))
+  }, [key, storedValue])
+
+  <span class="kw">return</span> [storedValue, setStoredValue]
+}
+
+<span class="cm">// Usage — same API as useState, but persisted!</span>
+<span class="kw">const</span> [theme, setTheme] = <span class="fn">useLocalStorage</span>&lt;<span class="str">"light"</span> | <span class="str">"dark"</span>&gt;(<span class="str">"theme"</span>, <span class="str">"light"</span>)
+<span class="kw">const</span> [favorites, setFavorites] = <span class="fn">useLocalStorage</span>&lt;<span class="type">string</span>[]&gt;(<span class="str">"favorites"</span>, [])</code></pre>
+  </div>
+
+  <!-- ===== EXAMPLE: useDebounce ===== -->
+  <h2>Example: <code>useDebounce</code></h2>
+
+  <p>Debounce a rapidly changing value (e.g., search input). Only returns the latest value after the user stops typing for a specified delay.</p>
+
+  <div class="panel">
+    <div class="panel-title">useDebounce implementation</div>
+<pre><code><span class="kw">import</span> { useState, useEffect } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">useDebounce</span> = &lt;T,&gt;(value: T, delayMs: <span class="type">number</span>): T =&gt; {
+  <span class="kw">const</span> [debouncedValue, setDebouncedValue] = <span class="fn">useState</span>(value)
+
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="kw">const</span> timer = <span class="fn">setTimeout</span>(() =&gt; {
+      <span class="fn">setDebouncedValue</span>(value)
+    }, delayMs)
+
+    <span class="cm">// Cleanup: cancel previous timer if value changes again</span>
+    <span class="kw">return</span> () =&gt; <span class="fn">clearTimeout</span>(timer)
+  }, [value, delayMs])
+
+  <span class="kw">return</span> debouncedValue
+}
+
+<span class="cm">// Usage: search input that doesn't fire on every keystroke</span>
+<span class="kw">const</span> <span class="fn">SearchPage</span> = () =&gt; {
+  <span class="kw">const</span> [query, setQuery] = <span class="fn">useState</span>(<span class="str">""</span>)
+  <span class="kw">const</span> debouncedQuery = <span class="fn">useDebounce</span>(query, <span class="num">300</span>) <span class="cm">// 300ms delay</span>
+
+  <span class="cm">// Only fetches when user stops typing for 300ms</span>
+  <span class="kw">const</span> { data } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"search"</span>, debouncedQuery],
+    queryFn: () =&gt; <span class="fn">searchAPI</span>(debouncedQuery),
+    enabled: debouncedQuery.length &gt; <span class="num">0</span>,
+  })
+
+  <span class="kw">return</span> <span class="tag">&lt;input</span> <span class="attr">value</span>={query} <span class="attr">onChange</span>={e =&gt; <span class="fn">setQuery</span>(e.target.value)} <span class="tag">/&gt;</span>
+}</code></pre>
+  </div>
+
+  <!-- ===== EXAMPLE: useMediaQuery ===== -->
+  <h2>Example: <code>useMediaQuery</code></h2>
+
+  <p>Reactive responsive design. Returns whether a CSS media query currently matches. Updates when the window is resized.</p>
+
+  <div class="panel">
+    <div class="panel-title">useMediaQuery implementation</div>
+<pre><code><span class="kw">import</span> { useState, useEffect } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">useMediaQuery</span> = (query: <span class="type">string</span>): <span class="type">boolean</span> =&gt; {
+  <span class="kw">const</span> [matches, setMatches] = <span class="fn">useState</span>(() =&gt;
+    window.<span class="fn">matchMedia</span>(query).matches
+  )
+
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="kw">const</span> mediaQuery = window.<span class="fn">matchMedia</span>(query)
+    <span class="kw">const</span> <span class="fn">handler</span> = (e: <span class="type">MediaQueryListEvent</span>) =&gt; <span class="fn">setMatches</span>(e.matches)
+
+    mediaQuery.<span class="fn">addEventListener</span>(<span class="str">"change"</span>, handler)
+    <span class="kw">return</span> () =&gt; mediaQuery.<span class="fn">removeEventListener</span>(<span class="str">"change"</span>, handler)
+  }, [query])
+
+  <span class="kw">return</span> matches
+}
+
+<span class="cm">// Usage</span>
+<span class="kw">const</span> <span class="fn">Dashboard</span> = () =&gt; {
+  <span class="kw">const</span> isMobile = <span class="fn">useMediaQuery</span>(<span class="str">"(max-width: 768px)"</span>)
+  <span class="kw">const</span> prefersDark = <span class="fn">useMediaQuery</span>(<span class="str">"(prefers-color-scheme: dark)"</span>)
+
+  <span class="kw">return</span> isMobile ? <span class="tag">&lt;MobileLayout /&gt;</span> : <span class="tag">&lt;DesktopLayout /&gt;</span>
+}</code></pre>
+  </div>
+
+  <!-- ===== EXAMPLE: useOnClickOutside ===== -->
+  <h2>Example: <code>useOnClickOutside</code></h2>
+
+  <p>Detect clicks outside a referenced element. Essential for closing dropdowns, modals, and popovers when the user clicks away.</p>
+
+  <div class="panel">
+    <div class="panel-title">useOnClickOutside implementation</div>
+<pre><code><span class="kw">import</span> { useEffect, useRef } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">export const</span> <span class="fn">useOnClickOutside</span> = (
+  ref: <span class="type">React.RefObject</span>&lt;<span class="type">HTMLElement</span> | <span class="kw">null</span>&gt;,
+  handler: () =&gt; <span class="type">void</span>,
+) =&gt; {
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="kw">const</span> <span class="fn">listener</span> = (event: <span class="type">MouseEvent</span>) =&gt; {
+      <span class="cm">// Do nothing if clicking ref's element or its descendants</span>
+      <span class="kw">if</span> (!ref.current || ref.current.<span class="fn">contains</span>(event.target <span class="kw">as</span> <span class="type">Node</span>)) {
+        <span class="kw">return</span>
+      }
+      <span class="fn">handler</span>()
+    }
+
+    document.<span class="fn">addEventListener</span>(<span class="str">"mousedown"</span>, listener)
+    <span class="kw">return</span> () =&gt; document.<span class="fn">removeEventListener</span>(<span class="str">"mousedown"</span>, listener)
+  }, [ref, handler])
+}
+
+<span class="cm">// Usage: dropdown that closes on outside click</span>
+<span class="kw">const</span> <span class="fn">Dropdown</span> = () =&gt; {
+  <span class="kw">const</span> [isOpen, setIsOpen] = <span class="fn">useState</span>(<span class="kw">false</span>)
+  <span class="kw">const</span> dropdownRef = <span class="fn">useRef</span>&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>)
+
+  <span class="fn">useOnClickOutside</span>(dropdownRef, () =&gt; <span class="fn">setIsOpen</span>(<span class="kw">false</span>))
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">ref</span>={dropdownRef}<span class="tag">&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">setIsOpen</span>(!isOpen)}<span class="tag">&gt;</span>Menu<span class="tag">&lt;/button&gt;</span>
+      {isOpen &amp;&amp; (
+        <span class="tag">&lt;ul</span> <span class="attr">className</span>=<span class="str">"dropdown-menu"</span><span class="tag">&gt;</span>
+          <span class="tag">&lt;li&gt;</span>Option 1<span class="tag">&lt;/li&gt;</span>
+          <span class="tag">&lt;li&gt;</span>Option 2<span class="tag">&lt;/li&gt;</span>
+        <span class="tag">&lt;/ul&gt;</span>
+      )}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <!-- ===== EXAMPLE: useFetch ===== -->
+  <h2>Example: <code>useFetch</code> (and Why TanStack Query Is Better)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Simplified useFetch hook</div>
+<pre><code><span class="kw">export const</span> <span class="fn">useFetch</span> = &lt;T,&gt;(url: <span class="type">string</span>) =&gt; {
+  <span class="kw">const</span> [data, setData] = <span class="fn">useState</span>&lt;T | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+  <span class="kw">const</span> [isLoading, setIsLoading] = <span class="fn">useState</span>(<span class="kw">true</span>)
+  <span class="kw">const</span> [error, setError] = <span class="fn">useState</span>&lt;<span class="type">string</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="kw">const</span> controller = <span class="kw">new</span> <span class="type">AbortController</span>()
+
+    <span class="kw">const</span> <span class="fn">fetchData</span> = <span class="kw">async</span> () =&gt; {
+      <span class="kw">try</span> {
+        <span class="fn">setIsLoading</span>(<span class="kw">true</span>)
+        <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(url, { signal: controller.signal })
+        <span class="kw">if</span> (!response.ok) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">`HTTP </span>${response.status}<span class="str">`</span>)
+        <span class="kw">const</span> json = <span class="kw">await</span> response.<span class="fn">json</span>()
+        <span class="fn">setData</span>(json)
+        <span class="fn">setError</span>(<span class="kw">null</span>)
+      } <span class="kw">catch</span> (e) {
+        <span class="kw">if</span> (e <span class="kw">instanceof</span> <span class="type">DOMException</span> &amp;&amp; e.name === <span class="str">"AbortError"</span>) <span class="kw">return</span>
+        <span class="fn">setError</span>(e <span class="kw">instanceof</span> <span class="type">Error</span> ? e.message : <span class="str">"Unknown error"</span>)
+      } <span class="kw">finally</span> {
+        <span class="fn">setIsLoading</span>(<span class="kw">false</span>)
+      }
+    }
+
+    <span class="fn">fetchData</span>()
+    <span class="kw">return</span> () =&gt; controller.<span class="fn">abort</span>()
+  }, [url])
+
+  <span class="kw">return</span> { data, isLoading, error }
+}</code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Don't use useFetch in production.</strong> It's missing: caching, deduplication, background refetching, optimistic updates, infinite queries, retry logic, garbage collection, devtools. TanStack Query handles all of this. Build <code>useFetch</code> to learn hooks; use TanStack Query to ship products.
+  </div>
+
+  <!-- ===== COMPOSITION ===== -->
+  <h2>Composition: Hooks Calling Hooks</h2>
+
+  <p>Custom hooks can call other custom hooks. Build small hooks, then compose them into more powerful ones.</p>
+
+  <div class="panel">
+    <div class="panel-title">Composing hooks together</div>
+<pre><code><span class="cm">// Base hooks</span>
+<span class="kw">const</span> <span class="fn">useToggle</span> = (initial = <span class="kw">false</span>) =&gt; {
+  <span class="kw">const</span> [value, setValue] = <span class="fn">useState</span>(initial)
+  <span class="kw">const</span> <span class="fn">toggle</span> = () =&gt; <span class="fn">setValue</span>(v =&gt; !v)
+  <span class="kw">return</span> { value, toggle, setValue }
+}
+
+<span class="kw">const</span> <span class="fn">useOnClickOutside</span> = (ref: <span class="type">React.RefObject</span>&lt;<span class="type">HTMLElement</span> | <span class="kw">null</span>&gt;, handler: () =&gt; <span class="type">void</span>) =&gt; {
+  <span class="cm">// ... (see above)</span>
+}
+
+<span class="cm">// Composed hook: combines toggle + click outside + escape key</span>
+<span class="kw">const</span> <span class="fn">useDropdown</span> = () =&gt; {
+  <span class="kw">const</span> { value: isOpen, toggle, setValue: setIsOpen } = <span class="fn">useToggle</span>()
+  <span class="kw">const</span> ref = <span class="fn">useRef</span>&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>)
+
+  <span class="fn">useOnClickOutside</span>(ref, () =&gt; <span class="fn">setIsOpen</span>(<span class="kw">false</span>))
+
+  <span class="fn">useEffect</span>(() =&gt; {
+    <span class="kw">const</span> <span class="fn">handleEscape</span> = (e: <span class="type">KeyboardEvent</span>) =&gt; {
+      <span class="kw">if</span> (e.key === <span class="str">"Escape"</span>) <span class="fn">setIsOpen</span>(<span class="kw">false</span>)
+    }
+    document.<span class="fn">addEventListener</span>(<span class="str">"keydown"</span>, handleEscape)
+    <span class="kw">return</span> () =&gt; document.<span class="fn">removeEventListener</span>(<span class="str">"keydown"</span>, handleEscape)
+  }, [setIsOpen])
+
+  <span class="kw">return</span> { isOpen, toggle, ref }
+}
+
+<span class="cm">// Usage is clean and declarative</span>
+<span class="kw">const</span> <span class="fn">UserMenu</span> = () =&gt; {
+  <span class="kw">const</span> { isOpen, toggle, ref } = <span class="fn">useDropdown</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div</span> <span class="attr">ref</span>={ref}<span class="tag">&gt;</span>
+      <span class="tag">&lt;button</span> <span class="attr">onClick</span>={toggle}<span class="tag">&gt;</span>Menu<span class="tag">&lt;/button&gt;</span>
+      {isOpen &amp;&amp; <span class="tag">&lt;DropdownMenu /&gt;</span>}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <!-- ===== TESTING ===== -->
+  <h2>Testing Custom Hooks</h2>
+
+  <p>Use <code>renderHook</code> from <code>@testing-library/react</code> to test hooks in isolation, without building a dummy component.</p>
+
+<pre><code><span class="kw">import</span> { renderHook, act } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+<span class="kw">import</span> { useToggle } <span class="kw">from</span> <span class="str">"./useToggle"</span>
+
+<span class="fn">test</span>(<span class="str">"useToggle starts with initial value"</span>, () =&gt; {
+  <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() =&gt; <span class="fn">useToggle</span>(<span class="kw">false</span>))
+  <span class="fn">expect</span>(result.current.value).toBe(<span class="kw">false</span>)
+})
+
+<span class="fn">test</span>(<span class="str">"toggle flips the value"</span>, () =&gt; {
+  <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() =&gt; <span class="fn">useToggle</span>(<span class="kw">false</span>))
+
+  <span class="fn">act</span>(() =&gt; {
+    result.current.<span class="fn">toggle</span>()
+  })
+
+  <span class="fn">expect</span>(result.current.value).toBe(<span class="kw">true</span>)
+})
+
+<span class="fn">test</span>(<span class="str">"useDebounce returns debounced value"</span>, <span class="kw">async</span> () =&gt; {
+  <span class="kw">const</span> { result, rerender } = <span class="fn">renderHook</span>(
+    ({ value, delay }) =&gt; <span class="fn">useDebounce</span>(value, delay),
+    { initialProps: { value: <span class="str">"hello"</span>, delay: <span class="num">300</span> } },
+  )
+
+  <span class="fn">expect</span>(result.current).toBe(<span class="str">"hello"</span>)
+
+  <span class="cm">// Change the value</span>
+  <span class="fn">rerender</span>({ value: <span class="str">"world"</span>, delay: <span class="num">300</span> })
+
+  <span class="cm">// Still the old value (debouncing)</span>
+  <span class="fn">expect</span>(result.current).toBe(<span class="str">"hello"</span>)
+
+  <span class="cm">// Wait for debounce</span>
+  <span class="kw">await</span> <span class="fn">waitFor</span>(() =&gt; {
+    <span class="fn">expect</span>(result.current).toBe(<span class="str">"world"</span>)
+  })
+})</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Custom Hook Patterns Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th>Hook</th><th>Purpose</th><th>Key hooks used inside</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>useToggle</code></td>
+        <td>Boolean on/off state</td>
+        <td>useState</td>
+      </tr>
+      <tr>
+        <td><code>useLocalStorage</code></td>
+        <td>Persist state to browser storage</td>
+        <td>useState, useEffect</td>
+      </tr>
+      <tr>
+        <td><code>useDebounce</code></td>
+        <td>Delay rapidly changing values</td>
+        <td>useState, useEffect</td>
+      </tr>
+      <tr>
+        <td><code>useMediaQuery</code></td>
+        <td>Responsive design in JS</td>
+        <td>useState, useEffect</td>
+      </tr>
+      <tr>
+        <td><code>useOnClickOutside</code></td>
+        <td>Close dropdowns/modals</td>
+        <td>useEffect, useRef</td>
+      </tr>
+      <tr>
+        <td><code>useDropdown</code></td>
+        <td>Full dropdown behavior</td>
+        <td>useToggle, useOnClickOutside, useEffect</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>When to extract a custom hook:</strong> (1) You copy-paste the same useState + useEffect combo in multiple components. (2) A component has complex hook logic that obscures the UI code. (3) You want to test stateful logic in isolation. The hook doesn't need to be reusable to be worth extracting — clarity alone justifies it.
+  </div>
+
+</body>
+</html>

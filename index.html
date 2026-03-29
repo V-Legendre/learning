@@ -30,6 +30,16 @@
     }
     .topic-card a:hover { color: #c3e88d; text-decoration: underline; }
     .topic-card .desc { color: #888; font-size: 13px; margin-bottom: 12px; }
+    .section-label {
+      color: #e94560;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin: 40px 0 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #2a2a4a;
+    }
   </style>
 </head>
 <body>
@@ -37,6 +47,7 @@
   <h1>Frontend Learning</h1>
   <p class="subtitle">Notes, examples, and practice files — organized by topic</p>
 
+  <div class="section-label">Fundamentals</div>
   <div class="topic-grid">
 
     <div class="topic-card">
@@ -59,6 +70,179 @@
         <li><a href="02-typescript/notes.html">Concept Notes</a></li>
         <li><a href="02-typescript/api-requests.html">API Requests (TanStack Query + Zod)</a></li>
         <li><a href="02-typescript/basics.ts">Practice Code (basics.ts)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>03 — TypeScript Advanced</h3>
+      <p class="desc">Destructuring, spread/rest, async/await, modules, utility types — React prerequisites</p>
+      <ul>
+        <li><a href="03-typescript-advanced/destructuring.html">Destructuring</a></li>
+        <li><a href="03-typescript-advanced/spread-rest.html">Spread & Rest Operators</a></li>
+        <li><a href="03-typescript-advanced/async-await.html">Async / Await</a></li>
+        <li><a href="03-typescript-advanced/modules.html">Modules (import / export)</a></li>
+        <li><a href="03-typescript-advanced/utility-types.html">Utility Types</a></li>
+        <li><a href="03-typescript-advanced/practice.ts">Practice Exercises</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">React Core</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>04 — React Foundations</h3>
+      <p class="desc">What React is, Vite setup, JSX, components, props, and one-way data flow</p>
+      <ul>
+        <li><a href="04-react-foundations/what-is-react.html">What Is React?</a></li>
+        <li><a href="04-react-foundations/project-setup.html">Project Setup (Vite)</a></li>
+        <li><a href="04-react-foundations/jsx.html">JSX Syntax</a></li>
+        <li><a href="04-react-foundations/components-props.html">Components & Props</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>05 — React Hooks (Core)</h3>
+      <p class="desc">useState, useEffect, useRef — the three hooks that cover 90% of React</p>
+      <ul>
+        <li><a href="05-react-hooks-core/use-state.html">useState</a></li>
+        <li><a href="05-react-hooks-core/use-effect.html">useEffect</a></li>
+        <li><a href="05-react-hooks-core/use-ref.html">useRef</a></li>
+        <li><a href="05-react-hooks-core/hooks-rules.html">Rules of Hooks</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>06 — Tailwind CSS</h3>
+      <p class="desc">Utility-first CSS framework — setup, core classes, and React patterns</p>
+      <ul>
+        <li><a href="06-tailwind-css/setup.html">Setup with Vite</a></li>
+        <li><a href="06-tailwind-css/core-utilities.html">Core Utility Classes</a></li>
+        <li><a href="06-tailwind-css/component-patterns.html">Component Patterns</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Patterns & Architecture</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>07 — Component Patterns</h3>
+      <p class="desc">Composition, conditional rendering, lists, and TypeScript patterns for components</p>
+      <ul>
+        <li><a href="07-component-patterns/composition.html">Composition</a></li>
+        <li><a href="07-component-patterns/conditional-rendering.html">Conditional Rendering</a></li>
+        <li><a href="07-component-patterns/lists-keys.html">Lists & Keys</a></li>
+        <li><a href="07-component-patterns/typing-patterns.html">TypeScript Typing Patterns</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>08 — React Hooks (Advanced)</h3>
+      <p class="desc">Context, reducers, custom hooks, and memoization</p>
+      <ul>
+        <li><a href="08-react-hooks-advanced/use-context.html">useContext</a></li>
+        <li><a href="08-react-hooks-advanced/use-reducer.html">useReducer</a></li>
+        <li><a href="08-react-hooks-advanced/custom-hooks.html">Custom Hooks</a></li>
+        <li><a href="08-react-hooks-advanced/use-memo-callback.html">useMemo & useCallback</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>09 — Routing</h3>
+      <p class="desc">TanStack Router — type-safe routing, navigation, data loading, auth guards</p>
+      <ul>
+        <li><a href="09-routing/setup.html">Setup & Comparison</a></li>
+        <li><a href="09-routing/routes-navigation.html">Routes & Navigation</a></li>
+        <li><a href="09-routing/data-loading.html">Data Loading</a></li>
+        <li><a href="09-routing/auth-routes.html">Auth & Protected Routes</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Data & State</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>10 — Forms</h3>
+      <p class="desc">React Hook Form + Zod — basics, validation, multi-step and dynamic forms</p>
+      <ul>
+        <li><a href="10-forms/basics.html">Form Basics</a></li>
+        <li><a href="10-forms/validation.html">Validation with Zod</a></li>
+        <li><a href="10-forms/complex-forms.html">Complex Form Patterns</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>11 — State Management</h3>
+      <p class="desc">Mental model, Zustand stores, and advanced state patterns</p>
+      <ul>
+        <li><a href="11-state-management/mental-model.html">Mental Model</a></li>
+        <li><a href="11-state-management/zustand.html">Zustand</a></li>
+        <li><a href="11-state-management/patterns.html">Advanced Patterns</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>12 — Error Handling</h3>
+      <p class="desc">Error boundaries and async error patterns for resilient apps</p>
+      <ul>
+        <li><a href="12-error-handling/error-boundaries.html">Error Boundaries</a></li>
+        <li><a href="12-error-handling/async-errors.html">Async Error Patterns</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Quality & Production</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>13 — Testing</h3>
+      <p class="desc">Vitest + Testing Library — setup, component tests, hook tests, MSW mocking</p>
+      <ul>
+        <li><a href="13-testing/setup.html">Setup (Vitest)</a></li>
+        <li><a href="13-testing/component-testing.html">Component Testing</a></li>
+        <li><a href="13-testing/hook-testing.html">Hook & Store Testing</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>14 — Architecture</h3>
+      <p class="desc">Project structure, auth patterns, and performance optimization</p>
+      <ul>
+        <li><a href="14-architecture/project-structure.html">Project Structure</a></li>
+        <li><a href="14-architecture/auth-pattern.html">Auth Pattern</a></li>
+        <li><a href="14-architecture/performance.html">Performance</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>15 — Deployment</h3>
+      <p class="desc">Build process, Vercel deploy, env vars, CI/CD with GitHub Actions</p>
+      <ul>
+        <li><a href="15-deployment/build-deploy.html">Build & Deploy</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Ecosystem Context</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>16 — Ecosystem</h3>
+      <p class="desc">What you'll hear about — Redux, Next.js, CSS alternatives, Storybook, E2E, GraphQL</p>
+      <ul>
+        <li><a href="16-ecosystem/redux.html">Redux & Redux Toolkit</a></li>
+        <li><a href="16-ecosystem/nextjs-ssr-rsc.html">Next.js, SSR & Server Components</a></li>
+        <li><a href="16-ecosystem/css-alternatives.html">CSS Alternatives</a></li>
+        <li><a href="16-ecosystem/storybook.html">Storybook</a></li>
+        <li><a href="16-ecosystem/e2e-testing.html">E2E Testing (Playwright)</a></li>
+        <li><a href="16-ecosystem/graphql.html">GraphQL</a></li>
       </ul>
     </div>
 

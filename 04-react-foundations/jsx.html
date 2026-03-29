@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 — JSX</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>04 — JSX</h1>
+  <p class="subtitle">The syntax React uses to describe UI. Looks like HTML, but it's JavaScript expressions that compile to function calls.</p>
+
+  <!-- ===== JSX IS NOT HTML ===== -->
+  <h2>JSX Is NOT HTML</h2>
+
+  <p>JSX stands for <strong>JavaScript XML</strong>. It looks like HTML embedded in your TypeScript, but the compiler transforms it into plain function calls.</p>
+
+  <div class="panel">
+    <div class="panel-title">What the compiler does</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header jsx">What you write (JSX)</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> element = (
+  <span class="tag">&lt;h1</span> <span class="attr">className</span>=<span class="str">"title"</span><span class="tag">&gt;</span>
+    Hello, world!
+  <span class="tag">&lt;/h1&gt;</span>
+)</code></pre>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header js">What the compiler produces</div>
+        <div class="comp-body">
+<pre><code><span class="kw">const</span> element = <span class="fn">_jsx</span>(<span class="str">"h1"</span>, {
+  <span class="prop">className</span>: <span class="str">"title"</span>,
+  <span class="prop">children</span>: <span class="str">"Hello, world!"</span>
+})</code></pre>
+        </div>
+      </div>
+    </div>
+    <p>JSX is syntactic sugar. It gets compiled away before it reaches the browser. The <code>.tsx</code> extension tells TypeScript to enable JSX parsing.</p>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Think of JSX like f-strings. <code>f"Hello {name}"</code> looks like a plain string but actually compiles to string concatenation. JSX looks like HTML but compiles to function calls.
+  </div>
+
+  <!-- ===== KEY DIFFERENCES FROM HTML ===== -->
+  <h2>Key Differences from HTML</h2>
+
+  <table>
+    <thead>
+      <tr><th>HTML</th><th>JSX</th><th>Why?</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>class="btn"</code></td>
+        <td><code>className="btn"</code></td>
+        <td><code>class</code> is a reserved keyword in JS</td>
+      </tr>
+      <tr>
+        <td><code>for="email"</code></td>
+        <td><code>htmlFor="email"</code></td>
+        <td><code>for</code> is a reserved keyword in JS</td>
+      </tr>
+      <tr>
+        <td><code>style="color: red"</code></td>
+        <td><code>style={{ color: 'red' }}</code></td>
+        <td>Styles are objects, not strings. camelCase properties.</td>
+      </tr>
+      <tr>
+        <td><code>onclick="fn()"</code></td>
+        <td><code>onClick={fn}</code></td>
+        <td>camelCase events, pass function reference (not string)</td>
+      </tr>
+      <tr>
+        <td><code>&lt;img&gt;</code></td>
+        <td><code>&lt;img /&gt;</code></td>
+        <td>All tags must be closed (self-closing or explicit)</td>
+      </tr>
+      <tr>
+        <td><code>&lt;br&gt;</code></td>
+        <td><code>&lt;br /&gt;</code></td>
+        <td>Same — must self-close void elements</td>
+      </tr>
+      <tr>
+        <td><code>tabindex="0"</code></td>
+        <td><code>tabIndex={0}</code></td>
+        <td>camelCase all multi-word attributes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header html">HTML</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;label</span> <span class="attr">for</span>=<span class="str">"email"</span><span class="tag">&gt;</span>Email<span class="tag">&lt;/label&gt;</span>
+<span class="tag">&lt;input</span>
+  <span class="attr">class</span>=<span class="str">"input-field"</span>
+  <span class="attr">type</span>=<span class="str">"email"</span>
+  <span class="attr">autofocus</span>
+  <span class="attr">style</span>=<span class="str">"color: red; font-size: 16px"</span>
+<span class="tag">&gt;</span>
+<span class="tag">&lt;br&gt;</span>
+<span class="tag">&lt;img</span> <span class="attr">src</span>=<span class="str">"avatar.png"</span><span class="tag">&gt;</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">JSX</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;label</span> <span class="attr">htmlFor</span>=<span class="str">"email"</span><span class="tag">&gt;</span>Email<span class="tag">&lt;/label&gt;</span>
+<span class="tag">&lt;input</span>
+  <span class="attr">className</span>=<span class="str">"input-field"</span>
+  <span class="attr">type</span>=<span class="str">"email"</span>
+  <span class="attr">autoFocus</span>
+  <span class="attr">style</span>={{ <span class="prop">color</span>: <span class="str">'red'</span>, <span class="prop">fontSize</span>: <span class="str">'16px'</span> }}
+<span class="tag">/&gt;</span>
+<span class="tag">&lt;br /&gt;</span>
+<span class="tag">&lt;img</span> <span class="attr">src</span>=<span class="str">"avatar.png"</span> <span class="tag">/&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Style gotcha:</strong> The double curly braces in <code>style={{ color: 'red' }}</code> are not special syntax. The outer <code>{}</code> is a JSX expression. The inner <code>{}</code> is a JS object literal. CSS properties use camelCase: <code>font-size</code> becomes <code>fontSize</code>, <code>background-color</code> becomes <code>backgroundColor</code>.
+  </div>
+
+  <!-- ===== EXPRESSIONS IN JSX ===== -->
+  <h2>Expressions in <code>{}</code></h2>
+
+  <p>Inside JSX, curly braces <code>{}</code> let you embed <strong>any JavaScript expression</strong>. An expression is anything that produces a value.</p>
+
+  <div class="panel">
+    <div class="panel-title">What you CAN put in {}</div>
+<pre><code><span class="kw">const</span> name = <span class="str">"Alice"</span>
+<span class="kw">const</span> count = <span class="num">42</span>
+<span class="kw">const</span> items = [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>]
+
+<span class="kw">return</span> (
+  <span class="tag">&lt;div&gt;</span>
+    <span class="tag">&lt;p&gt;</span>{name}<span class="tag">&lt;/p&gt;</span>                          <span class="cm">{/* variable */}</span>
+    <span class="tag">&lt;p&gt;</span>{count * <span class="num">2</span>}<span class="tag">&lt;/p&gt;</span>                     <span class="cm">{/* math */}</span>
+    <span class="tag">&lt;p&gt;</span>{name.<span class="fn">toUpperCase</span>()}<span class="tag">&lt;/p&gt;</span>             <span class="cm">{/* method call */}</span>
+    <span class="tag">&lt;p&gt;</span>{items.<span class="prop">length</span>} items<span class="tag">&lt;/p&gt;</span>             <span class="cm">{/* property access */}</span>
+    <span class="tag">&lt;p&gt;</span>{count > <span class="num">10</span> ? <span class="str">"many"</span> : <span class="str">"few"</span>}<span class="tag">&lt;/p&gt;</span>  <span class="cm">{/* ternary */}</span>
+    <span class="tag">&lt;p&gt;</span>{<span class="fn">formatDate</span>(<span class="kw">new</span> <span class="fn">Date</span>())}<span class="tag">&lt;/p&gt;</span>       <span class="cm">{/* function call */}</span>
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What you CANNOT put in {}</div>
+<pre><code><span class="cm">// These are STATEMENTS, not expressions. They don't produce a value.</span>
+
+<span class="tag">&lt;p&gt;</span>{<span class="kw">if</span> (x) <span class="str">"yes"</span>}<span class="tag">&lt;/p&gt;</span>           <span class="cm">{/* ERROR: if is a statement */}</span>
+<span class="tag">&lt;p&gt;</span>{<span class="kw">for</span> (<span class="kw">let</span> i...) ...}<span class="tag">&lt;/p&gt;</span>      <span class="cm">{/* ERROR: for is a statement */}</span>
+<span class="tag">&lt;p&gt;</span>{<span class="kw">const</span> x = <span class="num">5</span>}<span class="tag">&lt;/p&gt;</span>              <span class="cm">{/* ERROR: declarations are statements */}</span></code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Jinja2</div>
+      <div class="comp-body">
+<pre><code><span class="cm">{# Jinja has its own syntax #}</span>
+<span class="tag">&lt;p&gt;</span>{{ name }}<span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;p&gt;</span>{{ name | upper }}<span class="tag">&lt;/p&gt;</span>
+{% <span class="kw">if</span> count > <span class="num">10</span> %}
+  <span class="tag">&lt;p&gt;</span>many<span class="tag">&lt;/p&gt;</span>
+{% <span class="kw">endif</span> %}
+{% <span class="kw">for</span> item <span class="kw">in</span> items %}
+  <span class="tag">&lt;li&gt;</span>{{ item }}<span class="tag">&lt;/li&gt;</span>
+{% <span class="kw">endfor</span> %}</code></pre>
+        <p>Jinja has special template syntax for control flow (<code>{% %}</code>).</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">JSX</div>
+      <div class="comp-body">
+<pre><code><span class="cm">{/* JSX uses plain JS expressions */}</span>
+<span class="tag">&lt;p&gt;</span>{name}<span class="tag">&lt;/p&gt;</span>
+<span class="tag">&lt;p&gt;</span>{name.<span class="fn">toUpperCase</span>()}<span class="tag">&lt;/p&gt;</span>
+{count > <span class="num">10</span> && <span class="tag">&lt;p&gt;</span>many<span class="tag">&lt;/p&gt;</span>}
+
+{items.<span class="fn">map</span>(item =>
+  <span class="tag">&lt;li&gt;</span>{item}<span class="tag">&lt;/li&gt;</span>
+)}</code></pre>
+        <p>No special template language. Just JavaScript with <code>{}</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CONDITIONAL RENDERING ===== -->
+  <h2>Conditional Rendering</h2>
+
+  <p>Since you can't use <code>if</code> statements inside JSX, there are three patterns for conditional rendering.</p>
+
+  <h3>Pattern 1: Logical AND (<code>&&</code>)</h3>
+  <p>Render something or nothing.</p>
+
+<pre><code><span class="cm">// If isAdmin is true, render the button. Otherwise render nothing.</span>
+<span class="tag">&lt;div&gt;</span>
+  <span class="tag">&lt;h1&gt;</span>Dashboard<span class="tag">&lt;/h1&gt;</span>
+  {isAdmin && <span class="tag">&lt;button&gt;</span>Delete All<span class="tag">&lt;/button&gt;</span>}
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <div class="warn">
+    <strong>Gotcha with &&:</strong> If the left side is <code>0</code> (not <code>false</code>), React will render the number <code>0</code>. This is a common bug: <code>{count && &lt;p&gt;Items&lt;/p&gt;}</code> renders "0" when count is 0. Fix: use <code>{count > 0 && &lt;p&gt;Items&lt;/p&gt;}</code> to ensure a boolean left side.
+  </div>
+
+  <h3>Pattern 2: Ternary</h3>
+  <p>Render one thing or another.</p>
+
+<pre><code><span class="cm">// Show different content based on a condition</span>
+<span class="tag">&lt;div&gt;</span>
+  {isLoggedIn
+    ? <span class="tag">&lt;p&gt;</span>Welcome back, {name}!<span class="tag">&lt;/p&gt;</span>
+    : <span class="tag">&lt;p&gt;</span>Please log in.<span class="tag">&lt;/p&gt;</span>
+  }
+<span class="tag">&lt;/div&gt;</span></code></pre>
+
+  <h3>Pattern 3: Early return</h3>
+  <p>For bigger conditional blocks, use <code>if</code> before the return statement.</p>
+
+<pre><code><span class="kw">const</span> <span class="fn">UserProfile</span> = ({ user }: <span class="type">Props</span>) => {
+  <span class="kw">if</span> (!user) {
+    <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>Loading...<span class="tag">&lt;/p&gt;</span>
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;h1&gt;</span>{user.name}<span class="tag">&lt;/h1&gt;</span>
+      <span class="tag">&lt;p&gt;</span>{user.email}<span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>When to use which:</strong> <code>&&</code> for show/hide. Ternary for toggle between two things. Early return for guard clauses (loading, error, empty states).
+  </div>
+
+  <!-- ===== RENDERING LISTS ===== -->
+  <h2>Rendering Lists</h2>
+
+  <p>Use <code>.map()</code> to transform an array of data into an array of JSX elements. Every item needs a unique <code>key</code> prop.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python Jinja2</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;ul&gt;</span>
+{% <span class="kw">for</span> user <span class="kw">in</span> users %}
+  <span class="tag">&lt;li&gt;</span>{{ user.name }}<span class="tag">&lt;/li&gt;</span>
+{% <span class="kw">endfor</span> %}
+<span class="tag">&lt;/ul&gt;</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">JSX</div>
+      <div class="comp-body">
+<pre><code><span class="tag">&lt;ul&gt;</span>
+  {users.<span class="fn">map</span>(user => (
+    <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>
+      {user.name}
+    <span class="tag">&lt;/li&gt;</span>
+  ))}
+<span class="tag">&lt;/ul&gt;</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The key prop</div>
+    <p>React uses <code>key</code> to identify which items changed, were added, or removed during reconciliation. Without keys, React re-renders the entire list on every change.</p>
+    <table>
+      <thead>
+        <tr><th>Good keys</th><th>Bad keys</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Database IDs: <code>key={user.id}</code></td><td>Array index: <code>key={index}</code> (breaks on reorder/delete)</td></tr>
+        <tr><td>Unique slugs: <code>key={post.slug}</code></td><td>Random values: <code>key={Math.random()}</code> (new key every render)</td></tr>
+        <tr><td>Composite: <code>key={`${type}-${id}`}</code></td><td>Non-unique values: <code>key={user.name}</code> (names can repeat)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Why index as key is bad:</strong> If you delete item at index 2, items at index 3, 4, 5 all shift down. React thinks index 2 changed content (it now has index 3's data), index 3 changed, etc. Instead of removing one DOM node, it updates all of them. With stable IDs, React knows exactly which node to remove.
+  </div>
+
+  <h3>Full list example with types</h3>
+
+<pre><code><span class="kw">interface</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">number</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">active</span>: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserList</span> = ({ users }: { <span class="prop">users</span>: <span class="type">User</span>[] }) => {
+  <span class="kw">if</span> (users.<span class="prop">length</span> === <span class="num">0</span>) {
+    <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>No users found.<span class="tag">&lt;/p&gt;</span>
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {users
+        .<span class="fn">filter</span>(u => u.active)
+        .<span class="fn">map</span>(user => (
+          <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>
+            <span class="tag">&lt;strong&gt;</span>{user.name}<span class="tag">&lt;/strong&gt;</span> — {user.email}
+          <span class="tag">&lt;/li&gt;</span>
+        ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== FRAGMENTS ===== -->
+  <h2>Fragments</h2>
+
+  <p>A component must return a <strong>single element</strong>. When you need to return multiple elements without adding a wrapper <code>&lt;div&gt;</code>, use a Fragment.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Unnecessary wrapper div</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Adds an extra &lt;div&gt; to the DOM</span>
+<span class="kw">const</span> <span class="fn">UserInfo</span> = () => (
+  <span class="tag">&lt;div&gt;</span>   <span class="cm">{/* useless wrapper */}</span>
+    <span class="tag">&lt;h2&gt;</span>Alice<span class="tag">&lt;/h2&gt;</span>
+    <span class="tag">&lt;p&gt;</span>alice@example.com<span class="tag">&lt;/p&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Fragment (no extra DOM node)</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// No extra element in the DOM</span>
+<span class="kw">const</span> <span class="fn">UserInfo</span> = () => (
+  <span class="tag">&lt;&gt;</span>      <span class="cm">{/* Fragment shorthand */}</span>
+    <span class="tag">&lt;h2&gt;</span>Alice<span class="tag">&lt;/h2&gt;</span>
+    <span class="tag">&lt;p&gt;</span>alice@example.com<span class="tag">&lt;/p&gt;</span>
+  <span class="tag">&lt;/&gt;</span>
+)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>When to use which:</strong> Use <code>&lt;&gt;...&lt;/&gt;</code> (shorthand) for most cases. Use <code>&lt;Fragment key={id}&gt;</code> when you need a key (e.g., inside <code>.map()</code>). Import with <code>import { Fragment } from 'react'</code>.
+  </div>
+
+  <!-- ===== TYPESCRIPT + JSX ===== -->
+  <h2>TypeScript + JSX</h2>
+
+  <p>Use the <code>.tsx</code> file extension for any file that contains JSX. TypeScript will type-check your JSX expressions and attributes.</p>
+
+  <div class="panel">
+    <div class="panel-title">What TypeScript checks in JSX</div>
+    <ul>
+      <li><strong>Attribute types</strong> — <code>onClick</code> must be a function, <code>className</code> must be a string</li>
+      <li><strong>Required attributes</strong> — <code>&lt;img&gt;</code> requires <code>src</code> and <code>alt</code></li>
+      <li><strong>Expression types</strong> — <code>{count.toUpperCase()}</code> errors if count is a number</li>
+      <li><strong>Component props</strong> — if <code>UserCard</code> requires <code>name: string</code>, you can't skip it</li>
+    </ul>
+  </div>
+
+<pre><code><span class="cm">// TypeScript catches these at compile time:</span>
+
+<span class="tag">&lt;button</span> <span class="attr">onClick</span>=<span class="str">"handleClick"</span><span class="tag">&gt;</span>   <span class="cm">{/* ERROR: string is not a function */}</span>
+<span class="tag">&lt;button</span> <span class="attr">onClick</span>={handleClick}<span class="tag">&gt;</span>  <span class="cm">{/* OK */}</span>
+
+<span class="tag">&lt;img</span> <span class="attr">src</span>=<span class="str">"photo.jpg"</span> <span class="tag">/&gt;</span>           <span class="cm">{/* ERROR: missing required alt attribute */}</span>
+<span class="tag">&lt;img</span> <span class="attr">src</span>=<span class="str">"photo.jpg"</span> <span class="attr">alt</span>=<span class="str">"Photo"</span> <span class="tag">/&gt;</span> <span class="cm">{/* OK */}</span>
+
+<span class="tag">&lt;div</span> <span class="attr">class</span>=<span class="str">"box"</span><span class="tag">&gt;</span>              <span class="cm">{/* ERROR: use className, not class */}</span>
+<span class="tag">&lt;div</span> <span class="attr">className</span>=<span class="str">"box"</span><span class="tag">&gt;</span>          <span class="cm">{/* OK */}</span></code></pre>
+
+  <div class="tip">
+    <strong>Practical benefit:</strong> TypeScript + JSX catches HTML attribute typos at compile time. No more deploying a typo and finding it in production. Think of it like a linter that actually understands your UI structure.
+  </div>
+
+  <!-- ===== JSX COMMENTS ===== -->
+  <h2>Comments in JSX</h2>
+
+  <p>HTML comments (<code>&lt;!-- --&gt;</code>) don't work in JSX. Use JS comments inside curly braces:</p>
+
+<pre><code><span class="kw">return</span> (
+  <span class="tag">&lt;div&gt;</span>
+    <span class="cm">{/* This is a JSX comment */}</span>
+    <span class="tag">&lt;p&gt;</span>Hello<span class="tag">&lt;/p&gt;</span>
+    <span class="cm">{/*
+      Multi-line comments
+      work like this
+    */}</span>
+  <span class="tag">&lt;/div&gt;</span>
+)</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>JSX Cheat Sheet</h2>
+
+  <div class="panel">
+    <div class="panel-title">Quick reference</div>
+    <table>
+      <thead>
+        <tr><th>Concept</th><th>Syntax</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Embed expression</td><td><code>{expression}</code></td></tr>
+        <tr><td>CSS class</td><td><code>className="..."</code></td></tr>
+        <tr><td>Inline style</td><td><code>style={{ camelCase: 'value' }}</code></td></tr>
+        <tr><td>Event handler</td><td><code>onClick={fn}</code> (camelCase, function ref)</td></tr>
+        <tr><td>Conditional (show/hide)</td><td><code>{condition && &lt;El /&gt;}</code></td></tr>
+        <tr><td>Conditional (either/or)</td><td><code>{cond ? &lt;A /&gt; : &lt;B /&gt;}</code></td></tr>
+        <tr><td>List rendering</td><td><code>{arr.map(x => &lt;El key={x.id} /&gt;)}</code></td></tr>
+        <tr><td>Fragment</td><td><code>&lt;&gt;...&lt;/&gt;</code></td></tr>
+        <tr><td>Self-closing tag</td><td><code>&lt;img /&gt;</code>, <code>&lt;br /&gt;</code>, <code>&lt;Component /&gt;</code></td></tr>
+        <tr><td>Comment</td><td><code>{/* comment */}</code></td></tr>
+        <tr><td>File extension</td><td><code>.tsx</code> (TypeScript + JSX)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>

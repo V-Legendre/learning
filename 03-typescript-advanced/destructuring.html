@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 — Destructuring</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>03 — Destructuring</h1>
+  <p class="subtitle">Extract values from objects and arrays into variables. Every React component destructures its props.</p>
+
+  <!-- ===== OBJECT DESTRUCTURING ===== -->
+  <h2>Object Destructuring</h2>
+
+  <p>Pull named properties out of an object into local variables. The names must match the object's keys.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> user = { name: <span class="str">"Alice"</span>, age: <span class="num">30</span>, role: <span class="str">"admin"</span> }
+
+<span class="cm">// Without destructuring</span>
+<span class="kw">const</span> name = user.name
+<span class="kw">const</span> age = user.age
+
+<span class="cm">// With destructuring</span>
+<span class="kw">const</span> { name, age, role } = user
+<span class="cm">// name = "Alice", age = 30, role = "admin"</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>user = {<span class="str">"name"</span>: <span class="str">"Alice"</span>, <span class="str">"age"</span>: <span class="num">30</span>, <span class="str">"role"</span>: <span class="str">"admin"</span>}
+
+<span class="cm"># No direct equivalent — you do:</span>
+name = user[<span class="str">"name"</span>]
+age = user[<span class="str">"age"</span>]
+
+<span class="cm"># Or with dataclass/NamedTuple:</span>
+<span class="cm"># user.name, user.age — but no unpacking</span>
+
+<span class="cm"># Python dicts don't have JS-style</span>
+<span class="cm"># destructuring syntax</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Renaming Variables</h3>
+
+  <p>When the property name clashes with a local variable, or you want a more descriptive name:</p>
+
+<pre><code><span class="kw">const</span> response = { data: [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>], status: <span class="num">200</span> }
+
+<span class="cm">// Rename: { originalKey: newName }</span>
+<span class="kw">const</span> { data: <span class="prop">items</span>, status: <span class="prop">statusCode</span> } = response
+<span class="cm">// items = [1, 2, 3], statusCode = 200</span>
+<span class="cm">// "data" and "status" are NOT created as variables</span></code></pre>
+
+  <div class="warn">
+    <strong>Gotcha:</strong> The colon in <code>{ data: items }</code> means "take property <code>data</code>, assign it to variable <code>items</code>". It does NOT mean type annotation here. The syntax looks identical but the context is different.
+  </div>
+
+  <h3>Default Values</h3>
+
+  <p>Provide a fallback when the property is <code>undefined</code>:</p>
+
+<pre><code><span class="kw">const</span> config = { host: <span class="str">"localhost"</span> }
+
+<span class="kw">const</span> { host, port = <span class="num">3000</span>, debug = <span class="kw">false</span> } = config
+<span class="cm">// host = "localhost", port = 3000, debug = false</span>
+
+<span class="cm">// Combine rename + default:</span>
+<span class="kw">const</span> { host: <span class="prop">hostname</span> = <span class="str">"0.0.0.0"</span> } = config
+<span class="cm">// hostname = "localhost" (value exists, so default not used)</span></code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> Defaults only apply when the value is <code>undefined</code>, NOT <code>null</code>. If <code>port: null</code>, the default is not used.
+  </div>
+
+  <!-- ===== ARRAY DESTRUCTURING ===== -->
+  <h2>Array Destructuring</h2>
+
+  <p>Like object destructuring, but positional instead of by name. You can name the variables anything you want.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> colors = [<span class="str">"red"</span>, <span class="str">"green"</span>, <span class="str">"blue"</span>]
+
+<span class="cm">// Positional extraction</span>
+<span class="kw">const</span> [first, second, third] = colors
+<span class="cm">// first = "red", second = "green"</span>
+
+<span class="cm">// Skip elements with commas</span>
+<span class="kw">const</span> [, , blue] = colors
+<span class="cm">// blue = "blue"</span>
+
+<span class="cm">// Swap variables (no temp needed!)</span>
+<span class="kw">let</span> a = <span class="num">1</span>, b = <span class="num">2</span>;
+[a, b] = [b, a]
+<span class="cm">// a = 2, b = 1</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code>colors = [<span class="str">"red"</span>, <span class="str">"green"</span>, <span class="str">"blue"</span>]
+
+<span class="cm"># Tuple unpacking — same idea!</span>
+first, second, third = colors
+<span class="cm"># first = "red", second = "green"</span>
+
+<span class="cm"># Skip with _</span>
+_, _, blue = colors
+<span class="cm"># blue = "blue"</span>
+
+<span class="cm"># Swap — Python has this too</span>
+a, b = <span class="num">1</span>, <span class="num">2</span>
+a, b = b, a
+<span class="cm"># a = 2, b = 1</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Rest Element in Arrays</h3>
+
+<pre><code><span class="kw">const</span> nums = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>]
+
+<span class="kw">const</span> [head, ...tail] = nums
+<span class="cm">// head = 1, tail = [2, 3, 4, 5]</span>
+
+<span class="kw">const</span> [first, second, ...rest] = nums
+<span class="cm">// first = 1, second = 2, rest = [3, 4, 5]</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript — rest element</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> [head, ...tail] = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>]</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python — starred assignment</div>
+      <div class="comp-body">
+<pre><code>head, *tail = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>]</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== NESTED DESTRUCTURING ===== -->
+  <h2>Nested Destructuring</h2>
+
+  <p>Destructure nested objects/arrays in a single expression. Useful for API responses.</p>
+
+<pre><code><span class="kw">const</span> apiResponse = {
+  user: {
+    name: <span class="str">"Alice"</span>,
+    address: {
+      city: <span class="str">"Paris"</span>,
+      zip: <span class="str">"75001"</span>
+    }
+  },
+  meta: { page: <span class="num">1</span>, total: <span class="num">50</span> }
+}
+
+<span class="cm">// Nested destructuring</span>
+<span class="kw">const</span> {
+  user: {
+    name,
+    address: { city }
+  },
+  meta: { total }
+} = apiResponse
+
+<span class="cm">// name = "Alice", city = "Paris", total = 50</span>
+<span class="cm">// NOTE: "user", "address", "meta" are NOT created as variables</span>
+<span class="cm">// Only the leaf values are extracted</span></code></pre>
+
+  <div class="warn">
+    <strong>Gotcha:</strong> In nested destructuring, intermediate levels (<code>user</code>, <code>address</code>, <code>meta</code>) are NOT assigned to variables. Only the final targets (<code>name</code>, <code>city</code>, <code>total</code>) become local variables. If you need both, destructure separately.
+  </div>
+
+  <p>Mixed array + object destructuring:</p>
+
+<pre><code><span class="kw">const</span> data = {
+  users: [
+    { name: <span class="str">"Alice"</span>, scores: [<span class="num">90</span>, <span class="num">85</span>, <span class="num">95</span>] },
+    { name: <span class="str">"Bob"</span>, scores: [<span class="num">70</span>, <span class="num">80</span>] }
+  ]
+}
+
+<span class="cm">// Extract first user's name and first score</span>
+<span class="kw">const</span> { users: [{ name, scores: [topScore] }] } = data
+<span class="cm">// name = "Alice", topScore = 90</span></code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> Deep nesting gets hard to read. If you go deeper than 2 levels, consider extracting in multiple steps instead.
+  </div>
+
+  <!-- ===== FUNCTION PARAMETERS ===== -->
+  <h2>Destructuring in Function Parameters</h2>
+
+  <p>This is the most important pattern for React. Every component receives a <code>props</code> object, and you destructure it in the parameter list.</p>
+
+  <div class="panel">
+    <div class="panel-title">The React Pattern</div>
+    <p>Instead of writing <code>props.name</code>, <code>props.age</code> everywhere in the component, destructure the props right in the function signature. This is idiomatic React.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without destructuring</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Props</span> = {
+  name: <span class="type">string</span>
+  age: <span class="type">number</span>
+  email<span class="kw">?</span>: <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserCard</span> = (props: <span class="type">Props</span>) => {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span>&gt;
+      &lt;<span class="tag">h2</span>&gt;{props.name}&lt;/<span class="tag">h2</span>&gt;
+      &lt;<span class="tag">p</span>&gt;Age: {props.age}&lt;/<span class="tag">p</span>&gt;
+      &lt;<span class="tag">p</span>&gt;{props.email}&lt;/<span class="tag">p</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With destructuring (idiomatic)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">Props</span> = {
+  name: <span class="type">string</span>
+  age: <span class="type">number</span>
+  email<span class="kw">?</span>: <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">UserCard</span> = ({ name, age, email }: <span class="type">Props</span>) => {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span>&gt;
+      &lt;<span class="tag">h2</span>&gt;{name}&lt;/<span class="tag">h2</span>&gt;
+      &lt;<span class="tag">p</span>&gt;Age: {age}&lt;/<span class="tag">p</span>&gt;
+      &lt;<span class="tag">p</span>&gt;{email}&lt;/<span class="tag">p</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Defaults in Function Parameters</h3>
+
+<pre><code><span class="kw">type</span> <span class="type">ButtonProps</span> = {
+  label: <span class="type">string</span>
+  variant<span class="kw">?</span>: <span class="str">"primary"</span> | <span class="str">"secondary"</span>
+  size<span class="kw">?</span>: <span class="str">"sm"</span> | <span class="str">"md"</span> | <span class="str">"lg"</span>
+  disabled<span class="kw">?</span>: <span class="type">boolean</span>
+}
+
+<span class="kw">const</span> <span class="fn">Button</span> = ({
+  label,
+  variant = <span class="str">"primary"</span>,
+  size = <span class="str">"md"</span>,
+  disabled = <span class="kw">false</span>
+}: <span class="type">ButtonProps</span>) => {
+  <span class="cm">// variant, size, disabled all have defaults</span>
+  <span class="cm">// No need for ?? or || inside the function body</span>
+  <span class="kw">return</span> &lt;<span class="tag">button</span> <span class="attr">className</span>={<span class="str">`btn-${variant} btn-${size}`</span>}&gt;{label}&lt;/<span class="tag">button</span>&gt;
+}</code></pre>
+
+  <h3>Rest in Function Parameters</h3>
+
+<pre><code><span class="kw">type</span> <span class="type">InputProps</span> = {
+  label: <span class="type">string</span>
+  error<span class="kw">?</span>: <span class="type">string</span>
+} & <span class="type">React.InputHTMLAttributes</span>&lt;<span class="type">HTMLInputElement</span>&gt;
+
+<span class="cm">// Extract your custom props, pass the rest to &lt;input&gt;</span>
+<span class="kw">const</span> <span class="fn">Input</span> = ({ label, error, ...<span class="prop">inputProps</span> }: <span class="type">InputProps</span>) => {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span>&gt;
+      &lt;<span class="tag">label</span>&gt;{label}&lt;/<span class="tag">label</span>&gt;
+      &lt;<span class="tag">input</span> {...inputProps} /&gt;
+      {error && &lt;<span class="tag">span</span>&gt;{error}&lt;/<span class="tag">span</span>&gt;}
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}
+
+<span class="cm">// Usage: &lt;Input label="Email" error="Required" type="email" placeholder="..." /&gt;</span>
+<span class="cm">// "label" and "error" are consumed; type, placeholder go to &lt;input&gt;</span></code></pre>
+
+  <!-- ===== COMMON PATTERNS ===== -->
+  <h2>Common Patterns</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Extract from API Responses</div>
+<pre><code><span class="cm">// fetch returns a Response object</span>
+<span class="kw">const</span> { data, error, isLoading } =
+  <span class="fn">useSWR</span>(<span class="str">"/api/users"</span>)
+
+<span class="cm">// Extract from response JSON</span>
+<span class="kw">const</span> { results, pagination: { page, total } } =
+  <span class="kw">await</span> response.<span class="fn">json</span>()</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">React useState (array destructuring)</div>
+<pre><code><span class="cm">// useState returns [value, setter]</span>
+<span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(<span class="num">0</span>)
+<span class="kw">const</span> [name, setName] = <span class="fn">useState</span>(<span class="str">""</span>)
+<span class="kw">const</span> [items, setItems] = <span class="fn">useState</span>&lt;<span class="type">string</span>[]&gt;([])
+
+<span class="cm">// This is why array destructuring matters</span>
+<span class="cm">// — you pick the variable names yourself</span></code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Destructuring in Loops</div>
+<pre><code><span class="kw">const</span> users = [
+  { id: <span class="num">1</span>, name: <span class="str">"Alice"</span>, role: <span class="str">"admin"</span> },
+  { id: <span class="num">2</span>, name: <span class="str">"Bob"</span>, role: <span class="str">"user"</span> }
+]
+
+<span class="cm">// Destructure in for...of</span>
+<span class="kw">for</span> (<span class="kw">const</span> { name, role } <span class="kw">of</span> users) {
+  console.<span class="fn">log</span>(<span class="str">`${name} is ${role}`</span>)
+}
+
+<span class="cm">// Destructure in .map() — you'll do this ALL the time in React</span>
+users.<span class="fn">map</span>(({ id, name }) => (
+  &lt;<span class="tag">li</span> <span class="attr">key</span>={id}&gt;{name}&lt;/<span class="tag">li</span>&gt;
+))</code></pre>
+  </div>
+
+  <!-- ===== WITH TYPE ANNOTATIONS ===== -->
+  <h2>Destructuring with Type Annotations</h2>
+
+  <p>Annotating destructured variables has a specific syntax. The type comes after the whole pattern, not inline.</p>
+
+<pre><code><span class="cm">// Type annotation for destructured object</span>
+<span class="kw">const</span> { name, age }: { name: <span class="type">string</span>; age: <span class="type">number</span> } = getUser()
+
+<span class="cm">// In practice, you use a named type (much cleaner):</span>
+<span class="kw">type</span> <span class="type">User</span> = { name: <span class="type">string</span>; age: <span class="type">number</span> }
+<span class="kw">const</span> { name, age }: <span class="type">User</span> = getUser()
+
+<span class="cm">// Array destructuring with types</span>
+<span class="kw">const</span> [x, y]: [<span class="type">number</span>, <span class="type">number</span>] = getCoords()
+
+<span class="cm">// Usually TS infers this — annotate only when needed</span></code></pre>
+
+  <div class="warn">
+    <strong>Common Mistake:</strong> You might be tempted to write <code>const { name: string } = obj</code> thinking it's a type annotation. It's NOT. That <em>renames</em> <code>name</code> to a variable called <code>string</code>. The type goes after the closing brace: <code>const { name }: { name: string } = obj</code>.
+  </div>
+
+  <!-- ===== GOTCHAS ===== -->
+  <h2>Common Mistakes &amp; Gotchas</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Destructuring undefined/null</div>
+<pre><code><span class="cm">// This CRASHES at runtime</span>
+<span class="kw">const</span> { name } = <span class="kw">undefined</span>  <span class="cm">// TypeError!</span>
+<span class="kw">const</span> { name } = <span class="kw">null</span>       <span class="cm">// TypeError!</span>
+
+<span class="cm">// Safe: provide fallback</span>
+<span class="kw">const</span> { name } = data ?? {}
+<span class="cm">// Or use optional chaining first:</span>
+<span class="kw">const</span> name = data?.name</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Unused variables from destructuring</div>
+<pre><code><span class="cm">// ESLint will warn about unused vars</span>
+<span class="kw">const</span> { name, age, role } = user
+<span class="cm">// If you only need "name", don't extract the rest</span>
+
+<span class="cm">// Better: only extract what you use</span>
+<span class="kw">const</span> { name } = user
+
+<span class="cm">// If you need to skip in arrays, use _</span>
+<span class="kw">const</span> [, second] = arr</code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Destructuring does NOT deep clone</div>
+<pre><code><span class="kw">const</span> original = { user: { name: <span class="str">"Alice"</span> } }
+<span class="kw">const</span> { user } = original
+
+user.name = <span class="str">"Bob"</span>
+console.<span class="fn">log</span>(original.user.name) <span class="cm">// "Bob" — same reference!</span>
+
+<span class="cm">// Destructuring copies the REFERENCE for objects/arrays, not the value.</span>
+<span class="cm">// Same as Python: extracting a dict value doesn't deep-copy it.</span></code></pre>
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>Syntax</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Basic object</td><td><code>const { a, b } = obj</code></td><td>Extract properties by name</td></tr>
+      <tr><td>Rename</td><td><code>const { a: x } = obj</code></td><td><code>x = obj.a</code></td></tr>
+      <tr><td>Default</td><td><code>const { a = 5 } = obj</code></td><td>Fallback if <code>undefined</code></td></tr>
+      <tr><td>Nested</td><td><code>const { a: { b } } = obj</code></td><td><code>b = obj.a.b</code></td></tr>
+      <tr><td>Basic array</td><td><code>const [a, b] = arr</code></td><td>Positional extraction</td></tr>
+      <tr><td>Skip elements</td><td><code>const [, , c] = arr</code></td><td><code>c = arr[2]</code></td></tr>
+      <tr><td>Rest (object)</td><td><code>const { a, ...rest } = obj</code></td><td><code>rest</code> = everything except <code>a</code></td></tr>
+      <tr><td>Rest (array)</td><td><code>const [a, ...rest] = arr</code></td><td><code>rest</code> = remaining elements</td></tr>
+      <tr><td>Function param</td><td><code>({ a, b }: Type) =&gt; ...</code></td><td>Destructure directly in param</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

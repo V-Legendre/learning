@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 — useContext</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>08 — useContext</h1>
+  <p class="subtitle">Sharing state across the component tree without prop drilling. React's built-in dependency injection.</p>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <h2>The Problem: Prop Drilling</h2>
+
+  <p><strong>Prop drilling</strong> = passing props through intermediate components that don't use them, just to reach a deeply nested component that does. It's tedious, fragile, and pollutes intermediate component APIs.</p>
+
+  <div class="panel">
+    <div class="panel-title">Prop drilling example: Theme through 4 levels</div>
+<pre><code><span class="cm">// Level 1: App owns the theme</span>
+<span class="kw">const</span> <span class="fn">App</span> = () =&gt; {
+  <span class="kw">const</span> [theme, setTheme] = <span class="fn">useState</span>&lt;<span class="str">"light"</span> | <span class="str">"dark"</span>&gt;(<span class="str">"light"</span>)
+  <span class="kw">return</span> <span class="tag">&lt;Layout</span> <span class="attr">theme</span>={theme} <span class="attr">setTheme</span>={setTheme} <span class="tag">/&gt;</span>
+}
+
+<span class="cm">// Level 2: Layout doesn't use theme, just passes it through</span>
+<span class="kw">const</span> <span class="fn">Layout</span> = ({ theme, setTheme }: <span class="type">Props</span>) =&gt; (
+  <span class="tag">&lt;div&gt;</span>
+    <span class="tag">&lt;Sidebar</span> <span class="attr">theme</span>={theme} <span class="attr">setTheme</span>={setTheme} <span class="tag">/&gt;</span>
+    <span class="tag">&lt;Main</span> <span class="attr">theme</span>={theme} <span class="tag">/&gt;</span>
+  <span class="tag">&lt;/div&gt;</span>
+)
+
+<span class="cm">// Level 3: Sidebar doesn't use theme either</span>
+<span class="kw">const</span> <span class="fn">Sidebar</span> = ({ theme, setTheme }: <span class="type">Props</span>) =&gt; (
+  <span class="tag">&lt;nav&gt;</span>
+    <span class="tag">&lt;ThemeToggle</span> <span class="attr">theme</span>={theme} <span class="attr">setTheme</span>={setTheme} <span class="tag">/&gt;</span>
+  <span class="tag">&lt;/nav&gt;</span>
+)
+
+<span class="cm">// Level 4: ThemeToggle finally uses it</span>
+<span class="kw">const</span> <span class="fn">ThemeToggle</span> = ({ theme, setTheme }: <span class="type">Props</span>) =&gt; (
+  <span class="tag">&lt;button</span> <span class="attr">onClick</span>={() =&gt; <span class="fn">setTheme</span>(theme === <span class="str">"light"</span> ? <span class="str">"dark"</span> : <span class="str">"light"</span>)}<span class="tag">&gt;</span>
+    {theme === <span class="str">"light"</span> ? <span class="str">"Dark mode"</span> : <span class="str">"Light mode"</span>}
+  <span class="tag">&lt;/button&gt;</span>
+)
+
+<span class="cm">// Layout and Sidebar are polluted with theme props</span>
+<span class="cm">// they don't care about. Now imagine 10 levels deep...</span></code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Prop drilling is like passing a database connection through every function in a call chain, even if most functions don't use it: <code>def process(db, data) -> def validate(db, item) -> def save(db, item)</code>. You'd use dependency injection instead. Context IS React's dependency injection.
+  </div>
+
+  <!-- ===== THE SOLUTION ===== -->
+  <h2>The Solution: Context</h2>
+
+  <p>Context lets you <strong>"teleport"</strong> data from a provider directly to any consumer below it in the tree, skipping all intermediate components.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">createContext</div>
+      <div class="desc">Define the shape of shared data</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Provider</div>
+      <div class="desc">Wrap tree, supply the value</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">useContext</div>
+      <div class="desc">Consume from anywhere below</div>
+    </div>
+  </div>
+
+  <!-- ===== FULL PATTERN ===== -->
+  <h2>The Full Pattern (Production-Ready)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Step 1: Create the context and custom hook</div>
+<pre><code><span class="cm">// theme-context.tsx</span>
+<span class="kw">import</span> { createContext, useContext, useState } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="cm">// 1. Define the context value type</span>
+<span class="kw">type</span> <span class="type">Theme</span> = <span class="str">"light"</span> | <span class="str">"dark"</span>
+
+<span class="kw">type</span> <span class="type">ThemeContextType</span> = {
+  theme: <span class="type">Theme</span>
+  toggleTheme: () =&gt; <span class="type">void</span>
+}
+
+<span class="cm">// 2. Create context with null default</span>
+<span class="kw">const</span> ThemeContext = <span class="fn">createContext</span>&lt;<span class="type">ThemeContextType</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+<span class="cm">// 3. Custom hook with safety check</span>
+<span class="kw">export const</span> <span class="fn">useTheme</span> = (): <span class="type">ThemeContextType</span> =&gt; {
+  <span class="kw">const</span> context = <span class="fn">useContext</span>(ThemeContext)
+  <span class="kw">if</span> (!context) {
+    <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">"useTheme must be used within a ThemeProvider"</span>)
+  }
+  <span class="kw">return</span> context
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step 2: Create the Provider component</div>
+<pre><code><span class="cm">// theme-context.tsx (continued)</span>
+<span class="kw">export const</span> <span class="fn">ThemeProvider</span> = ({ children }: { children: <span class="type">React.ReactNode</span> }) =&gt; {
+  <span class="kw">const</span> [theme, setTheme] = <span class="fn">useState</span>&lt;<span class="type">Theme</span>&gt;(<span class="str">"light"</span>)
+
+  <span class="kw">const</span> <span class="fn">toggleTheme</span> = () =&gt; {
+    <span class="fn">setTheme</span>(prev =&gt; prev === <span class="str">"light"</span> ? <span class="str">"dark"</span> : <span class="str">"light"</span>)
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ThemeContext.Provider</span> <span class="attr">value</span>={{ theme, toggleTheme }}<span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/ThemeContext.Provider&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step 3: Wrap the tree</div>
+<pre><code><span class="cm">// App.tsx</span>
+<span class="kw">import</span> { ThemeProvider } <span class="kw">from</span> <span class="str">"./theme-context"</span>
+
+<span class="kw">const</span> <span class="fn">App</span> = () =&gt; (
+  <span class="tag">&lt;ThemeProvider&gt;</span>
+    <span class="tag">&lt;Layout /&gt;</span>       <span class="cm">{/* No theme props needed! */}</span>
+  <span class="tag">&lt;/ThemeProvider&gt;</span>
+)</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step 4: Consume anywhere below</div>
+<pre><code><span class="cm">// ThemeToggle.tsx — no prop drilling!</span>
+<span class="kw">import</span> { useTheme } <span class="kw">from</span> <span class="str">"./theme-context"</span>
+
+<span class="kw">const</span> <span class="fn">ThemeToggle</span> = () =&gt; {
+  <span class="kw">const</span> { theme, toggleTheme } = <span class="fn">useTheme</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;button</span> <span class="attr">onClick</span>={toggleTheme}<span class="tag">&gt;</span>
+      {theme === <span class="str">"light"</span> ? <span class="str">"Switch to dark"</span> : <span class="str">"Switch to light"</span>}
+    <span class="tag">&lt;/button&gt;</span>
+  )
+}
+
+<span class="cm">// Layout and Sidebar no longer have theme props at all.</span>
+<span class="cm">// They're completely unaware of theme.</span></code></pre>
+  </div>
+
+  <!-- ===== TYPESCRIPT TYPING ===== -->
+  <h2>TypeScript: Why <code>null</code> Default + Custom Hook</h2>
+
+  <p>You might see tutorials use <code>createContext({} as ThemeContextType)</code>. That's a lie to the type system. The custom hook pattern is safer.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: Fake default value</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Lies to TypeScript — {} is NOT</span>
+<span class="cm">// a valid ThemeContextType</span>
+<span class="kw">const</span> ThemeContext = <span class="fn">createContext</span>&lt;<span class="type">ThemeContextType</span>&gt;(
+  {} <span class="kw">as</span> <span class="type">ThemeContextType</span>
+)
+
+<span class="cm">// If someone uses useContext outside</span>
+<span class="cm">// a provider, they get {} — no error,</span>
+<span class="cm">// just a silent runtime crash later.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: null + custom hook</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Honest default — null means "no provider"</span>
+<span class="kw">const</span> ThemeContext = <span class="fn">createContext</span>&lt;
+  <span class="type">ThemeContextType</span> | <span class="kw">null</span>
+&gt;(<span class="kw">null</span>)
+
+<span class="cm">// Custom hook throws immediately</span>
+<span class="cm">// with a helpful error message.</span>
+<span class="kw">const</span> <span class="fn">useTheme</span> = () =&gt; {
+  <span class="kw">const</span> ctx = <span class="fn">useContext</span>(ThemeContext)
+  <span class="kw">if</span> (!ctx) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">"..."</span>)
+  <span class="kw">return</span> ctx  <span class="cm">// narrowed to ThemeContextType</span>
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When to Use Context</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Good use cases</div>
+      <ul>
+        <li><strong>Theme</strong> (light/dark mode)</li>
+        <li><strong>Auth</strong> (current user, login/logout)</li>
+        <li><strong>Locale / i18n</strong> (language, translations)</li>
+        <li><strong>Feature flags</strong></li>
+        <li><strong>Toast/notification system</strong></li>
+        <li>Values that change <strong>infrequently</strong></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #f87171;">Bad use cases</div>
+      <ul>
+        <li><strong>Frequently changing values</strong> (form inputs, scroll position, animation frames)</li>
+        <li><strong>Large data sets</strong> (lists, tables)</li>
+        <li><strong>Server state</strong> (use TanStack Query instead)</li>
+        <li><strong>Everything</strong> (don't use Context as a global store)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Performance trap:</strong> When context value changes, <strong>every component</strong> that calls <code>useContext(MyContext)</code> re-renders — even if it only uses a part of the value that didn't change. There's no selector mechanism like in Zustand. This is why context is bad for frequently changing values.
+  </div>
+
+  <!-- ===== MULTIPLE CONTEXTS ===== -->
+  <h2>Multiple Contexts</h2>
+
+  <p>Don't create a single "god context" with everything. Split into focused contexts. Each provider manages one concern.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Bad: God context</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">AppContextType</span> = {
+  theme: <span class="type">Theme</span>
+  user: <span class="type">User</span> | <span class="kw">null</span>
+  locale: <span class="type">string</span>
+  notifications: <span class="type">Notification</span>[]
+  cart: <span class="type">CartItem</span>[]
+  <span class="cm">// ... everything in one blob</span>
+}
+
+<span class="cm">// Changing theme re-renders EVERY</span>
+<span class="cm">// consumer, even those that only</span>
+<span class="cm">// need `user` or `cart`.</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Good: Split contexts</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Each concern in its own context</span>
+<span class="tag">&lt;ThemeProvider&gt;</span>
+  <span class="tag">&lt;AuthProvider&gt;</span>
+    <span class="tag">&lt;LocaleProvider&gt;</span>
+      <span class="tag">&lt;NotificationProvider&gt;</span>
+        <span class="tag">&lt;App /&gt;</span>
+      <span class="tag">&lt;/NotificationProvider&gt;</span>
+    <span class="tag">&lt;/LocaleProvider&gt;</span>
+  <span class="tag">&lt;/AuthProvider&gt;</span>
+<span class="tag">&lt;/ThemeProvider&gt;</span>
+
+<span class="cm">// Changing theme only re-renders</span>
+<span class="cm">// components using useTheme().</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like Flask's <code>g</code> object or Django's middleware system. Each middleware handles one concern (auth, session, CORS), and any view can access what it needs without passing it through the URL handler chain.
+  </div>
+
+  <!-- ===== REAL-WORLD AUTH CONTEXT ===== -->
+  <h2>Real-World Example: Auth Context</h2>
+
+  <div class="panel">
+    <div class="panel-title">Complete auth context implementation</div>
+<pre><code><span class="cm">// auth-context.tsx</span>
+<span class="kw">import</span> { createContext, useContext, useState, useCallback } <span class="kw">from</span> <span class="str">"react"</span>
+
+<span class="kw">type</span> <span class="type">User</span> = {
+  id: <span class="type">string</span>
+  name: <span class="type">string</span>
+  email: <span class="type">string</span>
+  role: <span class="str">"admin"</span> | <span class="str">"user"</span>
+}
+
+<span class="kw">type</span> <span class="type">AuthContextType</span> = {
+  user: <span class="type">User</span> | <span class="kw">null</span>
+  isAuthenticated: <span class="type">boolean</span>
+  login: (email: <span class="type">string</span>, password: <span class="type">string</span>) =&gt; <span class="type">Promise</span>&lt;<span class="type">void</span>&gt;
+  logout: () =&gt; <span class="type">void</span>
+}
+
+<span class="kw">const</span> AuthContext = <span class="fn">createContext</span>&lt;<span class="type">AuthContextType</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+<span class="kw">export const</span> <span class="fn">useAuth</span> = () =&gt; {
+  <span class="kw">const</span> ctx = <span class="fn">useContext</span>(AuthContext)
+  <span class="kw">if</span> (!ctx) <span class="kw">throw new</span> <span class="type">Error</span>(<span class="str">"useAuth must be used within AuthProvider"</span>)
+  <span class="kw">return</span> ctx
+}
+
+<span class="kw">export const</span> <span class="fn">AuthProvider</span> = ({ children }: { children: <span class="type">React.ReactNode</span> }) =&gt; {
+  <span class="kw">const</span> [user, setUser] = <span class="fn">useState</span>&lt;<span class="type">User</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>)
+
+  <span class="kw">const</span> <span class="fn">login</span> = <span class="fn">useCallback</span>(<span class="kw">async</span> (email: <span class="type">string</span>, password: <span class="type">string</span>) =&gt; {
+    <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/login"</span>, {
+      method: <span class="str">"POST"</span>,
+      body: JSON.<span class="fn">stringify</span>({ email, password }),
+    })
+    <span class="kw">const</span> userData = <span class="kw">await</span> response.<span class="fn">json</span>()
+    <span class="fn">setUser</span>(userData)
+  }, [])
+
+  <span class="kw">const</span> <span class="fn">logout</span> = <span class="fn">useCallback</span>(() =&gt; {
+    <span class="fn">setUser</span>(<span class="kw">null</span>)
+  }, [])
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;AuthContext.Provider</span> <span class="attr">value</span>={{
+      user,
+      isAuthenticated: user !== <span class="kw">null</span>,
+      login,
+      logout,
+    }}<span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/AuthContext.Provider&gt;</span>
+  )
+}</code></pre>
+  </div>
+
+  <h3>Consuming the auth context</h3>
+<pre><code><span class="cm">// Any component, anywhere in the tree</span>
+<span class="kw">const</span> <span class="fn">NavBar</span> = () =&gt; {
+  <span class="kw">const</span> { user, isAuthenticated, logout } = <span class="fn">useAuth</span>()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;nav&gt;</span>
+      {isAuthenticated ? (
+        <span class="tag">&lt;&gt;</span>
+          <span class="tag">&lt;span&gt;</span>Welcome, {user!.name}<span class="tag">&lt;/span&gt;</span>
+          <span class="tag">&lt;button</span> <span class="attr">onClick</span>={logout}<span class="tag">&gt;</span>Log out<span class="tag">&lt;/button&gt;</span>
+        <span class="tag">&lt;/&gt;</span>
+      ) : (
+        <span class="tag">&lt;Link</span> <span class="attr">to</span>=<span class="str">"/login"</span><span class="tag">&gt;</span>Log in<span class="tag">&lt;/Link&gt;</span>
+      )}
+    <span class="tag">&lt;/nav&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Context Checklist</h2>
+
+  <table>
+    <thead>
+      <tr><th>Question</th><th>Answer</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>What does Context solve?</td>
+        <td>Prop drilling — sharing data without passing through every level</td>
+      </tr>
+      <tr>
+        <td>What are the 3 pieces?</td>
+        <td><code>createContext</code>, <code>Provider</code> (wraps tree), <code>useContext</code> (reads value)</td>
+      </tr>
+      <tr>
+        <td>What's the best default value?</td>
+        <td><code>null</code>, with a custom hook that throws if used outside provider</td>
+      </tr>
+      <tr>
+        <td>When does it re-render consumers?</td>
+        <td>Every time the <code>value</code> prop of the Provider changes (shallow comparison)</td>
+      </tr>
+      <tr>
+        <td>Can I use selectors?</td>
+        <td>No. Every consumer re-renders on any value change. Split contexts to avoid this</td>
+      </tr>
+      <tr>
+        <td>Should I put everything in Context?</td>
+        <td>No. Use it for low-frequency global data. For server state, use TanStack Query. For complex client state, use Zustand</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Mental model:</strong> Context = React's dependency injection. The Provider registers a service. <code>useContext</code> resolves it. The custom hook is the type-safe API consumers use. Keep providers focused on one concern each.
+  </div>
+
+</body>
+</html>
