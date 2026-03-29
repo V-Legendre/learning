@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Figma Basics for Developers</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    /* Page-specific styles */
+    .shortcut-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin: 15px 0;
+    }
+    .shortcut-grid .panel ul { list-style: none; padding: 0; }
+    .shortcut-grid .panel li {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #2a2a4a;
+      font-size: 13px;
+    }
+    .shortcut-grid .panel li:last-child { border-bottom: none; }
+    kbd {
+      background: #2a2a4a;
+      border: 1px solid #3a3a5a;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      color: #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Figma Basics for Developers</h1>
+  <p class="subtitle">What you need to know to read designs, extract values, and work with designers</p>
+
+  <!-- ===== WHAT IS FIGMA ===== -->
+  <h2>What is Figma?</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">The short version</div>
+      <p>Figma is a <strong>browser-based collaborative design tool</strong> — think "Google Docs for UI design." No install needed, real-time multiplayer, everyone looks at the same live file.</p>
+      <p style="margin-top: 10px;">It's the <strong>single source of truth</strong> for how the UI should look. You never get sent a static mockup — you always reference the live Figma file.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Backend analogy</div>
+      <p>Figma is to frontend what a <strong>shared database schema</strong> is to backend — the canonical spec that both designers and developers reference.</p>
+      <p style="margin-top: 10px;">Designers write to it, developers read from it. Dev Mode makes it read-only for you so you can't accidentally break anything.</p>
+    </div>
+  </div>
+
+  <!-- ===== THE INTERFACE ===== -->
+  <h2>The Figma Interface</h2>
+
+  <div class="panel" style="padding: 30px;">
+    <pre style="background: none; border: none; padding: 0; font-size: 13px; line-height: 1.4; color: #999; margin: 0;"><code>┌─────────────────────────────────────────────────────────────────────┐
+│  <span style="color: #82aaff;">Toolbar</span>: Move(V) Frame(F) Text(T) Hand(H) │ <span style="color: #e94560;">Design / Dev Mode</span> toggle  │
+├──────────────┬──────────────────────────────────┬───────────────────┤
+│              │                                  │                   │
+│  <span style="color: #a78bfa;">Left Panel</span>   │                                  │  <span style="color: #a78bfa;">Right Panel</span>       │
+│              │                                  │                   │
+│  Layers      │         <span style="color: #fff;">Canvas</span>                    │  Design Mode:     │
+│  (tree view  │         (infinite workspace)     │    Properties     │
+│   of all     │                                  │    (fills, size,  │
+│   elements)  │    Frames, components,           │     spacing...)   │
+│              │    text, images live here         │                   │
+│  Assets      │                                  │  Dev Mode:        │
+│  (component  │    Zoom: Cmd +/- or scroll       │    <span style="color: #c3e88d;">Inspect panel</span>   │
+│   library)   │    Pan: Space + drag             │    (CSS code,     │
+│              │                                  │     measurements, │
+│  Pages       │                                  │     exports)      │
+│  (tabs)      │                                  │                   │
+├──────────────┴──────────────────────────────────┴───────────────────┤
+│  <span style="color: #546e7a;">Status bar</span>                                                        │
+└─────────────────────────────────────────────────────────────────────┘</code></pre>
+  </div>
+
+  <!-- ===== FRAMES VS GROUPS ===== -->
+  <h2>Frames vs Groups</h2>
+
+  <p>Almost everything in Figma is a <strong>Frame</strong>. Understanding this is key.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header" style="background: #34d39933; color: #34d399;">Frame (the important one)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Has its own dimensions (W x H)</li>
+          <li>Can have fills, borders, corner radius</li>
+          <li>Supports <strong>Auto Layout</strong> (= flexbox)</li>
+          <li>Can clip overflow content</li>
+          <li>Children can have constraints</li>
+        </ul>
+        <p style="margin-top: 12px;"><strong>CSS analogy:</strong> a <code>&lt;div&gt;</code> with styles</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header" style="background: #f59e0b33; color: #fbbf24;">Group (just convenience)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Bounds auto-adjust to fit children</li>
+          <li>Cannot have its own styling</li>
+          <li>No auto layout support</li>
+          <li>Cannot clip content</li>
+          <li>No constraints</li>
+        </ul>
+        <p style="margin-top: 12px;"><strong>CSS analogy:</strong> a transparent wrapper with no styles</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== THE KEY MAPPING ===== -->
+  <h2>Figma → CSS: The Complete Mapping</h2>
+
+  <div class="note">
+    <strong>This is the core skill.</strong> Everything in Figma maps to CSS properties you already know from the previous lessons. The table below is your cheat sheet.
+  </div>
+
+  <h3>Auto Layout = Flexbox</h3>
+
+  <table>
+    <thead>
+      <tr><th>Figma Auto Layout</th><th>CSS</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Direction: Horizontal</td><td><code>flex-direction: row</code></td><td></td></tr>
+      <tr><td>Direction: Vertical</td><td><code>flex-direction: column</code></td><td></td></tr>
+      <tr><td>Gap between items</td><td><code>gap: Npx</code></td><td></td></tr>
+      <tr><td>Padding</td><td><code>padding: T R B L</code></td><td>Can be set per-side</td></tr>
+      <tr><td>Alignment (9-point grid)</td><td><code>justify-content</code> + <code>align-items</code></td><td></td></tr>
+      <tr><td>Gap set to "Auto"</td><td><code>justify-content: space-between</code></td><td></td></tr>
+      <tr><td>Wrap</td><td><code>flex-wrap: wrap</code></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Sizing</h3>
+
+  <div class="grid-3">
+    <div class="panel" style="text-align: center;">
+      <div class="panel-title" style="color: #34d399;">Hug contents</div>
+      <p><code>width: fit-content</code></p>
+      <p style="color: #888; font-size: 13px;">Shrinks to fit children</p>
+    </div>
+    <div class="panel" style="text-align: center;">
+      <div class="panel-title" style="color: #60a5fa;">Fill container</div>
+      <p><code>flex: 1</code></p>
+      <p style="color: #888; font-size: 13px;">Grows to fill available space</p>
+    </div>
+    <div class="panel" style="text-align: center;">
+      <div class="panel-title" style="color: #fbbf24;">Fixed</div>
+      <p><code>width: Npx</code></p>
+      <p style="color: #888; font-size: 13px;">Exact pixel dimensions</p>
+    </div>
+  </div>
+
+  <h3>Visual Properties</h3>
+
+  <table>
+    <thead>
+      <tr><th>Figma</th><th>CSS</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Fill (solid color)</td><td><code>background-color: #hex</code></td></tr>
+      <tr><td>Fill (gradient)</td><td><code>background: linear-gradient(...)</code></td></tr>
+      <tr><td>Fill (image)</td><td><code>background-image: url(...)</code></td></tr>
+      <tr><td>Layer opacity</td><td><code>opacity: 0.N</code></td></tr>
+      <tr><td>Stroke</td><td><code>border: Npx solid #color</code></td></tr>
+      <tr><td>Corner radius</td><td><code>border-radius: Npx</code></td></tr>
+      <tr><td>Drop shadow</td><td><code>box-shadow: X Y blur spread color</code></td></tr>
+      <tr><td>Inner shadow</td><td><code>box-shadow: inset X Y blur spread color</code></td></tr>
+      <tr><td>Layer blur</td><td><code>filter: blur(Npx)</code></td></tr>
+      <tr><td>Background blur</td><td><code>backdrop-filter: blur(Npx)</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== DEV MODE ===== -->
+  <h2>Dev Mode (your main tool)</h2>
+
+  <p>Toggle with <kbd>Shift</kbd> + <kbd>D</kbd>. This is where you'll spend your time in Figma.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">What you see</div>
+      <ul>
+        <li><strong>Code tab</strong> — auto-generated CSS for the selected element</li>
+        <li><strong>Spacing values</strong> — hover between elements to see distances</li>
+        <li><strong>Typography</strong> — font family, size, weight, line-height</li>
+        <li><strong>Colors</strong> — hex, RGB, HSL values</li>
+        <li><strong>Component properties</strong> — variant, text, boolean props</li>
+        <li><strong>Export section</strong> — download SVGs, PNGs directly</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">What you do</div>
+      <ul>
+        <li>Click an element → read its CSS in the right panel</li>
+        <li>Hold <kbd>Alt</kbd> + hover → measure distance to other elements</li>
+        <li>Click on a component instance → see its name and props</li>
+        <li>Right-click → <strong>Copy as SVG</strong> for quick icon export</li>
+        <li>Canvas is <strong>read-only</strong> — you can't break anything</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The #1 shortcut:</strong> Select any element, hold <kbd>Alt</kbd>/<kbd>Option</kbd>, then hover over other elements. You'll see the pixel distance between them. This is how you extract spacing values efficiently.
+  </div>
+
+  <!-- ===== COMPONENTS & VARIANTS ===== -->
+  <h2>Components & Variants</h2>
+
+  <p>Figma components map directly to React components. This is not a coincidence — the mental model is the same.</p>
+
+  <div class="mental-model">
+    <div class="mm-box mm-figma">
+      <div class="mm-title">Figma</div>
+      <div class="mm-detail">Component: "Button"</div>
+      <div class="mm-detail">Variant: size = "lg"</div>
+      <div class="mm-detail">Variant: style = "primary"</div>
+      <div class="mm-detail">Text prop: label = "Submit"</div>
+      <div class="mm-detail">Boolean prop: showIcon = true</div>
+      <div class="mm-detail">Instance swap: icon = ArrowRight</div>
+    </div>
+    <div class="mm-arrow">→</div>
+    <div class="mm-box mm-code">
+      <div class="mm-title">React</div>
+      <div class="mm-detail"><code>&lt;Button</code></div>
+      <div class="mm-detail"><code>  size="lg"</code></div>
+      <div class="mm-detail"><code>  variant="primary"</code></div>
+      <div class="mm-detail"><code>  label="Submit"</code></div>
+      <div class="mm-detail"><code>  showIcon={true}</code></div>
+      <div class="mm-detail"><code>  icon={&lt;ArrowRight /&gt;}</code></div>
+      <div class="mm-detail"><code>/&gt;</code></div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Figma Property Type</th><th>What it controls</th><th>React prop analogy</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Variant</strong></td><td>Switches visual variants (size, state, style)</td><td><code>variant="primary"</code>, <code>size="lg"</code></td></tr>
+      <tr><td><strong>Boolean</strong></td><td>Toggle layer visibility (show/hide icon)</td><td><code>showIcon={true}</code></td></tr>
+      <tr><td><strong>Text</strong></td><td>Editable text content</td><td><code>label="Submit"</code></td></tr>
+      <tr><td><strong>Instance Swap</strong></td><td>Swap nested component (which icon)</td><td><code>icon={&lt;ArrowRight /&gt;}</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== DESIGN TOKENS ===== -->
+  <h2>Design Tokens / Variables</h2>
+
+  <p>Figma Variables = CSS custom properties. They're named values that the whole design references instead of raw hex codes.</p>
+
+  <div class="panel">
+    <div class="panel-title">Token hierarchy (same pattern as your code)</div>
+    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="background: #e94560; color: white; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold; min-width: 120px; text-align: center;">Primitive</span>
+        <span style="color: #999;"><code>red-500 = #EF4444</code> &nbsp;|&nbsp; <code>space-4 = 16px</code> — raw values</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="color: #555; font-size: 18px; padding-left: 55px;">↓</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="background: #533483; color: white; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold; min-width: 120px; text-align: center;">Semantic</span>
+        <span style="color: #999;"><code>color/error = {red-500}</code> &nbsp;|&nbsp; <code>spacing/md = {space-4}</code> — purpose-based aliases</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="color: #555; font-size: 18px; padding-left: 55px;">↓</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="background: #0f3460; color: white; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold; min-width: 120px; text-align: center;">Component</span>
+        <span style="color: #999;"><code>button/bg/danger = {color/error}</code> — component-specific tokens</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Modes</strong> enable theming: a variable like <code>color/bg/surface</code> can be <code>#FFFFFF</code> in light mode and <code>#1A1A2E</code> in dark mode. Same variable name, different values per context.
+  </div>
+
+  <!-- ===== EXPORTING ASSETS ===== -->
+  <h2>Exporting Assets</h2>
+
+  <table>
+    <thead>
+      <tr><th>Format</th><th>Use for</th><th>Key details</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>SVG</strong></td><td>Icons, logos, illustrations</td><td>Vector — scales infinitely, lightweight, stylable with CSS</td></tr>
+      <tr><td><strong>PNG</strong></td><td>Raster images, screenshots</td><td>Export at 2x for retina displays</td></tr>
+      <tr><td><strong>JPG</strong></td><td>Photos</td><td>Lossy compression, no transparency</td></tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Quick export methods</div>
+    <ul>
+      <li>Right-click any element → <strong>Copy as SVG</strong> (instant clipboard copy)</li>
+      <li>Right-click → <strong>Copy as PNG</strong></li>
+      <li>Select element → right panel → Export section → choose format and scale → download</li>
+      <li><kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd> → batch export everything with export settings</li>
+    </ul>
+  </div>
+
+  <!-- ===== SHORTCUTS ===== -->
+  <h2>Essential Shortcuts (Mac)</h2>
+
+  <div class="shortcut-grid">
+    <div class="panel">
+      <div class="panel-title">Navigation</div>
+      <ul>
+        <li><span>Pan canvas</span> <kbd>Space</kbd> + drag</li>
+        <li><span>Zoom in/out</span> <kbd>Cmd</kbd> + <kbd>+</kbd> / <kbd>-</kbd></li>
+        <li><span>Zoom to fit</span> <kbd>Shift</kbd> + <kbd>1</kbd></li>
+        <li><span>Zoom to selection</span> <kbd>Shift</kbd> + <kbd>2</kbd></li>
+        <li><span>Toggle Dev Mode</span> <kbd>Shift</kbd> + <kbd>D</kbd></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Inspection</div>
+      <ul>
+        <li><span>Deep select (skip groups)</span> <kbd>Cmd</kbd> + click</li>
+        <li><span>Measure distances</span> <kbd>Alt</kbd> + hover</li>
+        <li><span>Copy as PNG</span> <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd></li>
+        <li><span>Export selected</span> <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd></li>
+        <li><span>Toggle wireframe view</span> <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>3</kbd></li>
+      </ul>
+    </div>
+  </div>
+
+</body>
+</html>
