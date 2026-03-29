@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Requests in TypeScript + React</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>API Requests in TypeScript + React</h1>
+  <p class="subtitle">From raw fetch to TanStack Query + Zod — the modern data fetching stack</p>
+
+  <!-- ===== THE STACK ===== -->
+  <h2>The Modern Stack (2025-2026)</h2>
+
+  <div class="note">
+    <strong>TL;DR:</strong> Use <strong>TanStack Query</strong> for fetching/caching, <strong>Zod</strong> for runtime validation, and plain <strong>fetch</strong> (or ky) as the HTTP client. Don't use useEffect for data fetching. Don't use Redux for server state.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Concern</th><th>Use</th><th>Avoid</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Server state (API data)</td><td><strong>TanStack Query</strong></td><td><code>useEffect</code> + <code>useState</code>, Redux</td></tr>
+      <tr><td>HTTP client</td><td><strong>fetch</strong> (native) or <strong>ky</strong></td><td>axios (unnecessary overhead)</td></tr>
+      <tr><td>Runtime validation</td><td><strong>Zod</strong></td><td>Trusting <code>as Type</code> assertions</td></tr>
+      <tr><td>Client state (UI)</td><td><code>useState</code> or Zustand</td><td>Redux for simple state</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== RAW FETCH ===== -->
+  <h2>Step 1: Raw fetch in TypeScript</h2>
+
+  <p>Let's start with the basics before adding libraries.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python (requests)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> requests
+
+response = requests.<span class="fn">get</span>(<span class="str">"/api/users/1"</span>)
+response.<span class="fn">raise_for_status</span>()  <span class="cm"># throws on 4xx/5xx</span>
+user: dict = response.<span class="fn">json</span>()</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript (fetch)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/users/1"</span>)
+
+<span class="kw">if</span> (!response.ok) {          <span class="cm">// must check manually!</span>
+  <span class="kw">throw new</span> Error(<span class="str">`HTTP </span>${response.status}<span class="str">`</span>)
+}
+
+<span class="kw">const</span> user: <span class="type">User</span> = <span class="kw">await</span> response.<span class="fn">json</span>()</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key difference from Python's requests</div>
+    <ul>
+      <li><code>fetch</code> does <strong>NOT throw on 4xx/5xx</strong> — a 404 is a "successful" HTTP response. You must check <code>response.ok</code> yourself.</li>
+      <li><code>response.json()</code> returns <code>Promise&lt;any&gt;</code> — TypeScript has <strong>no idea</strong> what the API returns. The <code>: User</code> annotation is a hint, not a guarantee.</li>
+      <li>This is the exact problem <strong>Zod</strong> solves (see below).</li>
+    </ul>
+  </div>
+
+  <h3>A typed fetch wrapper</h3>
+
+<pre><code><span class="kw">const</span> <span class="fn">fetchJson</span> = <span class="kw">async</span> &lt;<span class="type">T</span>&gt;(url: <span class="type">string</span>, options?: <span class="type">RequestInit</span>): <span class="type">Promise</span>&lt;<span class="type">T</span>&gt; => {
+  <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(url, options)
+
+  <span class="kw">if</span> (!response.ok) {
+    <span class="kw">throw new</span> Error(<span class="str">`HTTP </span>${response.status}<span class="str">: </span>${response.statusText}<span class="str">`</span>)
+  }
+
+  <span class="kw">return</span> response.<span class="fn">json</span>() <span class="kw">as</span> <span class="type">Promise</span>&lt;<span class="type">T</span>&gt;
+}
+
+<span class="cm">// Usage — T is inferred from the generic</span>
+<span class="kw">const</span> user = <span class="kw">await</span> fetchJson&lt;<span class="type">User</span>&gt;(<span class="str">"/api/users/1"</span>)
+<span class="kw">const</span> posts = <span class="kw">await</span> fetchJson&lt;<span class="type">Post</span>[]&gt;(<span class="str">"/api/posts"</span>)</code></pre>
+
+  <!-- ===== ZOD ===== -->
+  <h2>Step 2: Zod — Runtime Validation</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header py">Python (Pydantic)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+
+<span class="kw">class</span> <span class="type">User</span>(BaseModel):
+    id: <span class="type">int</span>
+    name: <span class="type">str</span>
+    email: <span class="type">str</span>
+
+<span class="cm"># Validates at runtime — throws on bad data</span>
+user = <span class="type">User</span>(**response.<span class="fn">json</span>())</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript (Zod)</div>
+      <div class="comp-body">
+<pre><code><span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">"zod"</span>
+
+<span class="kw">const</span> UserSchema = z.<span class="fn">object</span>({
+  id: z.<span class="fn">number</span>(),
+  name: z.<span class="fn">string</span>(),
+  email: z.<span class="fn">string</span>().<span class="fn">email</span>(),
+})
+
+<span class="cm">// Infer the TS type FROM the schema</span>
+<span class="kw">type</span> <span class="type">User</span> = z.infer&lt;<span class="kw">typeof</span> UserSchema&gt;
+
+<span class="cm">// Validates at runtime — throws on bad data</span>
+<span class="kw">const</span> user = UserSchema.<span class="fn">parse</span>(apiResponse)</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Zod is TypeScript's Pydantic.</strong> You define the schema once, and get both the runtime validator AND the TypeScript type from it. Single source of truth.
+  </div>
+
+  <h3>Safe parsing (no throw)</h3>
+
+<pre><code><span class="cm">// .parse() throws on invalid data</span>
+<span class="cm">// .safeParse() returns a discriminated union instead</span>
+<span class="kw">const</span> result = UserSchema.<span class="fn">safeParse</span>(apiResponse)
+
+<span class="kw">if</span> (result.success) {
+  console.<span class="fn">log</span>(result.data)         <span class="cm">// User type, validated</span>
+} <span class="kw">else</span> {
+  console.<span class="fn">error</span>(result.error.issues) <span class="cm">// array of validation errors</span>
+}</code></pre>
+
+  <h3>Composing schemas (like Pydantic model inheritance)</h3>
+
+<pre><code><span class="cm">// Remove fields</span>
+<span class="kw">const</span> CreateUserSchema = UserSchema.<span class="fn">omit</span>({ id: <span class="kw">true</span> })
+
+<span class="cm">// Make all fields optional</span>
+<span class="kw">const</span> PartialUserSchema = UserSchema.<span class="fn">partial</span>()
+
+<span class="cm">// Pick specific fields</span>
+<span class="kw">const</span> UserNameSchema = UserSchema.<span class="fn">pick</span>({ name: <span class="kw">true</span>, email: <span class="kw">true</span> })
+
+<span class="cm">// Unions, enums, literals</span>
+<span class="kw">const</span> ResponseSchema = z.<span class="fn">discriminatedUnion</span>(<span class="str">"type"</span>, [
+  z.<span class="fn">object</span>({ type: z.<span class="fn">literal</span>(<span class="str">"success"</span>), data: UserSchema }),
+  z.<span class="fn">object</span>({ type: z.<span class="fn">literal</span>(<span class="str">"error"</span>), message: z.<span class="fn">string</span>() }),
+])</code></pre>
+
+  <!-- ===== TANSTACK QUERY ===== -->
+  <h2>Step 3: TanStack Query — Server State Management</h2>
+
+  <p>This is the core library. It handles caching, deduplication, background refresh, retries, loading/error states — all the things you'd otherwise build by hand.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">What it replaces</div>
+      <p style="color: #999;">Without TanStack Query, every component that fetches data needs:</p>
+      <ul>
+        <li><code>useState</code> for data</li>
+        <li><code>useState</code> for loading</li>
+        <li><code>useState</code> for error</li>
+        <li><code>useEffect</code> for the fetch call</li>
+        <li>Manual cleanup / abort controller</li>
+        <li>No caching, no deduplication</li>
+        <li>Race conditions on fast navigation</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Python analogy</div>
+      <p style="color: #999;">Think of TanStack Query as a <strong>smart caching layer</strong> with:</p>
+      <ul>
+        <li>TTLs (<code>staleTime</code>)</li>
+        <li>Automatic invalidation</li>
+        <li>Retry logic</li>
+        <li>Background refresh</li>
+        <li>Garbage collection (<code>gcTime</code>)</li>
+      </ul>
+      <p style="color: #999; margin-top: 8px;">Like Redis + Celery for your API calls, but built into React's component model.</p>
+    </div>
+  </div>
+
+  <h3>Setup</h3>
+
+<pre><code><span class="cm">// main.tsx — wrap your app once</span>
+<span class="kw">import</span> { QueryClient, QueryClientProvider } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+
+<span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="fn">QueryClient</span>({
+  defaultOptions: {
+    queries: {
+      staleTime: <span class="num">2</span> * <span class="num">60</span> * <span class="num">1000</span>,  <span class="cm">// data is "fresh" for 2 minutes</span>
+      gcTime: <span class="num">10</span> * <span class="num">60</span> * <span class="num">1000</span>,    <span class="cm">// unused cache lives 10 minutes</span>
+      retry: <span class="num">3</span>,                    <span class="cm">// retry failed requests 3 times</span>
+    },
+  },
+})
+
+<span class="kw">const</span> <span class="fn">App</span> = () => (
+  &lt;<span class="tag">QueryClientProvider</span> <span class="attr">client</span>={queryClient}&gt;
+    &lt;<span class="tag">YourApp</span> /&gt;
+  &lt;/<span class="tag">QueryClientProvider</span>&gt;
+)</code></pre>
+
+  <h3>useQuery — Reading data</h3>
+
+<pre><code><span class="kw">import</span> { useQuery } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+
+<span class="kw">const</span> <span class="fn">TodoList</span> = () => {
+  <span class="kw">const</span> {
+    data,       <span class="cm">// Todo[] | undefined</span>
+    isPending,  <span class="cm">// true during first load (no cached data yet)</span>
+    isError,    <span class="cm">// true if query failed</span>
+    error,      <span class="cm">// the Error object</span>
+    isFetching, <span class="cm">// true during ANY fetch (including background refetch)</span>
+  } = <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"todos"</span>],     <span class="cm">// unique cache key (array)</span>
+    queryFn: fetchTodos,       <span class="cm">// function that returns a Promise</span>
+  })
+
+  <span class="kw">if</span> (isPending) <span class="kw">return</span> &lt;<span class="tag">div</span>&gt;Loading...&lt;/<span class="tag">div</span>&gt;
+  <span class="kw">if</span> (isError) <span class="kw">return</span> &lt;<span class="tag">div</span>&gt;Error: {error.message}&lt;/<span class="tag">div</span>&gt;
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">ul</span>&gt;
+      {data.<span class="fn">map</span>((todo) => (
+        &lt;<span class="tag">li</span> <span class="attr">key</span>={todo.id}&gt;{todo.title}&lt;/<span class="tag">li</span>&gt;
+      ))}
+    &lt;/<span class="tag">ul</span>&gt;
+  )
+}</code></pre>
+
+  <h3>Query keys — how caching works</h3>
+
+  <div class="panel">
+    <div class="panel-title">Query keys are arrays that identify cached data</div>
+<pre><code><span class="fn">useQuery</span>({ queryKey: [<span class="str">"todos"</span>] })                        <span class="cm">// all todos</span>
+<span class="fn">useQuery</span>({ queryKey: [<span class="str">"todos"</span>, { status: <span class="str">"done"</span> }] })   <span class="cm">// filtered</span>
+<span class="fn">useQuery</span>({ queryKey: [<span class="str">"todos"</span>, todoId] })               <span class="cm">// single todo</span>
+<span class="fn">useQuery</span>({ queryKey: [<span class="str">"users"</span>, userId, <span class="str">"posts"</span>] })    <span class="cm">// user's posts</span></code></pre>
+    <p style="color: #999; margin-top: 10px;">Compared by deep equality. Invalidating <code>["todos"]</code> invalidates ALL queries that start with <code>"todos"</code>.</p>
+  </div>
+
+  <h3>staleTime vs gcTime</h3>
+
+  <table>
+    <thead>
+      <tr><th>Setting</th><th>Default</th><th>What it controls</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>staleTime</code></td>
+        <td><code>0</code> (immediately stale)</td>
+        <td>How long data is "fresh." While fresh, no network request is made — cached data is returned instantly.</td>
+      </tr>
+      <tr>
+        <td><code>gcTime</code></td>
+        <td><code>5 min</code></td>
+        <td>How long <strong>unused</strong> cache (no component subscribed) stays in memory before garbage collection.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">The lifecycle</div>
+    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px; font-size: 14px;">
+      <div style="display: flex; gap: 10px;">
+        <span style="color: #34d399; min-width: 20px; font-weight: bold;">1.</span>
+        <span>Component mounts → <code>useQuery</code> fires → data fetched and cached. Status: <strong style="color: #34d399;">fresh</strong></span>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <span style="color: #fbbf24; min-width: 20px; font-weight: bold;">2.</span>
+        <span>After <code>staleTime</code> passes → status becomes <strong style="color: #fbbf24;">stale</strong></span>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <span style="color: #60a5fa; min-width: 20px; font-weight: bold;">3.</span>
+        <span>Component re-mounts (or window regains focus) → stale data returned <strong>instantly</strong>, background refetch fires</span>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <span style="color: #e94560; min-width: 20px; font-weight: bold;">4.</span>
+        <span>No component subscribed + <code>gcTime</code> passes → cache entry deleted</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>useMutation — Writing data (POST/PUT/DELETE)</h3>
+
+<pre><code><span class="kw">import</span> { useMutation, useQueryClient } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+
+<span class="kw">const</span> <span class="fn">AddTodoButton</span> = () => {
+  <span class="kw">const</span> queryClient = <span class="fn">useQueryClient</span>()
+
+  <span class="kw">const</span> mutation = <span class="fn">useMutation</span>({
+    mutationFn: (newTodo: { title: <span class="type">string</span> }) =>
+      <span class="fn">fetch</span>(<span class="str">"/api/todos"</span>, {
+        method: <span class="str">"POST"</span>,
+        headers: { <span class="str">"Content-Type"</span>: <span class="str">"application/json"</span> },
+        body: JSON.<span class="fn">stringify</span>(newTodo),
+      }).<span class="fn">then</span>((res) => res.<span class="fn">json</span>()),
+
+    onSuccess: () => {
+      <span class="cm">// Invalidate cache → triggers refetch of the todo list</span>
+      queryClient.<span class="fn">invalidateQueries</span>({ queryKey: [<span class="str">"todos"</span>] })
+    },
+  })
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">button</span>
+      <span class="attr">onClick</span>={() => mutation.<span class="fn">mutate</span>({ title: <span class="str">"New task"</span> })}
+      <span class="attr">disabled</span>={mutation.isPending}
+    &gt;
+      {mutation.isPending ? <span class="str">"Adding..."</span> : <span class="str">"Add Todo"</span>}
+    &lt;/<span class="tag">button</span>&gt;
+  )
+}</code></pre>
+
+  <!-- ===== FULL ARCHITECTURE ===== -->
+  <h2>Step 4: Putting It All Together</h2>
+
+  <p>The recommended project structure separates API logic into layers:</p>
+
+  <div class="panel">
+<pre><code><span class="cm">src/</span>
+  <span class="cm">api/</span>
+    <span class="attr">schemas.ts</span>       <span class="cm"># Zod schemas (single source of truth for types)</span>
+    <span class="attr">client.ts</span>        <span class="cm"># configured fetch wrapper</span>
+    <span class="attr">users.ts</span>         <span class="cm"># user API functions</span>
+    <span class="attr">todos.ts</span>         <span class="cm"># todo API functions</span>
+  <span class="cm">hooks/</span>
+    <span class="attr">useUsers.ts</span>      <span class="cm"># TanStack Query hooks (what components import)</span>
+    <span class="attr">useTodos.ts</span>
+  <span class="cm">components/</span>
+    <span class="attr">TodoList.tsx</span>     <span class="cm"># uses hooks — knows nothing about fetch/API</span></code></pre>
+  </div>
+
+  <h3>Layer 1: Schemas (Zod)</h3>
+
+<pre><code><span class="cm">// api/schemas.ts</span>
+<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">"zod"</span>
+
+<span class="kw">export const</span> TodoSchema = z.<span class="fn">object</span>({
+  id: z.<span class="fn">number</span>(),
+  title: z.<span class="fn">string</span>(),
+  completed: z.<span class="fn">boolean</span>(),
+})
+
+<span class="kw">export const</span> TodoListSchema = z.<span class="fn">array</span>(TodoSchema)
+<span class="kw">export type</span> <span class="type">Todo</span> = z.infer&lt;<span class="kw">typeof</span> TodoSchema&gt;</code></pre>
+
+  <h3>Layer 2: API functions (pure, no React)</h3>
+
+<pre><code><span class="cm">// api/todos.ts</span>
+<span class="kw">import</span> { TodoListSchema, TodoSchema, <span class="kw">type</span> <span class="type">Todo</span> } <span class="kw">from</span> <span class="str">"./schemas"</span>
+
+<span class="kw">export const</span> todosApi = {
+  <span class="fn">getAll</span>: <span class="kw">async</span> (): <span class="type">Promise</span>&lt;<span class="type">Todo</span>[]&gt; => {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/todos"</span>)
+    <span class="kw">if</span> (!res.ok) <span class="kw">throw new</span> Error(<span class="str">`HTTP </span>${res.status}<span class="str">`</span>)
+    <span class="kw">return</span> TodoListSchema.<span class="fn">parse</span>(<span class="kw">await</span> res.<span class="fn">json</span>())  <span class="cm">// validated!</span>
+  },
+
+  <span class="fn">create</span>: <span class="kw">async</span> (title: <span class="type">string</span>): <span class="type">Promise</span>&lt;<span class="type">Todo</span>&gt; => {
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"/api/todos"</span>, {
+      method: <span class="str">"POST"</span>,
+      headers: { <span class="str">"Content-Type"</span>: <span class="str">"application/json"</span> },
+      body: JSON.<span class="fn">stringify</span>({ title }),
+    })
+    <span class="kw">if</span> (!res.ok) <span class="kw">throw new</span> Error(<span class="str">`HTTP </span>${res.status}<span class="str">`</span>)
+    <span class="kw">return</span> TodoSchema.<span class="fn">parse</span>(<span class="kw">await</span> res.<span class="fn">json</span>())
+  },
+}</code></pre>
+
+  <h3>Layer 3: React hooks (TanStack Query)</h3>
+
+<pre><code><span class="cm">// hooks/useTodos.ts</span>
+<span class="kw">import</span> { useQuery, useMutation, useQueryClient } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+<span class="kw">import</span> { todosApi } <span class="kw">from</span> <span class="str">"../api/todos"</span>
+
+<span class="kw">export const</span> <span class="fn">useTodos</span> = () =>
+  <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"todos"</span>],
+    queryFn: todosApi.getAll,
+  })
+
+<span class="kw">export const</span> <span class="fn">useCreateTodo</span> = () => {
+  <span class="kw">const</span> queryClient = <span class="fn">useQueryClient</span>()
+  <span class="kw">return</span> <span class="fn">useMutation</span>({
+    mutationFn: todosApi.create,
+    onSuccess: () => {
+      queryClient.<span class="fn">invalidateQueries</span>({ queryKey: [<span class="str">"todos"</span>] })
+    },
+  })
+}</code></pre>
+
+  <h3>Layer 4: Component (clean, no API logic)</h3>
+
+<pre><code><span class="cm">// components/TodoList.tsx</span>
+<span class="kw">import</span> { useTodos, useCreateTodo } <span class="kw">from</span> <span class="str">"../hooks/useTodos"</span>
+
+<span class="kw">export const</span> <span class="fn">TodoList</span> = () => {
+  <span class="kw">const</span> { data: todos, isPending, isError, error } = <span class="fn">useTodos</span>()
+  <span class="kw">const</span> createTodo = <span class="fn">useCreateTodo</span>()
+
+  <span class="kw">if</span> (isPending) <span class="kw">return</span> &lt;<span class="tag">div</span>&gt;Loading...&lt;/<span class="tag">div</span>&gt;
+  <span class="kw">if</span> (isError) <span class="kw">return</span> &lt;<span class="tag">div</span>&gt;Error: {error.message}&lt;/<span class="tag">div</span>&gt;
+
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span>&gt;
+      &lt;<span class="tag">ul</span>&gt;
+        {todos.<span class="fn">map</span>((todo) => (
+          &lt;<span class="tag">li</span> <span class="attr">key</span>={todo.id}&gt;{todo.title}&lt;/<span class="tag">li</span>&gt;
+        ))}
+      &lt;/<span class="tag">ul</span>&gt;
+      &lt;<span class="tag">button</span>
+        <span class="attr">onClick</span>={() => createTodo.<span class="fn">mutate</span>(<span class="str">"New task"</span>)}
+        <span class="attr">disabled</span>={createTodo.isPending}
+      &gt;
+        {createTodo.isPending ? <span class="str">"Adding..."</span> : <span class="str">"Add Todo"</span>}
+      &lt;/<span class="tag">button</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}</code></pre>
+
+  <!-- ===== WHAT NOT TO DO ===== -->
+  <h2>What NOT to Do (Outdated Patterns)</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header" style="background: #e9456033; color: #e94560;">DON'T — useEffect for fetching</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// This was how everyone did it in 2019-2022</span>
+<span class="cm">// It's now considered an anti-pattern</span>
+
+<span class="kw">const</span> [data, setData] = <span class="fn">useState</span>(<span class="kw">null</span>)
+<span class="kw">const</span> [loading, setLoading] = <span class="fn">useState</span>(<span class="kw">true</span>)
+<span class="kw">const</span> [error, setError] = <span class="fn">useState</span>(<span class="kw">null</span>)
+
+<span class="fn">useEffect</span>(() => {
+  <span class="fn">fetch</span>(<span class="str">"/api/users"</span>)
+    .<span class="fn">then</span>((res) => res.<span class="fn">json</span>())
+    .<span class="fn">then</span>(setData)
+    .<span class="fn">catch</span>(setError)
+    .<span class="fn">finally</span>(() => <span class="fn">setLoading</span>(<span class="kw">false</span>))
+}, [])</code></pre>
+        <p style="color: #e94560; margin-top: 10px; font-size: 13px;">No caching, no dedup, race conditions, manual boilerplate in every component, memory leaks</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header" style="background: #34d39933; color: #34d399;">DO — TanStack Query</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Handles everything automatically</span>
+
+<span class="kw">const</span> { data, isPending, isError, error } =
+  <span class="fn">useQuery</span>({
+    queryKey: [<span class="str">"users"</span>],
+    queryFn: fetchUsers,
+  })</code></pre>
+        <p style="color: #34d399; margin-top: 10px; font-size: 13px;">Caching, deduplication, background refresh, retries, loading/error states — all automatic</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Other outdated patterns</div>
+    <ul>
+      <li><strong>Redux for server state</strong> — Redux is for client state (UI). TanStack Query handles API data.</li>
+      <li><strong>axios as default choice</strong> — Native <code>fetch</code> is sufficient. axios adds bundle weight for features TanStack Query already handles (retries, cancellation).</li>
+      <li><strong><code>as Type</code> assertions on API data</strong> — Use Zod to validate. Type assertions are lies to the compiler.</li>
+    </ul>
+  </div>
+
+  <!-- ===== SWR COMPARISON ===== -->
+  <h2>Appendix: TanStack Query vs SWR</h2>
+
+  <p>SWR (by Vercel) is the main alternative. Here's when to pick each:</p>
+
+  <table>
+    <thead>
+      <tr><th></th><th>TanStack Query</th><th>SWR</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Bundle size</td><td>~16KB</td><td>~5KB</td></tr>
+      <tr><td>DevTools</td><td>Official, built-in</td><td>Community only</td></tr>
+      <tr><td>Mutations</td><td>Rich (<code>useMutation</code> with callbacks)</td><td>Basic</td></tr>
+      <tr><td>Cache invalidation</td><td>Fine-grained key matching</td><td>Manual <code>mutate()</code></td></tr>
+      <tr><td>Infinite queries</td><td>Robust <code>useInfiniteQuery</code></td><td>Simpler</td></tr>
+      <tr><td>Learning curve</td><td>Moderate</td><td>Low</td></tr>
+      <tr><td><strong>Use when</strong></td><td><strong>Most projects</strong> (industry standard)</td><td><strong>Simple Next.js apps</strong> with minimal data needs</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>
