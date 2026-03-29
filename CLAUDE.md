@@ -30,7 +30,7 @@ Organized **by topic**, with numbered folders for progression:
 ```
 
 Each topic folder should contain:
-- A `README.md` with concept notes and key takeaways
+- A styled **HTML file** for concept notes and explanations (dark theme, visual diagrams, color-coded panels, side-by-side comparisons) — the user opens these in the browser. Do NOT use markdown READMEs for teaching content.
 - Practice code files
 - Exercises when applicable
 

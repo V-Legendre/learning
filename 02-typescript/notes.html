@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>02 — TypeScript</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>02 — TypeScript</h1>
+  <p class="subtitle">JavaScript + static types. Write .ts → compiler checks types → outputs .js. The browser never sees TypeScript.</p>
+
+  <!-- ===== VARIABLES & PRIMITIVES ===== -->
+  <h2>Variables & Primitives</h2>
+
+  <table>
+    <thead>
+      <tr><th>TypeScript</th><th>Python equivalent</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>string</code></td><td><code>str</code></td><td></td></tr>
+      <tr><td><code>number</code></td><td><code>int</code> + <code>float</code> combined</td><td>JS has no int/float distinction</td></tr>
+      <tr><td><code>boolean</code></td><td><code>bool</code></td><td></td></tr>
+      <tr><td><code>null</code></td><td><code>None</code></td><td>Intentional "no value"</td></tr>
+      <tr><td><code>undefined</code></td><td>No equivalent</td><td>Declared but no value assigned</td></tr>
+      <tr><td><code>any</code></td><td>No type hint</td><td>Avoid — defeats the purpose of TS</td></tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Variable declarations</div>
+    <ul>
+      <li><code>const</code> = can't reassign (enforced). Use by default.</li>
+      <li><code>let</code> = can reassign. Use when mutation is needed.</li>
+      <li><code>var</code> = never use (legacy, broken scoping rules).</li>
+    </ul>
+    <p style="margin-top: 10px; color: #999;">TypeScript <strong>infers types</strong> — annotate when it can't figure it out or for function signatures.</p>
+  </div>
+
+  <pre><code><span class="kw">const</span> name: <span class="type">string</span> = <span class="str">"Alice"</span>       <span class="cm">// explicit annotation</span>
+<span class="kw">const</span> city = <span class="str">"Paris"</span>                  <span class="cm">// inferred as string — no annotation needed</span>
+<span class="kw">let</span> count = <span class="num">0</span>                        <span class="cm">// inferred as number</span></code></pre>
+
+  <!-- ===== FUNCTIONS ===== -->
+  <h2>Functions</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Arrow function — the standard</span>
+<span class="kw">const</span> <span class="fn">greet</span> = (
+  name: <span class="type">string</span>,
+  age: <span class="type">number</span>
+): <span class="type">string</span> => {
+  <span class="kw">return</span> <span class="str">`Hello ${name}, you are ${age}`</span>
+}
+
+<span class="cm">// Optional param (note the ?)</span>
+<span class="kw">const</span> <span class="fn">format</span> = (
+  first: <span class="type">string</span>,
+  last<span class="kw">?</span>: <span class="type">string</span>
+): <span class="type">string</span> => {
+  <span class="kw">return</span> last ? <span class="str">`${first} ${last}`</span> : first
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python equivalent</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Regular function</span>
+<span class="kw">def</span> <span class="fn">greet</span>(
+    name: <span class="type">str</span>,
+    age: <span class="type">int</span>
+) -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">f"Hello {name}, you are {age}"</span>
+
+
+<span class="cm"># Optional param</span>
+<span class="kw">def</span> <span class="fn">format</span>(
+    first: <span class="type">str</span>,
+    last: <span class="type">str</span> | <span class="type">None</span> = <span class="kw">None</span>
+) -> <span class="type">str</span>:
+    <span class="kw">return</span> <span class="str">f"{first} {last}"</span> <span class="kw">if</span> last <span class="kw">else</span> first</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key differences from Python</div>
+    <ul>
+      <li>Backtick template literals: <code>`Hello ${name}`</code> = Python f-strings</li>
+      <li><code>?</code> marks optional params — no default value needed (becomes <code>undefined</code>)</li>
+      <li>No keyword arguments — use objects instead: <code>fn({ name: "Alice", age: 30 })</code></li>
+      <li>Arrow <code>=&gt;</code> syntax is the standard (like Python lambdas, but can be multi-line)</li>
+    </ul>
+  </div>
+
+  <!-- ===== INTERFACES & TYPES ===== -->
+  <h2>Interfaces & Types</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript — interface</div>
+      <div class="comp-body">
+<pre><code><span class="kw">interface</span> <span class="type">User</span> {
+  name: <span class="type">string</span>
+  age: <span class="type">number</span>
+  email<span class="kw">?</span>: <span class="type">string</span>  <span class="cm">// optional</span>
+}</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python — TypedDict</div>
+      <div class="comp-body">
+<pre><code><span class="kw">class</span> <span class="type">User</span>(TypedDict):
+    name: <span class="type">str</span>
+    age: <span class="type">int</span>
+    email: NotRequired[<span class="type">str</span>]</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <pre><code><span class="cm">// Type alias for unions — like Literal[...] in Python</span>
+<span class="kw">type</span> <span class="type">Status</span> = <span class="str">"active"</span> | <span class="str">"inactive"</span> | <span class="str">"pending"</span></code></pre>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">interface</div>
+      <ul>
+        <li>For object shapes</li>
+        <li>Can be extended: <code>interface Admin extends User</code></li>
+        <li>Use for most data structures</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">type</div>
+      <ul>
+        <li>For unions, aliases, complex types</li>
+        <li>More flexible but can't be extended</li>
+        <li>Use for union types, utility types</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Structural typing:</strong> TypeScript cares about <em>shape</em>, not the type name. If an object has all the right fields, it matches the type — even without explicitly declaring it. Python's protocols work similarly.
+  </div>
+
+  <!-- ===== ARRAYS ===== -->
+  <h2>Arrays</h2>
+
+  <pre><code><span class="kw">const</span> names: <span class="type">string</span>[] = [<span class="str">"Alice"</span>, <span class="str">"Bob"</span>]
+<span class="kw">const</span> users: <span class="type">User</span>[] = [alice, bob]</code></pre>
+
+  <h3>Array methods → Python equivalents</h3>
+
+  <div class="mapping">
+    <div><code>.map(fn)</code></div>
+    <div class="arr">→</div>
+    <div><code>[fn(x) for x in list]</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>.filter(fn)</code></div>
+    <div class="arr">→</div>
+    <div><code>[x for x in list if fn(x)]</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>.reduce(fn, init)</code></div>
+    <div class="arr">→</div>
+    <div><code>functools.reduce(fn, list, init)</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>.find(fn)</code></div>
+    <div class="arr">→</div>
+    <div><code>next((x for x in list if fn(x)), None)</code></div>
+  </div>
+
+  <pre><code><span class="cm">// Array methods are chained (like Python list comprehensions but different syntax)</span>
+<span class="kw">const</span> upperNames = names.<span class="fn">map</span>((n) => n.<span class="fn">toUpperCase</span>())
+<span class="kw">const</span> adults = users.<span class="fn">filter</span>((u) => u.age >= <span class="num">30</span>)
+<span class="kw">const</span> totalAge = users.<span class="fn">reduce</span>((sum, u) => sum + u.age, <span class="num">0</span>)</code></pre>
+
+  <!-- ===== UNION TYPES ===== -->
+  <h2>Union Types & Narrowing</h2>
+
+  <pre><code><span class="kw">let</span> value: <span class="type">string</span> | <span class="type">number</span> = <span class="str">"hello"</span>
+
+<span class="cm">// Narrowing — TS tracks which type it is after a check</span>
+<span class="kw">if</span> (<span class="kw">typeof</span> value === <span class="str">"string"</span>) {
+  value.<span class="fn">toUpperCase</span>()  <span class="cm">// TS knows it's string here</span>
+}</code></pre>
+
+  <div class="note">
+    <strong>Narrowing</strong> is TypeScript's killer feature vs Python's type system. The compiler <em>tracks</em> which branch you're in and restricts the type automatically. No casting needed.
+  </div>
+
+  <!-- ===== GENERICS ===== -->
+  <h2>Generics</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ts">TypeScript</div>
+      <div class="comp-body">
+<pre><code><span class="kw">type</span> <span class="type">ApiResponse</span>&lt;<span class="type">T</span>&gt; =
+  | { success: <span class="kw">true</span>; data: <span class="type">T</span> }
+  | { success: <span class="kw">false</span>; error: <span class="type">string</span> }</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header py">Python</div>
+      <div class="comp-body">
+<pre><code><span class="kw">from</span> typing <span class="kw">import</span> Generic, TypeVar
+T = TypeVar(<span class="str">"T"</span>)
+
+<span class="kw">class</span> <span class="type">ApiResponse</span>(Generic[T]):
+    success: <span class="type">bool</span>
+    data: T | <span class="kw">None</span>
+    error: <span class="type">str</span> | <span class="kw">None</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <p>Parameterize types for reuse. You'll see this everywhere in React: <code>useState&lt;User&gt;()</code>, <code>Array&lt;string&gt;</code>, etc.</p>
+
+  <!-- ===== RUNNING TS ===== -->
+  <h2>Running TypeScript</h2>
+
+  <div class="panel">
+    <pre><code>pnpm dlx tsx basics.ts</code></pre>
+    <p style="color: #999; margin-top: 8px;"><code>tsx</code> compiles and runs in one step — no separate build needed for development.</p>
+  </div>
+
+</body>
+</html>

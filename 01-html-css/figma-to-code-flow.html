@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Figma → Code Workflow</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    /* Page-specific: panel list styling with arrow markers */
+    .figma-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+    .figma-panel .panel ul { list-style: none; padding: 0; }
+    .figma-panel .panel li { padding: 5px 0; color: #bbb; font-size: 14px; }
+    .figma-panel .panel li::before { content: "→ "; color: #e94560; }
+  </style>
+</head>
+<body>
+
+  <h1>Figma → Code: The Real Workflow</h1>
+  <p class="subtitle">How designs become React components in production teams</p>
+
+  <!-- ===== FLOW DIAGRAM ===== -->
+  <h2>The Pipeline</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">🎨</div>
+      <div class="label">Design in Figma</div>
+      <div class="desc">Screens, components, design tokens (colors, spacing, fonts)</div>
+      <div class="who designer">Designer</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">💬</div>
+      <div class="label">Handoff / Review</div>
+      <div class="desc">Developer inspects the design, asks questions, clarifies edge cases</div>
+      <div class="who both">Both</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">🔍</div>
+      <div class="label">Inspect in Figma</div>
+      <div class="desc">Extract colors, sizes, spacing, fonts, layout structure</div>
+      <div class="who developer">Developer</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">⌨️</div>
+      <div class="label">Build Components</div>
+      <div class="desc">Translate the visual design into .tsx + Tailwind / CSS</div>
+      <div class="who developer">Developer</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">👀</div>
+      <div class="label">Visual Review</div>
+      <div class="desc">Designer reviews in browser, flags differences</div>
+      <div class="who both">Both</div>
+    </div>
+  </div>
+
+  <!-- ===== WHAT FIGMA GIVES YOU ===== -->
+  <h2>What You Extract from Figma</h2>
+  <p style="color: #999; margin-bottom: 15px;">When you click on any element in Figma's inspect panel, you see:</p>
+
+  <div class="figma-panel">
+    <div class="panel">
+      <div class="panel-title">Visual Properties</div>
+      <ul>
+        <li>Exact colors (hex, RGB, or design tokens)</li>
+        <li>Font family, size, weight, line-height</li>
+        <li>Border radius, shadows, opacity</li>
+        <li>Spacing (padding and gaps between elements)</li>
+        <li>Widths and heights (fixed or relative)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Layout Information</div>
+      <ul>
+        <li>Auto Layout = Flexbox (direction, gap, alignment)</li>
+        <li>Constraints (how elements resize)</li>
+        <li>Component hierarchy (what nests inside what)</li>
+        <li>States (hover, active, disabled variants)</li>
+        <li>Responsive behavior hints</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Assets You Export</div>
+      <ul>
+        <li>Icons (as SVG — vector, scales perfectly)</li>
+        <li>Images / illustrations</li>
+        <li>Logos in various sizes</li>
+        <li>Nothing else — you rebuild the rest in code</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">What You DON'T Get</div>
+      <ul>
+        <li>Working code (Figma's code tab is mostly useless)</li>
+        <li>Responsive behavior (you decide how it adapts)</li>
+        <li>Animations / transitions (you implement these)</li>
+        <li>Real data / API integration</li>
+        <li>Interactive logic (what happens on click, etc.)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== KEY INSIGHT: FIGMA AUTO-LAYOUT = FLEXBOX ===== -->
+  <h2>The Key Mapping: Figma → CSS</h2>
+
+  <div class="note">
+    <strong>Figma's "Auto Layout" is literally Flexbox.</strong> When a designer sets up Auto Layout in Figma
+    with direction, gap, padding, and alignment — they're describing a flex container. Your job is to
+    recognize this and translate it.
+  </div>
+
+  <div class="mental-model">
+    <div class="mm-box mm-figma">
+      <div class="mm-title">Figma Concept</div>
+      <div class="mm-detail">Auto Layout → direction</div>
+      <div class="mm-detail">Auto Layout → gap</div>
+      <div class="mm-detail">Auto Layout → padding</div>
+      <div class="mm-detail">Auto Layout → alignment</div>
+      <div class="mm-detail">Fill container</div>
+      <div class="mm-detail">Fixed width</div>
+      <div class="mm-detail">Hug contents</div>
+    </div>
+    <div class="mm-arrow">→</div>
+    <div class="mm-box mm-code">
+      <div class="mm-title">CSS / Tailwind</div>
+      <div class="mm-detail">flex-direction: row | column</div>
+      <div class="mm-detail">gap: 12px</div>
+      <div class="mm-detail">padding: 16px</div>
+      <div class="mm-detail">justify-content / align-items</div>
+      <div class="mm-detail">flex: 1 (or width: 100%)</div>
+      <div class="mm-detail">width: 250px</div>
+      <div class="mm-detail">width: fit-content</div>
+    </div>
+  </div>
+
+  <!-- ===== EXAMPLE: INSPECT → CODE ===== -->
+  <h2>Example: Figma Inspect → React Code</h2>
+  <p style="color: #999; margin-bottom: 15px;">Imagine clicking a card component in Figma. The inspect panel shows:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header figma">Figma Inspect Panel</div>
+      <div class="comp-body">
+        <div class="inspect-row">
+          <span class="inspect-label">Auto Layout</span>
+          <span class="inspect-value">Vertical, gap: 12</span>
+        </div>
+        <div class="inspect-row">
+          <span class="inspect-label">Padding</span>
+          <span class="inspect-value">16px all sides</span>
+        </div>
+        <div class="inspect-row">
+          <span class="inspect-label">Width</span>
+          <span class="inspect-value">320px</span>
+        </div>
+        <div class="inspect-row">
+          <span class="inspect-label">Border Radius</span>
+          <span class="inspect-value">12px</span>
+        </div>
+        <div class="inspect-row">
+          <span class="inspect-label">Fill</span>
+          <span class="inspect-value"><span class="color-swatch" style="background:#1e293b"></span>#1E293B</span>
+        </div>
+        <div class="inspect-row">
+          <span class="inspect-label">Shadow</span>
+          <span class="inspect-value">0 4 6 rgba(0,0,0,0.1)</span>
+        </div>
+        <div class="inspect-row" style="border: none;">
+          <span class="inspect-label">Title text</span>
+          <span class="inspect-value">Inter, 18px, Semi Bold</span>
+        </div>
+        <div class="inspect-row" style="border: none;">
+          <span class="inspect-label">Body text</span>
+          <span class="inspect-value">Inter, 14px, Regular, <span class="color-swatch" style="background:#94a3b8"></span>#94A3B8</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">React + Tailwind Code</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// What you write based on that inspect</span>
+
+<span class="kw">interface</span> CardProps {
+  title: <span class="kw">string</span>
+  description: <span class="kw">string</span>
+}
+
+<span class="kw">export const</span> <span class="fn">Card</span> = ({ title, description }: CardProps) => {
+  <span class="kw">return</span> (
+    &lt;<span class="tag">div</span> <span class="attr">className</span>=<span class="val">"
+      flex flex-col      </span><span class="cm">{/* Auto Layout: vertical */}</span><span class="val">
+      gap-3              </span><span class="cm">{/* gap: 12px */}</span><span class="val">
+      p-4                </span><span class="cm">{/* padding: 16px */}</span><span class="val">
+      w-80               </span><span class="cm">{/* width: 320px */}</span><span class="val">
+      rounded-xl         </span><span class="cm">{/* border-radius: 12px */}</span><span class="val">
+      bg-slate-800       </span><span class="cm">{/* #1E293B */}</span><span class="val">
+      shadow-md          </span><span class="cm">{/* the shadow */}</span>
+    "&gt;
+      &lt;<span class="tag">h2</span> <span class="attr">className</span>=<span class="val">"text-lg font-semibold"</span>&gt;
+        {title}
+      &lt;/<span class="tag">h2</span>&gt;
+      &lt;<span class="tag">p</span> <span class="attr">className</span>=<span class="val">"text-sm text-slate-400"</span>&gt;
+        {description}
+      &lt;/<span class="tag">p</span>&gt;
+    &lt;/<span class="tag">div</span>&gt;
+  )
+}
+</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== THE REALITY ===== -->
+  <h2>The Reality: It's a Translation Job</h2>
+
+  <div class="note">
+    <strong>You're not copying — you're translating.</strong> Figma gives you the visual spec. Your job is to
+    decompose it into reusable components, pick the right layout approach (flex/grid), use your design system's
+    tokens (not raw hex values), handle states the designer didn't show (loading, empty, error),
+    and make it responsive across screen sizes.
+  </div>
+
+  <div style="margin: 25px 0;">
+    <h3>Typical process for a new screen:</h3>
+    <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="background: #e94560; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: bold;">1</span>
+        <span><strong style="color: #fff;">Study the design</strong> — understand the layout grid, repeating patterns, component hierarchy</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="background: #e94560; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: bold;">2</span>
+        <span><strong style="color: #fff;">Identify components</strong> — "this card repeats, that's a component. This header is shared across pages."</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="background: #e94560; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: bold;">3</span>
+        <span><strong style="color: #fff;">Build bottom-up</strong> — start with the smallest components (Button, Badge, Avatar), compose them into bigger ones (Card, Navbar, Sidebar)</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="background: #e94560; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: bold;">4</span>
+        <span><strong style="color: #fff;">Assemble the page</strong> — use Grid for page layout, Flexbox inside components</span>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="background: #e94560; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: bold;">5</span>
+        <span><strong style="color: #fff;">Compare & iterate</strong> — put Figma and browser side by side, tweak until they match</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>AI-assisted workflow (what's changing)</h3>
+  <div class="note">
+    <strong>Tools like Figma MCP + Claude can now read designs directly</strong> and generate initial component code.
+    This doesn't eliminate the developer — you still need to integrate with real data, handle edge cases,
+    ensure accessibility, and make architectural decisions. But the "inspect values and type CSS" step
+    is increasingly automated.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>01 — HTML & CSS Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>01 — HTML & CSS Fundamentals</h1>
+  <p class="subtitle">Structure, styling, and how the browser puts it all together</p>
+
+  <!-- ===== HOW THE WEB WORKS ===== -->
+  <h2>How the Web Works (frontend perspective)</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Browser requests URL</div>
+      <div class="desc">HTTP GET → server</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Gets HTML back</div>
+      <div class="desc">Structure — what's on the page</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Fetches CSS</div>
+      <div class="desc">Styling — how it looks</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Fetches JS</div>
+      <div class="desc">Behavior — what it does</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Renders page</div>
+      <div class="desc">DOM + CSSOM → pixels</div>
+    </div>
+  </div>
+
+  <!-- ===== HTML ===== -->
+  <h2>HTML: It's Just a Tree</h2>
+
+  <p>HTML is a tree of <strong>elements</strong> (nodes). If you know XML or YAML, you already get the mental model.</p>
+
+  <pre><code><span class="tag">&lt;html&gt;</span>
+  <span class="tag">&lt;head&gt;</span>
+    <span class="tag">&lt;title&gt;</span>My Page<span class="tag">&lt;/title&gt;</span>
+  <span class="tag">&lt;/head&gt;</span>
+  <span class="tag">&lt;body&gt;</span>
+    <span class="tag">&lt;h1&gt;</span>Hello<span class="tag">&lt;/h1&gt;</span>
+    <span class="tag">&lt;p&gt;</span>A paragraph with <span class="tag">&lt;a</span> <span class="attr">href</span>=<span class="val">"/about"</span><span class="tag">&gt;</span>a link<span class="tag">&lt;/a&gt;</span><span class="tag">&lt;/p&gt;</span>
+    <span class="tag">&lt;ul&gt;</span>
+      <span class="tag">&lt;li&gt;</span>Item 1<span class="tag">&lt;/li&gt;</span>
+      <span class="tag">&lt;li&gt;</span>Item 2<span class="tag">&lt;/li&gt;</span>
+    <span class="tag">&lt;/ul&gt;</span>
+  <span class="tag">&lt;/body&gt;</span>
+<span class="tag">&lt;/html&gt;</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Key Concepts</div>
+    <ul>
+      <li><strong>Elements</strong> have an opening tag <code>&lt;p&gt;</code>, content, and a closing tag <code>&lt;/p&gt;</code></li>
+      <li>Elements can <strong>nest</strong> (tree structure) — this tree is called the <strong>DOM</strong> (Document Object Model)</li>
+      <li><strong>Attributes</strong> are key-value pairs on the opening tag: <code>&lt;a href="/about"&gt;</code> — like kwargs in Python</li>
+      <li><code>&lt;head&gt;</code> = metadata (title, stylesheets, scripts). Not visible on page.</li>
+      <li><code>&lt;body&gt;</code> = everything the user sees</li>
+    </ul>
+  </div>
+
+  <!-- ===== COMMON ELEMENTS ===== -->
+  <h2>The Most Common HTML Elements</h2>
+
+  <table>
+    <thead>
+      <tr><th>Element</th><th>Purpose</th><th>Python analogy</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;div&gt;</code></td><td>Generic container/box</td><td>Like a plain <code>dict</code> — groups things</td></tr>
+      <tr><td><code>&lt;span&gt;</code></td><td>Inline container</td><td>Like wrapping text in a helper</td></tr>
+      <tr><td><code>&lt;h1&gt;</code>–<code>&lt;h6&gt;</code></td><td>Headings</td><td>—</td></tr>
+      <tr><td><code>&lt;p&gt;</code></td><td>Paragraph</td><td>—</td></tr>
+      <tr><td><code>&lt;a href="..."&gt;</code></td><td>Link</td><td>—</td></tr>
+      <tr><td><code>&lt;button&gt;</code></td><td>Clickable button</td><td>—</td></tr>
+      <tr><td><code>&lt;input&gt;</code></td><td>Text field, checkbox, etc.</td><td>Like <code>input()</code> in Python</td></tr>
+      <tr><td><code>&lt;img src="..."&gt;</code></td><td>Image (self-closing)</td><td>—</td></tr>
+      <tr><td><code>&lt;ul&gt;/&lt;ol&gt;</code> + <code>&lt;li&gt;</code></td><td>Lists (unordered/ordered)</td><td>Like rendering a <code>list</code></td></tr>
+      <tr><td><code>&lt;form&gt;</code></td><td>Groups inputs for submission</td><td>Like a request payload builder</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SEMANTIC ===== -->
+  <h2>Semantic vs Generic</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Semantic elements</div>
+      <p><code>&lt;header&gt;</code>, <code>&lt;footer&gt;</code>, <code>&lt;nav&gt;</code>, <code>&lt;main&gt;</code>, <code>&lt;section&gt;</code>, <code>&lt;article&gt;</code></p>
+      <p style="color: #999; margin-top: 8px;">Work exactly like <code>&lt;div&gt;</code> visually, but tell the browser (and screen readers) what the content <em>means</em>.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Python analogy</div>
+      <p>Like using descriptive variable names vs <code>x</code>, <code>y</code>, <code>z</code>.</p>
+      <p style="color: #999; margin-top: 8px;">Use semantic elements whenever possible — it's better for accessibility and SEO.</p>
+    </div>
+  </div>
+
+  <!-- ===== CSS INTRO ===== -->
+  <h2>CSS: Styling the Tree</h2>
+
+  <p>CSS works by <strong>selecting</strong> HTML elements and applying <strong>properties</strong> to them. It's a declarative rule engine: "for all elements matching X, apply styles Y."</p>
+
+  <h3>Three Ways to Apply CSS</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">1. External file ✓</div>
+      <pre><code><span class="tag">&lt;link</span> <span class="attr">rel</span>=<span class="val">"stylesheet"</span>
+      <span class="attr">href</span>=<span class="val">"styles.css"</span><span class="tag">&gt;</span></code></pre>
+      <p style="color:#999; font-size:13px;">Preferred — separation of concerns</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #fbbf24;">2. &lt;style&gt; tag ~</div>
+      <pre><code><span class="tag">&lt;style&gt;</span>
+  <span class="prop">p</span> { <span class="attr">color</span>: <span class="val">red</span>; }
+<span class="tag">&lt;/style&gt;</span></code></pre>
+      <p style="color:#999; font-size:13px;">Fine for learning and small demos</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #e94560;">3. Inline ✗</div>
+      <pre><code><span class="tag">&lt;p</span> <span class="attr">style</span>=<span class="val">"color: red;"</span><span class="tag">&gt;</span></code></pre>
+      <p style="color:#999; font-size:13px;">Avoid — mixes structure and style</p>
+    </div>
+  </div>
+
+  <h3>CSS Syntax</h3>
+  <pre><code><span class="prop">selector</span> {
+  <span class="attr">property</span>: <span class="val">value</span>;
+  <span class="attr">property</span>: <span class="val">value</span>;
+}</code></pre>
+
+  <!-- ===== SELECTORS ===== -->
+  <h3>Selectors — How You Target Elements</h3>
+
+  <table>
+    <thead>
+      <tr><th>Selector</th><th>Syntax</th><th>What it matches</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Element</td><td><code>p</code></td><td>All <code>&lt;p&gt;</code> tags</td></tr>
+      <tr><td>Class</td><td><code>.card</code></td><td>All elements with <code>class="card"</code></td></tr>
+      <tr><td>ID</td><td><code>#header</code></td><td>The one element with <code>id="header"</code></td></tr>
+      <tr><td>Descendant</td><td><code>nav a</code></td><td>All <code>&lt;a&gt;</code> inside a <code>&lt;nav&gt;</code></td></tr>
+      <tr><td>Direct child</td><td><code>nav &gt; a</code></td><td><code>&lt;a&gt;</code> directly inside <code>&lt;nav&gt;</code></td></tr>
+      <tr><td>Multiple</td><td><code>h1, h2, h3</code></td><td>All three heading types</td></tr>
+      <tr><td>Pseudo-class</td><td><code>a:hover</code></td><td><code>&lt;a&gt;</code> when mouse is over it</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Classes vs IDs:</strong> classes are reusable (like tags), IDs are unique (like primary keys). In practice, almost always use classes.
+  </div>
+
+  <!-- ===== BOX MODEL ===== -->
+  <h3>The Box Model</h3>
+
+  <p>Every element is a <strong>box</strong> with 4 layers (inside out):</p>
+
+  <div class="box-model">
+    <div class="box-layer box-margin">
+      margin
+      <div class="box-layer box-border" style="margin-left: 15px;">
+        border
+        <div class="box-layer box-padding">
+          padding
+          <div class="box-layer box-content">
+            content
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <ul>
+        <li><strong>content</strong> — the text/image itself</li>
+        <li><strong>padding</strong> — space inside the box (between content and border)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <ul>
+        <li><strong>border</strong> — the box edge</li>
+        <li><strong>margin</strong> — space outside the box (pushes other elements away)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Always use <code>box-sizing: border-box</code></strong> so that <code>width</code> includes padding + border. Without it, a 200px-wide box with 20px padding becomes 240px total — confusing.
+  </div>
+
+  <!-- ===== FLEXBOX SUMMARY ===== -->
+  <h3>Layout: Flexbox (quick reference)</h3>
+
+  <p>Flexbox works on a <strong>parent-child</strong> relationship. The parent controls how its children are arranged.</p>
+
+  <pre><code><span class="prop">.container</span> {
+  <span class="attr">display</span>: <span class="val">flex</span>;           <span class="cm">/* activate flexbox on children */</span>
+  <span class="attr">flex-direction</span>: <span class="val">row</span>;     <span class="cm">/* row (horizontal) or column (vertical) */</span>
+  <span class="attr">justify-content</span>: <span class="val">center</span>; <span class="cm">/* alignment along main axis */</span>
+  <span class="attr">align-items</span>: <span class="val">center</span>;     <span class="cm">/* alignment along cross axis */</span>
+  <span class="attr">gap</span>: <span class="val">16px</span>;               <span class="cm">/* space between children */</span>
+}</code></pre>
+
+  <p style="color: #999;">See <a href="flexbox.html" style="color: #82aaff;">flexbox.html</a> for interactive examples.</p>
+
+  <!-- ===== UNITS ===== -->
+  <h3>Units</h3>
+
+  <table>
+    <thead>
+      <tr><th>Unit</th><th>Meaning</th><th>When to use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>px</code></td><td>Absolute pixels</td><td>Borders, small details</td></tr>
+      <tr><td><code>rem</code></td><td>Relative to root font size (usually 16px). <code>2rem</code> = 32px</td><td>Font sizes, spacing</td></tr>
+      <tr><td><code>%</code></td><td>Relative to parent element</td><td>Fluid widths</td></tr>
+      <tr><td><code>vh</code> / <code>vw</code></td><td>Viewport height / width. <code>100vh</code> = full screen</td><td>Full-page layouts</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

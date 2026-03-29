@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flexbox Practice</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    /* Page-specific: override base body for demo background */
+    body { background: #1a1a2e; padding: 20px; }
+    p.note { color: #999; margin-bottom: 10px; font-size: 14px; }
+
+    /* Demo flex containers and items */
+    .container {
+      display: flex;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 20px;
+    }
+    .item {
+      background: #e94560;
+      color: white;
+      padding: 15px 25px;
+      border-radius: 6px;
+      font-weight: bold;
+      text-align: center;
+    }
+
+    /* justify-content demos */
+    .jc-center  { justify-content: center; }
+    .jc-between { justify-content: space-between; }
+    .jc-evenly  { justify-content: space-evenly; }
+
+    /* align-items demo */
+    .align-demo { height: 150px; align-items: center; justify-content: center; gap: 10px; }
+    .align-demo .tall  { padding: 30px 25px; }
+    .align-demo .short { padding: 8px 25px; }
+
+    /* gap demo */
+    .gap-demo { gap: 15px; }
+
+    /* column demo */
+    .column-demo { flex-direction: column; gap: 10px; width: 200px; }
+
+    /* flex-grow demo */
+    .grow-demo { gap: 10px; }
+    .grow-demo .sidebar { flex-basis: 150px; background: #0f3460; }
+    .grow-demo .main    { flex: 1; background: #533483; }
+
+    /* centering demo */
+    .center-demo { height: 200px; justify-content: center; align-items: center; }
+
+    /* navbar demo */
+    .navbar { justify-content: space-between; align-items: center; padding: 10px 20px; }
+    .navbar .logo { background: #533483; font-size: 18px; }
+    .nav-links { display: flex; gap: 10px; }
+    .nav-links .item { background: #0f3460; padding: 8px 16px; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <h1>Flexbox Examples</h1>
+
+  <!-- Example 1: Default -->
+  <h2>1. Default flex (row, flex-start)</h2>
+  <p class="note">Just <code>display: flex</code> — items sit side by side instead of stacking</p>
+  <div class="container">
+    <div class="item">A</div>
+    <div class="item">B</div>
+    <div class="item">C</div>
+  </div>
+
+  <!-- Example 2: justify-content -->
+  <h2>2. justify-content: center</h2>
+  <div class="container jc-center">
+    <div class="item">A</div>
+    <div class="item">B</div>
+    <div class="item">C</div>
+  </div>
+
+  <h2>3. justify-content: space-between</h2>
+  <p class="note">Equal space between items, none at edges</p>
+  <div class="container jc-between">
+    <div class="item">A</div>
+    <div class="item">B</div>
+    <div class="item">C</div>
+  </div>
+
+  <h2>4. justify-content: space-evenly</h2>
+  <p class="note">Equal space everywhere including edges</p>
+  <div class="container jc-evenly">
+    <div class="item">A</div>
+    <div class="item">B</div>
+    <div class="item">C</div>
+  </div>
+
+  <!-- Example 3: align-items -->
+  <h2>5. align-items: center (cross axis)</h2>
+  <p class="note">Items with different heights, all centered vertically</p>
+  <div class="container align-demo">
+    <div class="item tall">Tall</div>
+    <div class="item short">Short</div>
+    <div class="item">Normal</div>
+  </div>
+
+  <!-- Example 4: gap -->
+  <h2>6. gap: 15px</h2>
+  <p class="note">Consistent spacing without margin hacks</p>
+  <div class="container gap-demo">
+    <div class="item">A</div>
+    <div class="item">B</div>
+    <div class="item">C</div>
+    <div class="item">D</div>
+  </div>
+
+  <!-- Example 5: column -->
+  <h2>7. flex-direction: column</h2>
+  <p class="note">Main axis is now vertical — items stack</p>
+  <div class="container column-demo">
+    <div class="item">First</div>
+    <div class="item">Second</div>
+    <div class="item">Third</div>
+  </div>
+
+  <!-- Example 6: flex-grow -->
+  <h2>8. Sidebar + Main (flex-grow)</h2>
+  <p class="note">Sidebar is fixed 150px, main takes all remaining space with <code>flex: 1</code></p>
+  <div class="container grow-demo">
+    <div class="item sidebar">Sidebar</div>
+    <div class="item main">Main Content</div>
+  </div>
+
+  <!-- Example 7: Perfect centering -->
+  <h2>9. Perfect centering (3 lines)</h2>
+  <div class="container center-demo">
+    <div class="item">Centered!</div>
+  </div>
+
+  <!-- Example 8: Navbar -->
+  <h2>10. Navbar pattern</h2>
+  <p class="note">Logo on left, links on right — space-between + nested flex</p>
+  <div class="container navbar">
+    <div class="item logo">MySite</div>
+    <div class="nav-links">
+      <div class="item">Home</div>
+      <div class="item">About</div>
+      <div class="item">Contact</div>
+    </div>
+  </div>
+
+</body>
+</html>
