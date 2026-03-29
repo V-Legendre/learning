@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebAssembly — Where Does It Fit?</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>WebAssembly (Wasm)</h1>
+  <p class="subtitle">Running native-speed code in the browser — what it is, what it's for, and why you probably don't need it</p>
+
+  <!-- ===== WHAT IS IT ===== -->
+  <h2>What Is WebAssembly?</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">The one-liner</div>
+      <p>A <strong>binary instruction format</strong> that runs in the browser at near-native speed. Languages like Rust, C++, Go, and even Python can compile to Wasm and execute alongside JavaScript.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Backend analogy</div>
+      <p>Like writing a <strong>Python C extension</strong> for the hot path. You don't rewrite your whole Django app in C — you use it for the 2% that needs to be fast. Same idea, but in the browser.</p>
+    </div>
+  </div>
+
+  <div class="panel" style="padding: 30px;">
+<pre style="background: none; border: none; padding: 0; font-size: 13px; line-height: 1.6; color: #999; margin: 0;"><code>  <span style="color: #fff;">The Browser Runtime</span>
+
+  ┌──────────────────────────────────────────────────┐
+  │                                                  │
+  │   <span style="color: #60a5fa;">JavaScript / TypeScript</span>                        │
+  │   ├── React components                           │
+  │   ├── DOM manipulation                           │
+  │   ├── Event handling                             │
+  │   ├── API calls                                  │
+  │   └── 99% of web app code                        │
+  │                                                  │
+  │   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │
+  │                                                  │
+  │   <span style="color: #e94560;">WebAssembly</span>                                    │
+  │   ├── Heavy computation (video encoding)         │
+  │   ├── Image/audio processing                     │
+  │   ├── Game engines, physics, 3D rendering        │
+  │   ├── Running other languages (Python, SQLite)   │
+  │   └── <span style="color: #fbbf24;">Cannot touch the DOM directly</span>              │
+  │        (calls JavaScript to do it)               │
+  │                                                  │
+  └──────────────────────────────────────────────────┘
+
+  Both run in the same <span style="color: #a78bfa;">sandboxed</span> environment.
+  Wasm doesn't replace JS — it <span style="color: #a78bfa;">complements</span> it.</code></pre>
+  </div>
+
+  <!-- ===== REAL WORLD EXAMPLES ===== -->
+  <h2>Who Actually Uses Wasm?</h2>
+
+  <table>
+    <thead>
+      <tr><th>Product</th><th>What they use Wasm for</th><th>Language</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Figma</strong></td><td>The entire rendering engine — that's why it's fast in the browser</td><td>C++ → Wasm</td></tr>
+      <tr><td><strong>Google Earth</strong></td><td>3D globe rendering, terrain processing</td><td>C++ → Wasm</td></tr>
+      <tr><td><strong>Photoshop (web)</strong></td><td>Image filters, layer compositing</td><td>C++ → Wasm</td></tr>
+      <tr><td><strong>AutoCAD (web)</strong></td><td>CAD rendering engine</td><td>C++ → Wasm</td></tr>
+      <tr><td><strong>Pyodide</strong></td><td>Full CPython runtime in the browser</td><td>C (Python) → Wasm</td></tr>
+      <tr><td><strong>SQLite (wasm)</strong></td><td>Full SQL database running client-side</td><td>C → Wasm</td></tr>
+      <tr><td><strong>FFmpeg.wasm</strong></td><td>Video encoding/decoding in the browser</td><td>C → Wasm</td></tr>
+      <tr><td><strong>Game engines</strong></td><td>Unity, Unreal web exports</td><td>C++/C# → Wasm</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Notice the pattern:</strong> Every example is either a <em>heavy computation</em> task or <em>porting an existing native codebase</em> to the browser. None of them are typical web apps (dashboards, forms, CRUD).
+  </div>
+
+  <!-- ===== WHAT IT IS AND ISNT FOR ===== -->
+  <h2>What Wasm Is and Isn't For</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header" style="background: #34d39933; color: #34d399;">Good fit for Wasm</div>
+      <div class="comp-body">
+        <ul>
+          <li>CPU-intensive computation (compression, encryption, parsing)</li>
+          <li>Real-time audio/video processing</li>
+          <li>3D rendering, game engines, physics simulations</li>
+          <li>Porting existing C/C++/Rust codebases to the web</li>
+          <li>Running other language runtimes (Python, Ruby, SQLite)</li>
+          <li>Image manipulation (filters, resizing, format conversion)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header" style="background: #e9456033; color: #e94560;">NOT a fit for Wasm</div>
+      <div class="comp-body">
+        <ul>
+          <li>Regular web apps (React, forms, dashboards)</li>
+          <li>DOM manipulation — Wasm can't access the DOM directly</li>
+          <li>API calls, routing, state management</li>
+          <li>Anything where JavaScript is already fast enough</li>
+          <li>Replacing TypeScript/React for UI development</li>
+          <li>Simple CRUD applications</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== HOW IT WORKS ===== -->
+  <h2>How It Works (simplified)</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Write code</div>
+      <div class="desc">Rust, C++, Go, etc.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Compile to .wasm</div>
+      <div class="desc">Binary format</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Load in browser</div>
+      <div class="desc">via JavaScript</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Call from JS</div>
+      <div class="desc">JS ↔ Wasm interop</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Return results</div>
+      <div class="desc">Back to JS/React</div>
+    </div>
+  </div>
+
+<pre><code><span class="cm">// Example: calling a Wasm function from TypeScript</span>
+
+<span class="cm">// 1. Load the Wasm module</span>
+<span class="kw">const</span> wasm = <span class="kw">await</span> WebAssembly.<span class="fn">instantiateStreaming</span>(
+  <span class="fn">fetch</span>(<span class="str">"/compute.wasm"</span>)
+)
+
+<span class="cm">// 2. Call an exported function (runs at native speed)</span>
+<span class="kw">const</span> result = wasm.instance.exports.<span class="fn">heavyComputation</span>(inputData)
+
+<span class="cm">// 3. Use the result in your React app like any other value</span>
+<span class="fn">setResult</span>(result)</code></pre>
+
+  <!-- ===== WASI AND SERVER SIDE ===== -->
+  <h2>Beyond the Browser: WASI</h2>
+
+  <p>Wasm is expanding beyond browsers. <strong>WASI</strong> (WebAssembly System Interface) lets Wasm run on servers — like Docker containers but lighter and more portable.</p>
+
+  <div class="panel">
+    <div class="panel-title">The famous quote</div>
+    <p style="color: #a78bfa; font-style: italic;">"If WASM+WASI existed in 2008, we wouldn't have needed to create Docker."</p>
+    <p style="color: #888; font-size: 13px; margin-top: 5px;">— Solomon Hykes, co-founder of Docker</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Server-side Wasm use cases</div>
+      <ul>
+        <li><strong>Edge computing</strong> — Cloudflare Workers runs Wasm at the edge</li>
+        <li><strong>Plugin systems</strong> — Run untrusted code safely in a sandbox</li>
+        <li><strong>Portable binaries</strong> — Compile once, run on any OS/arch</li>
+        <li><strong>Serverless functions</strong> — Cold starts in microseconds (vs milliseconds for containers)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">For a backend/DevOps engineer</div>
+      <p style="color: #999;">This is where Wasm might actually intersect with your existing skills. If you work with:</p>
+      <ul>
+        <li>Cloudflare Workers → you'll encounter Wasm</li>
+        <li>Plugin architectures → Wasm sandboxing is compelling</li>
+        <li>Edge computing → Wasm is the runtime</li>
+      </ul>
+      <p style="color: #999; margin-top: 8px;">But this is a separate track from frontend learning.</p>
+    </div>
+  </div>
+
+  <!-- ===== BOTTOM LINE ===== -->
+  <h2>Bottom Line</h2>
+
+  <div class="note">
+    <strong>For your learning path: ignore Wasm entirely.</strong> It solves problems you won't encounter while building web apps with React + TypeScript. It's real, it's important for specific use cases, but it's not part of the frontend developer's daily toolkit. Think of it as knowing that Assembly language exists while writing Python — good to know conceptually, irrelevant to your day-to-day work.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>If you're building...</th><th>You need...</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>A web app (dashboard, SaaS, CRUD)</td><td>TypeScript + React + Tailwind. No Wasm.</td></tr>
+      <tr><td>A browser-based image editor</td><td>Wasm for the heavy filters, React for the UI.</td></tr>
+      <tr><td>A web-based game</td><td>Wasm (via Unity/Unreal export or custom engine).</td></tr>
+      <tr><td>A tool running Python in the browser</td><td>Pyodide (Python compiled to Wasm).</td></tr>
+      <tr><td>Edge functions / serverless</td><td>Wasm via WASI (Cloudflare Workers, Fastly).</td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

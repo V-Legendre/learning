@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Design Tools — Building MVPs Without Being a Designer</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    .tool-card {
+      background: #1a1a2e;
+      border: 2px solid #2a2a4a;
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tool-card .tool-name {
+      font-weight: bold;
+      font-size: 16px;
+      color: #fff;
+    }
+    .tool-card .tool-type {
+      font-size: 12px;
+      padding: 2px 10px;
+      border-radius: 20px;
+      display: inline-block;
+      width: fit-content;
+    }
+    .type-code { background: #e9456033; color: #e94560; border: 1px solid #e94560; }
+    .type-design { background: #7c3aed33; color: #a78bfa; border: 1px solid #7c3aed; }
+    .type-fullstack { background: #34d39933; color: #34d399; border: 1px solid #34d399; }
+    .type-hybrid { background: #f59e0b33; color: #fbbf24; border: 1px solid #f59e0b; }
+
+    .timeline {
+      position: relative;
+      padding-left: 30px;
+      margin: 20px 0;
+    }
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #2a2a4a;
+    }
+    .timeline-step {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    .timeline-step::before {
+      content: "";
+      position: absolute;
+      left: -24px;
+      top: 6px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #e94560;
+    }
+    .timeline-step .time {
+      font-size: 12px;
+      color: #e94560;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .timeline-step .title {
+      font-weight: bold;
+      color: #fff;
+      margin: 4px 0;
+    }
+    .timeline-step .desc {
+      color: #999;
+      font-size: 14px;
+    }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px 15px;
+      align-items: baseline;
+      margin: 15px 0;
+    }
+    .verdict-label {
+      font-weight: bold;
+      font-size: 13px;
+      padding: 3px 10px;
+      border-radius: 6px;
+      text-align: center;
+      min-width: 80px;
+    }
+    .verdict-yes { background: #34d39933; color: #34d399; }
+    .verdict-maybe { background: #f59e0b33; color: #fbbf24; }
+    .verdict-no { background: #e9456033; color: #e94560; }
+  </style>
+</head>
+<body>
+
+  <h1>AI Design Tools for MVPs</h1>
+  <p class="subtitle">How to build a cool-looking app without being a designer — the 2025/2026 landscape</p>
+
+  <!-- ===== THE LANDSCAPE ===== -->
+  <h2>The Tools</h2>
+
+  <div class="grid-2">
+    <div class="tool-card">
+      <div class="tool-name">v0 (Vercel)</div>
+      <span class="tool-type type-code">Prompt → React Code</span>
+      <p style="color: #999; font-size: 14px;">Describe a UI in words, get React + Tailwind + shadcn/ui code. Best-in-class for developers who want to skip the design phase entirely.</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Solo devs building MVPs. Outputs real, editable code.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">Bolt.new / Lovable</div>
+      <span class="tool-type type-fullstack">Prompt → Full App</span>
+      <p style="color: #999; font-size: 14px;">Generates entire full-stack apps from prompts — frontend, backend, database, and deploys to production. WebContainer-based (runs in the browser).</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Non-technical founders, quick prototypes. Less control over code quality.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">Stitch (Google)</div>
+      <span class="tool-type type-design">Prompt → UI Prototype</span>
+      <p style="color: #999; font-size: 14px;">Google's AI prototyping tool. Generates interactive UI mockups from text descriptions. Newer, less mature ecosystem.</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Exploration and quick visual ideation.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">Figma Make</div>
+      <span class="tool-type type-design">Prompt → Figma Design</span>
+      <p style="color: #999; font-size: 14px;">AI-powered design generation inside Figma. Outputs Figma components, not code. Still requires a developer to implement.</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Teams with designers already using Figma.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">Claude Code + Figma MCP</div>
+      <span class="tool-type type-hybrid">Design → Code</span>
+      <p style="color: #999; font-size: 14px;">Reads existing Figma designs and generates matching React components. Bridges the designer-developer gap.</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Teams where a designer provides Figma files and a dev implements.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">shadcn/ui + Tailwind</div>
+      <span class="tool-type type-code">Component Library</span>
+      <p style="color: #999; font-size: 14px;">Not AI, but the reason AI-generated code looks good. Pre-built, accessible, beautifully styled components. Copy-paste into your project.</p>
+      <p style="font-size: 13px;"><strong>Best for:</strong> Everyone. The foundation that v0, Bolt, and others build on top of.</p>
+    </div>
+  </div>
+
+  <!-- ===== DECISION MATRIX ===== -->
+  <h2>Which Tool For Which Situation?</h2>
+
+  <table>
+    <thead>
+      <tr><th>Situation</th><th>Recommended</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Solo dev, building an MVP</td>
+        <td><strong>v0 → export → Vite project</strong></td>
+        <td>Best code output, you can edit and extend it</td>
+      </tr>
+      <tr>
+        <td>Non-technical, just need a demo</td>
+        <td><strong>Bolt.new / Lovable</strong></td>
+        <td>Fastest path to something deployed</td>
+      </tr>
+      <tr>
+        <td>Working with a designer</td>
+        <td><strong>Figma + Claude/MCP</strong></td>
+        <td>Designer owns Figma, you translate to code</td>
+      </tr>
+      <tr>
+        <td>Team with design system</td>
+        <td><strong>Figma + Code Connect</strong></td>
+        <td>Figma components map 1:1 to your component library</td>
+      </tr>
+      <tr>
+        <td>Just exploring an idea visually</td>
+        <td><strong>v0 or Stitch</strong></td>
+        <td>Fastest way to see if an idea looks right</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== THE REAL FLOW ===== -->
+  <h2>The Realistic MVP Flow (Solo Non-Designer Dev)</h2>
+
+  <div class="timeline">
+    <div class="timeline-step">
+      <div class="time">Step 1 — Generate</div>
+      <div class="title">Prompt v0 for your main screens</div>
+      <div class="desc">"A dashboard with a sidebar navigation, a header with search and user avatar, and a main area showing project cards in a grid." Iterate 3-5 times until the layout feels right.</div>
+    </div>
+    <div class="timeline-step">
+      <div class="time">Step 2 — Export</div>
+      <div class="title">Bring the code into your Vite project</div>
+      <div class="desc">v0 outputs React + Tailwind + shadcn/ui. Copy it into your project, install dependencies (<code>pnpm add @radix-ui/react-* class-variance-authority</code>). It's real code, not a locked prototype.</div>
+    </div>
+    <div class="timeline-step">
+      <div class="time">Step 3 — Customize</div>
+      <div class="title">Take the driver's seat</div>
+      <div class="desc">Adjust colors, spacing, layout with Tailwind classes. This is where knowing Flexbox and CSS pays off — you're tweaking, not building from scratch. Claude can help here too.</div>
+    </div>
+    <div class="timeline-step">
+      <div class="time">Step 4 — Wire up</div>
+      <div class="title">Connect real data</div>
+      <div class="desc">Replace hardcoded mock data with TanStack Query hooks pointing at your actual API. This is where AI tools stop helping — data flow and business logic is your job.</div>
+    </div>
+    <div class="timeline-step">
+      <div class="time">Step 5 — Polish</div>
+      <div class="title">Add interactions and edge cases</div>
+      <div class="desc">Loading states, error handling, empty states, responsive behavior, authentication. The 20% that takes 80% of the time.</div>
+    </div>
+  </div>
+
+  <!-- ===== THE HONESTY SECTION ===== -->
+  <h2>The Honest Take: Prompts vs Driving</h2>
+
+  <div class="panel">
+    <div class="panel-title">When prompting works well</div>
+    <div class="verdict">
+      <span class="verdict-label verdict-yes">Great</span>
+      <span>Initial layout and page structure</span>
+      <span class="verdict-label verdict-yes">Great</span>
+      <span>Generating component skeletons (cards, forms, tables, modals)</span>
+      <span class="verdict-label verdict-yes">Great</span>
+      <span>Picking a color scheme and visual style</span>
+      <span class="verdict-label verdict-yes">Great</span>
+      <span>Standard UI patterns (auth pages, dashboards, settings)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">When you hit the wall</div>
+    <div class="verdict">
+      <span class="verdict-label verdict-maybe">Slow</span>
+      <span>Pixel-perfect tweaks ("move this 4px left, make that border subtler")</span>
+      <span class="verdict-label verdict-no">Painful</span>
+      <span>Complex responsive layouts (different layouts for mobile vs desktop)</span>
+      <span class="verdict-label verdict-no">Can't</span>
+      <span>Wiring up real API data, auth flows, business logic</span>
+      <span class="verdict-label verdict-no">Can't</span>
+      <span>Performance optimization, accessibility, error boundaries</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The pattern:</strong> AI gets you to 70-80% in 30 minutes. The remaining 20-30% requires you to understand the code and edit it directly. This is not a limitation — it's the expected workflow. The fundamentals you're learning (CSS, TypeScript, React) are what let you take over at that point.
+  </div>
+
+  <!-- ===== IS FIGMA DEAD ===== -->
+  <h2>So Is Figma Still in the Pipeline?</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Skip Figma when...</div>
+      <ul>
+        <li>You're a solo dev building an MVP</li>
+        <li>No designer on the team</li>
+        <li>Speed matters more than pixel perfection</li>
+        <li>You're using a component library (shadcn/ui)</li>
+      </ul>
+      <p style="color: #888; margin-top: 10px; font-size: 13px;">Go straight from prompt → code → iterate in code</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #a78bfa;">Use Figma when...</div>
+      <ul>
+        <li>Working with a designer (they'll use Figma)</li>
+        <li>Building a design system for a growing app</li>
+        <li>Client/stakeholder reviews before development</li>
+        <li>Complex multi-page apps that need visual consistency</li>
+      </ul>
+      <p style="color: #888; margin-top: 10px; font-size: 13px;">Figma is the industry standard for design collaboration</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Bottom line:</strong> For your learning path — skip Figma for now. Use v0 + shadcn/ui to generate starting points, then learn by editing the code. When you join a team with a designer, you'll need Figma reading skills (that's what <a href="figma-basics.html">figma-basics.html</a> is for).
+  </div>
+
+</body>
+</html>
