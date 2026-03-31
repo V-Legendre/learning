@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 10 — Proxmox Storage & High Availability</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 10 — Proxmox Storage &amp; High Availability</h1>
+  <p class="subtitle">Storage backends, ZFS, Ceph, clustering, and automatic failover</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Storage Types                             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Storage Types</h2>
+
+  <p>Proxmox supports many storage backends. The choice determines whether you get snapshots,
+     thin provisioning, and whether the storage can be shared across cluster nodes.</p>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>Content Types</th>
+      <th>Shared</th>
+      <th>Snapshots</th>
+      <th>Thin Provision</th>
+      <th>Notes</th>
+    </tr>
+    <tr>
+      <td><strong>Directory</strong></td>
+      <td>All (images, ISOs, backups, templates)</td>
+      <td>No (unless NFS-backed)</td>
+      <td>qcow2 only</td>
+      <td>qcow2 only</td>
+      <td>Simplest — just a path on the filesystem</td>
+    </tr>
+    <tr>
+      <td><strong>LVM</strong></td>
+      <td>Disk images, CT rootfs</td>
+      <td>No</td>
+      <td>No</td>
+      <td>No</td>
+      <td>Raw block devices, good performance</td>
+    </tr>
+    <tr>
+      <td><strong>LVM-thin</strong></td>
+      <td>Disk images, CT rootfs</td>
+      <td>No</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Thin provisioning via dm-thin — Proxmox default</td>
+    </tr>
+    <tr>
+      <td><strong>ZFS (local)</strong></td>
+      <td>All</td>
+      <td>No</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Feature-rich, RAM-hungry (1 GB per TB rule)</td>
+    </tr>
+    <tr>
+      <td><strong>Ceph RBD</strong></td>
+      <td>Disk images</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Distributed block storage, no SPOF</td>
+    </tr>
+    <tr>
+      <td><strong>CephFS</strong></td>
+      <td>All</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Distributed filesystem, needs MDS</td>
+    </tr>
+    <tr>
+      <td><strong>NFS</strong></td>
+      <td>All</td>
+      <td>Yes</td>
+      <td>qcow2 only</td>
+      <td>qcow2 only</td>
+      <td>Simple shared storage over network</td>
+    </tr>
+    <tr>
+      <td><strong>iSCSI</strong></td>
+      <td>Disk images</td>
+      <td>Yes</td>
+      <td>No</td>
+      <td>Depends on target</td>
+      <td>Block over TCP/IP — SAN access</td>
+    </tr>
+    <tr>
+      <td><strong>GlusterFS</strong></td>
+      <td>All</td>
+      <td>Yes</td>
+      <td>qcow2 only</td>
+      <td>qcow2 only</td>
+      <td>Distributed filesystem (less common now)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    For a single-node setup, <strong>LVM-thin</strong> or <strong>ZFS</strong> are the best choices.
+    For clusters needing shared storage, <strong>Ceph</strong> (built-in to Proxmox) or <strong>NFS</strong> (external server) are most common.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Disk Formats                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Disk Formats</h2>
+
+  <div class="comparison">
+    <div class="comp-side type1">
+      <div class="comp-header">raw</div>
+      <div class="comp-body">
+        <ul>
+          <li>Simple block image — byte-for-byte disk representation</li>
+          <li><strong>Best performance</strong> — no translation overhead</li>
+          <li>No snapshots, no compression, no encryption</li>
+          <li>File size = allocated disk size (no thin provisioning)</li>
+          <li>Used natively by LVM, LVM-thin, Ceph RBD, ZFS zvols</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side type2">
+      <div class="comp-header">qcow2</div>
+      <div class="comp-body">
+        <ul>
+          <li>QEMU Copy-On-Write format v2</li>
+          <li><strong>Backing files</strong> — snapshot chains, linked clones</li>
+          <li><strong>Snapshots</strong> — internal snapshot support</li>
+          <li><strong>Compression</strong> — zlib/zstd per-cluster</li>
+          <li><strong>LUKS encryption</strong> — built-in at-rest encryption</li>
+          <li>~5-10% performance overhead vs raw</li>
+          <li>Used on directory/NFS/GlusterFS storage</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    On LVM-thin, ZFS, and Ceph, snapshots are handled by the <strong>storage layer</strong> (not qcow2).
+    These backends use <strong>raw</strong> format and still get snapshots natively.
+    qcow2 snapshots are only needed on directory-based or NFS storage.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- ZFS                                       -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>ZFS Basics</h2>
+
+  <div class="panel">
+    <div class="panel-title">What is ZFS?</div>
+    <p>A combined <strong>filesystem + volume manager</strong>. Manages disks, RAID, filesystems, snapshots,
+       compression, checksums, and caching in a single integrated stack. Originally from Sun/Solaris,
+       now available on Linux via <strong>OpenZFS</strong>.</p>
+  </div>
+
+  <h3>ZFS Architecture</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">ZFS Pool (zpool)</span>
+    <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+      <div class="nest-box hypervisor">
+        <span class="nest-label">vdev: mirror</span>
+        <div style="display:flex; gap:0.5rem;">
+          <div class="nest-box vm"><span class="nest-label">sda</span></div>
+          <div class="nest-box vm"><span class="nest-label">sdb</span></div>
+        </div>
+      </div>
+      <div class="nest-box hypervisor">
+        <span class="nest-label">vdev: mirror</span>
+        <div style="display:flex; gap:0.5rem;">
+          <div class="nest-box vm"><span class="nest-label">sdc</span></div>
+          <div class="nest-box vm"><span class="nest-label">sdd</span></div>
+        </div>
+      </div>
+      <div class="nest-box runtime">
+        <span class="nest-label">SLOG (ZIL)</span>
+        <div class="nest-box container"><span class="nest-label">nvme0n1p1</span></div>
+      </div>
+      <div class="nest-box runtime">
+        <span class="nest-label">L2ARC (cache)</span>
+        <div class="nest-box container"><span class="nest-label">nvme0n1p2</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>RAID Levels (vdev types)</h3>
+
+  <table>
+    <tr>
+      <th>vdev Type</th>
+      <th>Parity Disks</th>
+      <th>Min Disks</th>
+      <th>Tolerated Failures</th>
+      <th>Usable Capacity</th>
+    </tr>
+    <tr>
+      <td><strong>mirror</strong></td>
+      <td>N/A (mirroring)</td>
+      <td>2</td>
+      <td>N-1 (in the mirror)</td>
+      <td>50% (2-way mirror)</td>
+    </tr>
+    <tr>
+      <td><strong>raidz1</strong></td>
+      <td>1</td>
+      <td>3</td>
+      <td>1</td>
+      <td>(N-1)/N</td>
+    </tr>
+    <tr>
+      <td><strong>raidz2</strong></td>
+      <td>2</td>
+      <td>4</td>
+      <td>2</td>
+      <td>(N-2)/N</td>
+    </tr>
+    <tr>
+      <td><strong>raidz3</strong></td>
+      <td>3</td>
+      <td>5</td>
+      <td>3</td>
+      <td>(N-3)/N</td>
+    </tr>
+  </table>
+
+  <h3>Key Features</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Copy-on-Write (CoW)</div>
+      <p>Data is never overwritten in place. New blocks are written to free space, then metadata pointers are updated atomically.
+         This makes <strong>snapshots instant and free</strong> — they just preserve old block pointers.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Checksums</div>
+      <p>Every block has a checksum stored in its <strong>parent</strong> block (Merkle tree).
+         Detects silent data corruption (bit rot). With mirrors/raidz, ZFS auto-repairs corrupted blocks.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">ARC Cache</div>
+      <p><strong>Adaptive Replacement Cache</strong> — uses available RAM for read caching.
+         Rule of thumb: 1 GB RAM per 1 TB of storage. Can add an <strong>L2ARC</strong> (SSD) for overflow.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Send/Recv Replication</div>
+      <p><code>zfs send</code> streams a snapshot (or incremental delta) to another pool — local or remote.
+         Basis for backup strategies and disaster recovery.</p>
+    </div>
+  </div>
+
+  <h3>Common ZFS Commands</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create a mirrored pool</span>
+    <div class="output">zpool create tank mirror /dev/sda /dev/sdb</div>
+    <span class="prompt"># Create a dataset with compression</span>
+    <div class="output">zfs create -o compression=lz4 tank/data</div>
+    <span class="prompt"># Take a snapshot</span>
+    <div class="output">zfs snapshot tank/data@2024-01-15</div>
+    <span class="prompt"># List snapshots</span>
+    <div class="output">zfs list -t snapshot
+NAME                       USED  AVAIL  REFER  MOUNTPOINT
+tank/data@2024-01-15       128K      -  1.23G  -</div>
+    <span class="prompt"># Incremental replication to remote host</span>
+    <div class="output">zfs send -i tank/data@snap1 tank/data@snap2 | ssh backup zfs recv backup/data</div>
+    <span class="prompt"># Pool status (health, errors, scrub progress)</span>
+    <div class="output">zpool status tank
+  pool: tank
+ state: ONLINE
+  scan: scrub repaired 0B in 01:23:45 with 0 errors
+config:
+        NAME        STATE     READ WRITE CKSUM
+        tank        ONLINE       0     0     0
+          mirror-0  ONLINE       0     0     0
+            sda     ONLINE       0     0     0
+            sdb     ONLINE       0     0     0</div>
+  </div>
+
+  <div class="warn">
+    ZFS is <strong>RAM-hungry</strong>. The ARC will consume most available RAM by default.
+    For Proxmox, set <code>zfs_arc_max</code> to limit it:
+    <code>echo "options zfs zfs_arc_max=4294967296" > /etc/modprobe.d/zfs.conf</code> (4 GB limit).
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Ceph                                      -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Ceph Integration</h2>
+
+  <div class="panel">
+    <div class="panel-title">What is Ceph?</div>
+    <p><strong>Distributed storage system</strong> with no single point of failure. Data is replicated across
+       multiple nodes and disks. Proxmox has first-class Ceph integration — you can deploy and manage
+       Ceph directly from the Proxmox web UI.</p>
+  </div>
+
+  <h3>Ceph Components</h3>
+
+  <div class="topology">
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F4E1;</div>
+      <div class="topo-label">MON (Monitor)</div>
+      <div class="topo-detail">Cluster state, consensus (Paxos). Need 3+ for quorum.</div>
+    </div>
+    <div class="topo-link">membership</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F4BF;</div>
+      <div class="topo-label">OSD (Object Storage Daemon)</div>
+      <div class="topo-detail">One per disk. Stores data, handles replication, recovery.</div>
+    </div>
+    <div class="topo-link">metadata</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F4C2;</div>
+      <div class="topo-label">MDS (Metadata Server)</div>
+      <div class="topo-detail">Required for CephFS only. Handles POSIX filesystem metadata.</div>
+    </div>
+    <div class="topo-link">management</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#x2699;</div>
+      <div class="topo-label">MGR (Manager)</div>
+      <div class="topo-detail">Dashboard, monitoring, module host. Active/standby pair.</div>
+    </div>
+  </div>
+
+  <h3>Ceph Storage in Proxmox</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">RBD (RADOS Block Device)</div>
+      <ul>
+        <li>Block storage for <strong>VM disks</strong> and <strong>CT rootfs</strong></li>
+        <li>Thin provisioned, snapshots, clones</li>
+        <li>Shared across all cluster nodes — enables <strong>live migration</strong></li>
+        <li>Data striped across OSDs, replicated (default 3x)</li>
+        <li>Proxmox creates a pool (e.g., <code>rbd-pool</code>) and adds it as storage</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">CephFS (Ceph Filesystem)</div>
+      <ul>
+        <li>POSIX filesystem for <strong>ISOs, backups, templates, snippets</strong></li>
+        <li>Requires at least one <strong>MDS</strong> daemon</li>
+        <li>Shared across all nodes — all nodes see the same files</li>
+        <li>Good for backup storage (vzdump), ISO library</li>
+        <li>Not recommended for VM disks (use RBD instead)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Self-Healing on OSD Failure</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">OSD Dies</div>
+        <div class="desc">Disk failure or node crash</div>
+      </div>
+      <div class="arrow"></div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">MON Detects</div>
+        <div class="desc">Heartbeat timeout, OSD marked "down"</div>
+      </div>
+      <div class="arrow"></div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Wait Period</div>
+        <div class="desc">10 min default — allows transient recovery</div>
+      </div>
+      <div class="arrow"></div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">OSD Marked Out</div>
+        <div class="desc">CRUSH map updated, data re-replicated to surviving OSDs</div>
+      </div>
+      <div class="arrow"></div>
+      <div class="flow-step">
+        <div class="num">5</div>
+        <div class="label">Recovery Complete</div>
+        <div class="desc">All data back to target replication count (3x)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create Ceph OSDs from Proxmox CLI</span>
+    <div class="output">pveceph osd create /dev/sdc
+pveceph osd create /dev/sdd</div>
+    <span class="prompt"># Create a Ceph pool</span>
+    <div class="output">pveceph pool create vm-pool --pg_autoscale_mode on --size 3 --min_size 2</div>
+    <span class="prompt"># Check Ceph cluster health</span>
+    <div class="output">ceph status
+  cluster:
+    id:     a1b2c3d4-...
+    health: HEALTH_OK
+  services:
+    mon: 3 daemons, quorum pve1,pve2,pve3
+    mgr: pve1(active), standbys: pve2
+    osd: 12 osds: 12 up, 12 in
+  data:
+    pools:   2 pools, 128 pgs
+    objects: 4.2k objects, 16 GiB
+    usage:   52 GiB used, 3.5 TiB / 3.6 TiB avail</div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Clustering                                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Clustering</h2>
+
+  <h3>Corosync</h3>
+
+  <div class="panel">
+    <div class="panel-title">Cluster Communication Layer</div>
+    <ul>
+      <li><strong>Membership</strong> — tracks which nodes are alive (heartbeats)</li>
+      <li><strong>Messaging</strong> — reliable multicast/unicast between nodes</li>
+      <li><strong>Quorum</strong> — calculates whether the cluster has majority</li>
+      <li>Uses UDP (default port 5405) on a dedicated cluster network</li>
+      <li>Config: <code>/etc/corosync/corosync.conf</code> (auto-managed by Proxmox)</li>
+    </ul>
+  </div>
+
+  <h3>pmxcfs — Proxmox Cluster Filesystem</h3>
+
+  <div class="panel">
+    <div class="panel-title">How /etc/pve/ Works</div>
+    <ul>
+      <li><code>/etc/pve/</code> is a <strong>FUSE mount</strong> backed by a local <strong>SQLite database</strong></li>
+      <li>The database is replicated in real time via <strong>Corosync</strong></li>
+      <li>All nodes see the <strong>same</strong> configs — VM configs, firewall rules, HA state, user permissions</li>
+      <li>Max file size: <strong>128 KB</strong> (it is a config store, not a general filesystem)</li>
+      <li>If a node loses quorum, <code>/etc/pve/</code> becomes <strong>read-only</strong></li>
+    </ul>
+  </div>
+
+  <div class="file-tree">
+    <div class="dir">/etc/pve/
+      <div class="file">corosync.conf</div>
+      <div class="file">storage.cfg</div>
+      <div class="file">user.cfg</div>
+      <div class="file">datacenter.cfg</div>
+      <div class="dir">firewall/
+        <div class="file">cluster.fw</div>
+      </div>
+      <div class="dir highlight">nodes/
+        <div class="dir">pve1/
+          <div class="file">qemu-server/100.conf</div>
+          <div class="file">lxc/200.conf</div>
+        </div>
+        <div class="dir">pve2/
+          <div class="file">qemu-server/101.conf</div>
+        </div>
+      </div>
+      <div class="dir">qemu-server/
+        <div class="file highlight">100.conf</div>
+        <div class="file">101.conf</div>
+      </div>
+      <div class="dir">lxc/
+        <div class="file">200.conf</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Quorum</h3>
+
+  <div class="panel">
+    <div class="panel-title">Why Quorum Matters</div>
+    <p>A cluster requires a <strong>majority</strong> of nodes to agree before making changes.
+       This prevents <strong>split-brain</strong> — two halves of a partitioned cluster both thinking they are in charge.</p>
+  </div>
+
+  <table>
+    <tr>
+      <th>Cluster Size</th>
+      <th>Quorum (majority)</th>
+      <th>Max Failures</th>
+    </tr>
+    <tr>
+      <td>2 nodes</td>
+      <td>2</td>
+      <td>0 (need QDevice for 1-node tolerance)</td>
+    </tr>
+    <tr>
+      <td>3 nodes</td>
+      <td>2</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <td>4 nodes</td>
+      <td>3</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <td>5 nodes</td>
+      <td>3</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>7 nodes</td>
+      <td>4</td>
+      <td>3</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Without quorum:</strong> the partition goes <strong>read-only</strong>. VMs keep running but you
+    cannot start, stop, or migrate them. This is <strong>by design</strong> — it prevents both halves from
+    modifying the same VM.
+  </div>
+
+  <div class="tip">
+    A <strong>2-node cluster</strong> has no fault tolerance by default (quorum = 2). Add a
+    <strong>QDevice</strong> (lightweight third-party voter, e.g., a Raspberry Pi) to achieve 1-node tolerance.
+  </div>
+
+  <h3>Fencing (STONITH)</h3>
+
+  <div class="panel">
+    <div class="panel-title">Shoot The Other Node In The Head</div>
+    <p>Before migrating a failed node's VMs, the cluster must <strong>guarantee</strong> the failed node is truly off.
+       Otherwise, two copies of the same VM could run simultaneously — causing data corruption.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Hardware Fencing</div>
+      <ul>
+        <li><strong>IPMI/BMC</strong> — remotely power off via out-of-band management</li>
+        <li><strong>HP iLO</strong> — Integrated Lights-Out</li>
+        <li><strong>Dell iDRAC</strong> — Integrated Dell Remote Access Controller</li>
+        <li><strong>PDU</strong> — Smart power distribution unit (cut power to port)</li>
+        <li>Most reliable — works even if OS is hung</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Software Fencing (Watchdog)</div>
+      <ul>
+        <li>Proxmox default: <strong>software watchdog</strong></li>
+        <li>HA manager resets the watchdog timer periodically</li>
+        <li>If the node becomes unresponsive, watchdog fires and <strong>reboots the node</strong></li>
+        <li>Hardware watchdog (<code>/dev/watchdog</code>) is more reliable than software</li>
+        <li>Sufficient for many deployments</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- High Availability                         -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>High Availability</h2>
+
+  <div class="panel">
+    <div class="panel-title">HA Manager</div>
+    <p>The HA manager continuously monitors HA-managed resources (VMs and CTs).
+       When a node fails, it coordinates fencing and automatic failover.</p>
+  </div>
+
+  <h3>Failover Sequence</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Node Failure Detected</strong>
+        <p>Corosync stops receiving heartbeats from the failed node. After timeout (typically a few seconds),
+           the node is declared dead.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Remaining Nodes Achieve Quorum</strong>
+        <p>The surviving nodes verify they still have majority. If quorum is lost (e.g., 1 of 2 nodes),
+           failover does <strong>not</strong> proceed — safety first.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Failed Node Fenced (STONITH)</strong>
+        <p>The cluster ensures the failed node is truly powered off. Via IPMI, iLO, iDRAC, or watchdog reboot.
+           This prevents two instances of the same VM from running simultaneously.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>HA Manager Identifies Affected Resources</strong>
+        <p>All VMs and CTs that were running on the failed node and are marked as HA-managed
+           are queued for restart on surviving nodes.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Resources Started on Other Nodes</strong>
+        <p>VMs/CTs are started on surviving nodes based on HA group preferences and node priority.
+           Requires <strong>shared storage</strong> (Ceph, NFS, iSCSI) — the disk must be accessible from the new node.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>Recovery Complete</strong>
+        <p>Total failover time: <strong>~2-5 minutes</strong> (fence timeout + VM boot time).
+           This is <em>not</em> live migration — VMs are cold-started, so there is downtime.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    HA failover is <strong>not</strong> live migration. The VMs on the failed node crash — they are then
+    <strong>cold-booted</strong> on a surviving node. Applications inside the VM experience a hard restart.
+    For zero-downtime, you need application-level HA (e.g., database replication, load-balanced web servers).
+  </div>
+
+  <h3>HA Groups</h3>
+
+  <div class="panel">
+    <div class="panel-title">Controlling Placement</div>
+    <p>HA groups define <strong>which nodes</strong> a resource can run on and with what <strong>priority</strong>.</p>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create an HA group</span>
+    <div class="output">ha-manager groupadd prod-group --nodes pve1:2,pve2:1,pve3:1 --restricted --nofailback</div>
+    <span class="prompt"># pve1 has priority 2 (preferred), pve2 and pve3 have priority 1</span>
+    <span class="prompt"># --restricted: resource can ONLY run on nodes in this group</span>
+    <span class="prompt"># --nofailback: don't auto-migrate back when preferred node recovers</span>
+    <span class="prompt"># Add a VM to HA management</span>
+    <div class="output">ha-manager add vm:100 --group prod-group --state started --max_restart 3 --max_relocate 2</div>
+  </div>
+
+  <h3>Recovery Policies</h3>
+
+  <table>
+    <tr>
+      <th>Policy</th>
+      <th>Behavior</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><strong>migrate</strong></td>
+      <td>Live migrate to another node (graceful, minimal downtime)</td>
+      <td>Planned maintenance — drain a node before rebooting</td>
+    </tr>
+    <tr>
+      <td><strong>relocate</strong></td>
+      <td>Shut down on current node, start on another node (cold move)</td>
+      <td>When live migration is not possible (local storage, incompatible CPUs)</td>
+    </tr>
+    <tr>
+      <td><strong>freeze</strong></td>
+      <td>Do not attempt to recover — leave the resource in failed state</td>
+      <td>Resources that should not auto-restart (manual intervention required)</td>
+    </tr>
+  </table>
+
+  <h3>HA State Diagram</h3>
+
+  <div class="state-diagram">
+    <div class="state initial">disabled</div>
+    <div class="state active">started</div>
+    <div class="state waiting">stopped</div>
+    <div class="state special">migrate</div>
+    <div class="state special">relocate</div>
+    <div class="state closed">freeze</div>
+    <div class="state closed">error</div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Check HA status for all resources</span>
+    <div class="output">ha-manager status
+quorum OK, master pve1
+vm:100  pve1  started
+vm:101  pve2  started
+ct:200  pve1  started</div>
+    <span class="prompt"># Manually migrate an HA resource</span>
+    <div class="output">ha-manager migrate vm:100 pve3</div>
+    <span class="prompt"># Set a resource to freeze (prevent auto-recovery)</span>
+    <div class="output">ha-manager set vm:100 --state freeze</div>
+  </div>
+
+  <div class="tip">
+    For production HA, use <strong>at least 3 nodes</strong> (for quorum), <strong>shared storage</strong> (Ceph recommended),
+    and configure <strong>hardware fencing</strong> (IPMI/iLO/iDRAC) for reliable STONITH.
+  </div>
+
+</body>
+</html>

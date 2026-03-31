@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 10 — VM Lifecycle & Networking</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 10 — VM Lifecycle &amp; Networking</h1>
+  <p class="subtitle">Creating, migrating, and connecting VMs in Proxmox</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- VM Lifecycle                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>VM Lifecycle</h2>
+
+  <!-- Create -->
+  <h3>Create</h3>
+
+  <div class="panel">
+    <div class="panel-title">Three Ways to Create a VM</div>
+    <div class="grid-3">
+      <div class="panel">
+        <div class="panel-title">From ISO</div>
+        <p>Upload ISO to storage, create VM, attach ISO as CD-ROM, boot and install manually.
+           Slowest method but maximum control.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">From Template</div>
+        <p>Install a VM once, configure it, convert to template (<code>qm template &lt;vmid&gt;</code>).
+           Clone from template for instant provisioning.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Cloud-Init Template</div>
+        <p>Download a cloud image (Ubuntu, Debian, etc.), attach <code>cloud-init</code> drive.
+           Set hostname, SSH keys, network via Proxmox UI or API. <strong>Fastest path to automation.</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create a cloud-init template from a downloaded image</span>
+    <div class="output">qm create 9000 --name ubuntu-template --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
+qm importdisk 9000 jammy-server-cloudimg-amd64.img local-lvm
+qm set 9000 --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-9000-disk-0
+qm set 9000 --ide2 local-lvm:cloudinit
+qm set 9000 --boot order=scsi0
+qm set 9000 --serial0 socket --vga serial0
+qm template 9000</div>
+    <span class="prompt"># Clone from template</span>
+    <div class="output">qm clone 9000 100 --name webserver-01 --full
+qm set 100 --ciuser admin --sshkeys ~/.ssh/id_ed25519.pub --ipconfig0 ip=dhcp
+qm start 100</div>
+  </div>
+
+  <!-- Start -->
+  <h3>Start — What Actually Happens</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">qm start &lt;vmid&gt;</div>
+      <div class="desc">Proxmox reads /etc/pve/qemu-server/&lt;vmid&gt;.conf</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Build QEMU Command</div>
+      <div class="desc">qemu-server translates config into qemu-system-x86_64 args</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Launch Process</div>
+      <div class="desc">QEMU process starts, opens /dev/kvm ioctl</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">VMCS Setup</div>
+      <div class="desc">KVM allocates VMCS, configures EPT, sets entry point</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">VM Entry</div>
+      <div class="desc">VMLAUNCH → CPU enters VMX non-root mode → guest boots</div>
+    </div>
+  </div>
+
+  <!-- Shutdown -->
+  <h3>Shutdown</h3>
+
+  <div class="comparison">
+    <div class="comp-side good">
+      <div class="comp-header">Graceful Shutdown (ACPI)</div>
+      <div class="comp-body">
+        <ul>
+          <li><code>qm shutdown &lt;vmid&gt;</code></li>
+          <li>Proxmox sends <strong>ACPI power button event</strong> to QEMU</li>
+          <li>Guest OS receives the signal and initiates normal shutdown</li>
+          <li>Flushes buffers, stops services, unmounts filesystems</li>
+          <li>Requires <strong>qemu-guest-agent</strong> for best results</li>
+          <li>Timeout: default 60s, then optionally force-stop</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side bad">
+      <div class="comp-header">Hard Stop (SIGKILL)</div>
+      <div class="comp-body">
+        <ul>
+          <li><code>qm stop &lt;vmid&gt;</code></li>
+          <li>Proxmox sends <strong>SIGKILL</strong> to the QEMU process</li>
+          <li>Equivalent to <strong>pulling the power cord</strong></li>
+          <li>No graceful shutdown — risk of data corruption</li>
+          <li>Disk write cache may not be flushed</li>
+          <li>Use only when guest is unresponsive</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Migration -->
+  <h3>Live Migration</h3>
+
+  <div class="panel">
+    <div class="panel-title">Pre-Copy Live Migration</div>
+    <p>Move a running VM from one node to another with minimal downtime.</p>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Pre-Copy</div>
+      <div class="desc">Entire RAM copied to destination while VM keeps running on source</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Iterative Rounds</div>
+      <div class="desc">Re-copy only dirty pages (pages written since last round)</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Stop-and-Copy</div>
+      <div class="desc">Pause VM, copy remaining dirty pages + CPU state</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Resume on Destination</div>
+      <div class="desc">VM resumes on target node. Downtime typically &lt;100ms</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Requirements for live migration:</strong>
+    <ul>
+      <li><strong>Shared storage</strong> — both nodes must see the same disk (Ceph, NFS, iSCSI). Without shared storage, disk must be copied too (slower, uses <code>--with-local-disks</code>).</li>
+      <li><strong>Same or compatible CPU family</strong> — use a common CPU type or named model, not <code>cpu: host</code>.</li>
+      <li><strong>Same Proxmox version</strong> recommended.</li>
+      <li><strong>Network connectivity</strong> — dedicated migration network recommended for large VMs.</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Live migrate VM 100 to node pve2</span>
+    <div class="output">qm migrate 100 pve2 --online</div>
+    <span class="prompt"># With local disk (copies disk over network)</span>
+    <div class="output">qm migrate 100 pve2 --online --with-local-disks</div>
+  </div>
+
+  <!-- Snapshots -->
+  <h3>Snapshots</h3>
+
+  <div class="panel">
+    <div class="panel-title">Snapshot Mechanics</div>
+    <ul>
+      <li>Captures <strong>disk state</strong> and optionally <strong>RAM state</strong> at a point in time</li>
+      <li>Disk snapshots use <strong>qcow2 backing files</strong> — original becomes read-only, writes go to a new overlay</li>
+      <li><strong>Live snapshot</strong> (with <code>--vmstate</code>) saves RAM contents — rollback resumes exactly where you left off</li>
+      <li>Multiple snapshots form a chain — each overlay references the previous as its backing file</li>
+      <li>Deleting a snapshot <strong>merges</strong> the overlay into the base (called "commit")</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Take a live snapshot (includes RAM)</span>
+    <div class="output">qm snapshot 100 before-upgrade --vmstate</div>
+    <span class="prompt"># List snapshots</span>
+    <div class="output">qm listsnapshot 100</div>
+    <span class="prompt"># Rollback (VM must be stopped for disk-only snapshots)</span>
+    <div class="output">qm rollback 100 before-upgrade</div>
+    <span class="prompt"># Delete a snapshot (merges overlay)</span>
+    <div class="output">qm delsnapshot 100 before-upgrade</div>
+  </div>
+
+  <!-- Clone -->
+  <h3>Clone</h3>
+
+  <div class="comparison">
+    <div class="comp-side type1">
+      <div class="comp-header">Full Clone</div>
+      <div class="comp-body">
+        <ul>
+          <li>Complete independent copy of all disks</li>
+          <li>No dependency on source VM</li>
+          <li>Takes more time and storage space</li>
+          <li>Source can be deleted safely</li>
+          <li><code>qm clone 100 200 --full --name clone-full</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side type2">
+      <div class="comp-header">Linked Clone</div>
+      <div class="comp-body">
+        <ul>
+          <li>Uses source snapshot as <strong>backing file</strong></li>
+          <li>Only stores <strong>differences</strong> — very fast, saves space</li>
+          <li><strong>Depends on source</strong> — cannot delete the base snapshot</li>
+          <li>Great for dev/test environments</li>
+          <li><code>qm clone 100 201 --name clone-linked</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Networking                                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Networking</h2>
+
+  <!-- vmbr bridges -->
+  <h3>vmbr Bridges — The Foundation</h3>
+
+  <p>Proxmox uses <strong>Linux bridges</strong> (named <code>vmbr0</code>, <code>vmbr1</code>, etc.) as virtual switches.
+     Each VM NIC connects to a bridge via a <strong>tap interface</strong>.</p>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Physical Server</span>
+    <div class="nest-box os">
+      <span class="nest-label">Proxmox Host (Linux Kernel)</span>
+      <div style="display:flex; gap:2rem; flex-wrap:wrap; align-items:flex-start;">
+        <div class="nest-box hypervisor" style="flex:1; min-width:200px;">
+          <span class="nest-label">vmbr0 (Linux Bridge)</span>
+          <p style="margin:0.3rem 0; font-size:0.85rem; opacity:0.8;">Connected to eth0 (physical NIC)</p>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <div class="nest-box vm">
+              <span class="nest-label">tap100i0</span>
+              <p style="margin:0; font-size:0.8rem;">VM 100 eth0</p>
+            </div>
+            <div class="nest-box vm">
+              <span class="nest-label">tap101i0</span>
+              <p style="margin:0; font-size:0.8rem;">VM 101 eth0</p>
+            </div>
+            <div class="nest-box container">
+              <span class="nest-label">veth200i0</span>
+              <p style="margin:0; font-size:0.8rem;">CT 200 eth0</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>VM Network Stack — Packet Path</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">&#x1F5A5;</div>
+      <div class="label">VM Guest OS</div>
+      <div class="desc">Application sends packet via guest eth0</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="icon">&#x2699;</div>
+      <div class="label">virtio-net</div>
+      <div class="desc">Paravirtual NIC driver — shared ring buffer with host</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="icon">&#x1F50C;</div>
+      <div class="label">tap interface</div>
+      <div class="desc">tap100i0 — kernel network device on host</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="icon">&#x1F309;</div>
+      <div class="label">vmbr0 bridge</div>
+      <div class="desc">Linux bridge — L2 switching, MAC learning</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="flow-step">
+      <div class="icon">&#x1F310;</div>
+      <div class="label">Physical NIC</div>
+      <div class="desc">eth0/eno1 — out to physical network</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Show bridge members</span>
+    <div class="output">$ bridge link show
+3: eth0: &lt;BROADCAST,MULTICAST,UP&gt; master vmbr0
+7: tap100i0: &lt;BROADCAST,MULTICAST,UP&gt; master vmbr0
+8: tap101i0: &lt;BROADCAST,MULTICAST,UP&gt; master vmbr0</div>
+    <span class="prompt"># Show bridge MAC table</span>
+    <div class="output">$ bridge fdb show br vmbr0 | head -5</div>
+  </div>
+
+  <!-- VLAN-aware bridges -->
+  <h3>VLAN-Aware Bridges</h3>
+
+  <div class="panel">
+    <div class="panel-title">Configuration</div>
+    <p>A single bridge can carry multiple VLANs when <strong>VLAN-aware</strong> mode is enabled.
+       Each VM NIC specifies its VLAN tag in the config.</p>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># /etc/network/interfaces — VLAN-aware bridge</span>
+    <div class="output">auto vmbr0
+iface vmbr0 inet static
+    address 10.0.0.1/24
+    gateway 10.0.0.254
+    bridge-ports eth0
+    bridge-stp off
+    bridge-fd 0
+    bridge-vlan-aware yes
+    bridge-vids 2-4094</div>
+    <span class="prompt"># VM config — assign VLAN tag 100 to VM NIC</span>
+    <div class="output">net0: virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,tag=100</div>
+    <span class="prompt"># VM config — VLAN trunk (multiple VLANs)</span>
+    <div class="output">net0: virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,trunks=100;200;300</div>
+  </div>
+
+  <div class="tip">
+    With VLAN-aware bridges, you do <strong>not</strong> need to create separate <code>vmbr</code> bridges per VLAN.
+    One bridge handles all VLANs — much simpler to manage.
+  </div>
+
+  <!-- OVS -->
+  <h3>Open vSwitch (OVS)</h3>
+
+  <div class="panel">
+    <div class="panel-title">OVS as an Alternative to Linux Bridges</div>
+    <ul>
+      <li><strong>OVS bridges</strong> replace Linux bridges with more advanced features</li>
+      <li>Port mirroring, sFlow/NetFlow monitoring, OpenFlow programmability</li>
+      <li>Better VLAN handling, GRE/VXLAN tunnel endpoints</li>
+      <li>More complex to configure and troubleshoot</li>
+      <li>Install: <code>apt install openvswitch-switch</code>, then configure in Proxmox UI</li>
+    </ul>
+  </div>
+
+  <!-- SDN -->
+  <h3>Software-Defined Networking (Proxmox 7+)</h3>
+
+  <div class="panel">
+    <div class="panel-title">SDN Architecture</div>
+    <p>Proxmox SDN provides a declarative overlay networking model managed from the web UI.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Zones (Transport Layer)</div>
+      <ul>
+        <li><strong>Simple</strong> — isolated bridge, no VLAN, single L2 domain</li>
+        <li><strong>VLAN</strong> — traditional 802.1Q VLANs on existing bridges</li>
+        <li><strong>VXLAN</strong> — L2 overlay over L3 (UDP encapsulation, 16M segment IDs)</li>
+        <li><strong>EVPN</strong> — BGP-based fabric, distributed routing, most advanced</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">VNets (Virtual Networks)</div>
+      <ul>
+        <li>Each VNet belongs to a Zone</li>
+        <li>VNets are the networks VMs/CTs attach to</li>
+        <li>Defined centrally, automatically deployed to all nodes</li>
+        <li>Can have subnets with DHCP, DNS, gateway configuration</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Device Passthrough                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Device Passthrough</h2>
+
+  <!-- PCI/VFIO -->
+  <h3>PCI Passthrough (VFIO)</h3>
+
+  <div class="panel">
+    <div class="panel-title">What is PCI Passthrough?</div>
+    <p>Assign a <strong>physical PCI device</strong> (GPU, NIC, NVMe controller, etc.) directly to a VM.
+       The VM gets <strong>bare-metal performance</strong> for that device. The host <strong>loses access</strong> to it.</p>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Enable IOMMU in BIOS &amp; kernel</strong>
+        <div class="terminal">
+          <span class="prompt"># /etc/default/grub — Intel</span>
+          <div class="output">GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt"</div>
+          <span class="prompt"># /etc/default/grub — AMD</span>
+          <div class="output">GRUB_CMDLINE_LINUX_DEFAULT="quiet amd_iommu=on iommu=pt"</div>
+          <span class="prompt"># Apply</span>
+          <div class="output">update-grub && reboot</div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Identify IOMMU groups</strong>
+        <div class="terminal">
+          <span class="prompt"># List IOMMU groups and their devices</span>
+          <div class="output">find /sys/kernel/iommu_groups/ -type l | sort -V</div>
+          <span class="prompt"># All devices in the same IOMMU group must be passed through together</span>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Bind device to vfio-pci driver</strong>
+        <div class="terminal">
+          <span class="prompt"># /etc/modprobe.d/vfio.conf</span>
+          <div class="output">options vfio-pci ids=10de:2484,10de:228b</div>
+          <span class="prompt"># /etc/modules</span>
+          <div class="output">vfio
+vfio_iommu_type1
+vfio_pci</div>
+          <div class="output">update-initramfs -u -k all && reboot</div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Add to VM config</strong>
+        <div class="terminal">
+          <span class="prompt"># VM must use q35 machine type</span>
+          <div class="output">machine: q35
+hostpci0: 0000:01:00.0,pcie=1,x-vga=1</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>IOMMU group rule:</strong> All devices in the same IOMMU group must be passed through to the same VM
+    (or all left on the host). You cannot split an IOMMU group. Check groups carefully before planning passthrough.
+  </div>
+
+  <!-- SR-IOV -->
+  <h3>SR-IOV (Single Root I/O Virtualization)</h3>
+
+  <div class="panel">
+    <div class="panel-title">SR-IOV Architecture</div>
+    <p>A single physical NIC presents multiple <strong>Virtual Functions (VFs)</strong>,
+       each of which can be passed to a different VM. Unlike full passthrough,
+       the host keeps the <strong>Physical Function (PF)</strong>.</p>
+  </div>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">SR-IOV NIC (e.g., Intel X710)</span>
+    <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+      <div class="nest-box hypervisor">
+        <span class="nest-label">PF (Physical Function)</span>
+        <p style="margin:0; font-size:0.85rem;">Host manages — driver: i40e</p>
+      </div>
+      <div class="nest-box vm">
+        <span class="nest-label">VF 0</span>
+        <p style="margin:0; font-size:0.85rem;">Passed to VM 100</p>
+      </div>
+      <div class="nest-box vm">
+        <span class="nest-label">VF 1</span>
+        <p style="margin:0; font-size:0.85rem;">Passed to VM 101</p>
+      </div>
+      <div class="nest-box vm">
+        <span class="nest-label">VF 2</span>
+        <p style="margin:0; font-size:0.85rem;">Passed to VM 102</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Enable 4 VFs on a NIC</span>
+    <div class="output">echo 4 > /sys/class/net/eth1/device/sriov_numvfs</div>
+    <span class="prompt"># Verify</span>
+    <div class="output">lspci | grep "Virtual Function"</div>
+  </div>
+
+  <!-- USB Passthrough -->
+  <h3>USB Passthrough</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">By Device ID</div>
+      <p>Follows the device regardless of which USB port it is plugged into.</p>
+      <div class="terminal">
+        <span class="prompt"># Find device</span>
+        <div class="output">lsusb
+Bus 002 Device 003: ID 046d:c52b Logitech</div>
+        <span class="prompt"># VM config</span>
+        <div class="output">usb0: host=046d:c52b</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">By Port</div>
+      <p>Always passes the specific USB port, regardless of what device is plugged in.</p>
+      <div class="terminal">
+        <span class="prompt"># VM config — host bus 2, port 3</span>
+        <div class="output">usb0: host=2-3</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Cross References                          -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Cross-References</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">VLANs</div>
+      <p>For 802.1Q VLAN fundamentals, tagging, trunk vs access ports, and inter-VLAN routing,
+         see <strong>Net 02 — VLANs</strong>.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Bridges &amp; Tap Interfaces</div>
+      <p>For Linux bridge internals, tap/tun devices, veth pairs, and how virtual networking works at the kernel level,
+         see <strong>Net 09 — Bridges &amp; Tap Devices</strong>.</p>
+    </div>
+  </div>
+
+</body>
+</html>

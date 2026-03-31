@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 10 — Proxmox VE Architecture</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 10 — Proxmox VE Architecture</h1>
+  <p class="subtitle">Open-source virtualization management — KVM VMs and LXC containers on Debian</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- What is Proxmox VE?                       -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>What is Proxmox VE?</h2>
+
+  <div class="panel">
+    <div class="panel-title">Proxmox Virtual Environment at a Glance</div>
+    <ul>
+      <li><strong>Open-source</strong> server virtualization management platform built on <strong>Debian GNU/Linux</strong></li>
+      <li>Manages two compute workload types side by side: <strong>KVM virtual machines</strong> and <strong>LXC containers</strong></li>
+      <li>Ships a full <strong>web UI</strong> on port <code>8006</code> (HTTPS), a <strong>REST API</strong>, and <strong>CLI tools</strong> (<code>qm</code>, <code>pct</code>, <code>pvesh</code>, <code>pvecm</code>, etc.)</li>
+      <li><strong>AGPL v3</strong> licensed — free to run in production; optional paid enterprise repository &amp; support subscriptions</li>
+      <li>Built-in clustering, live migration, HA, backup, software-defined networking, and multiple storage backends</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    Proxmox is <em>not</em> a hypervisor itself — it is a <strong>management layer</strong> on top of KVM (for VMs) and LXC (for containers).
+    The actual hypervisor is the <strong>Linux kernel's KVM module</strong>.
+  </div>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Bare-Metal Server (x86_64)</span>
+    <div class="nest-box os">
+      <span class="nest-label">Debian Linux + Proxmox Packages</span>
+      <div class="nest-box hypervisor">
+        <span class="nest-label">KVM (kernel module)</span>
+        <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+          <div class="nest-box vm">
+            <span class="nest-label">VM 100 (Windows)</span>
+          </div>
+          <div class="nest-box vm">
+            <span class="nest-label">VM 101 (Ubuntu)</span>
+          </div>
+        </div>
+      </div>
+      <div class="nest-box runtime">
+        <span class="nest-label">LXC Runtime</span>
+        <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+          <div class="nest-box container">
+            <span class="nest-label">CT 200 (Debian)</span>
+          </div>
+          <div class="nest-box container">
+            <span class="nest-label">CT 201 (Alpine)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Core Components                           -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Core Components</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">pve-manager</div>
+      <p>Web interface &amp; API server. Written in <strong>Perl</strong> with an <strong>ExtJS</strong> frontend.
+         Listens on <code>https://&lt;node&gt;:8006</code>.
+         Every action in the UI maps to a REST API call — anything clickable is scriptable.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">pve-cluster (pmxcfs + Corosync)</div>
+      <p>Cluster-wide filesystem mounted at <code>/etc/pve/</code>.
+         Backed by <strong>SQLite</strong>, replicated in real time via <strong>Corosync</strong>.
+         All node configs, VM configs, firewall rules, and HA state live here.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">pve-firewall</div>
+      <p>Distributed firewall — rules defined per-datacenter, per-host, or per-VM/CT.
+         Configs stored in <code>/etc/pve/firewall/</code>.
+         Uses <strong>iptables</strong> (legacy) or <strong>nftables</strong> (Proxmox 8+) under the hood.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">pve-ha-manager</div>
+      <p>High availability manager. Monitors HA-flagged resources and coordinates automatic failover.
+         Relies on Corosync for quorum and fencing for safety (STONITH).</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">qemu-server</div>
+      <p>KVM VM management daemon. Generates QEMU command lines from declarative config files.
+         Configs: <code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code>.
+         CLI tool: <code>qm</code>.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">pve-container</div>
+      <p>LXC container management. Creates and manages system containers.
+         Configs: <code>/etc/pve/lxc/&lt;ctid&gt;.conf</code>.
+         CLI tool: <code>pct</code>.</p>
+    </div>
+  </div>
+
+  <div class="tip">
+    The <code>/etc/pve/</code> directory is <strong>not</strong> a normal filesystem — it is a FUSE mount backed by <code>pmxcfs</code>.
+    Edits propagate to all cluster nodes in real time. Never store large files here.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- KVM Virtual Machines in Proxmox           -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>KVM Virtual Machines in Proxmox</h2>
+
+  <p>Each Proxmox KVM VM is ultimately a <strong>QEMU process</strong> running on the host.
+     Proxmox reads the <code>.conf</code> file, translates it into a <code>qemu-system-x86_64</code> command line
+     with dozens of flags, and manages the process lifecycle.</p>
+
+  <h3>Example VM Config</h3>
+
+  <div class="file-tree">
+    <div class="dir">/etc/pve/qemu-server/
+      <div class="file highlight">100.conf</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># /etc/pve/qemu-server/100.conf</span>
+    <div class="output">boot: order=scsi0;ide2;net0
+cores: 4
+memory: 8192
+name: ubuntu-server
+net0: virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,firewall=1
+scsi0: local-lvm:vm-100-disk-0,size=64G,iothread=1,ssd=1
+scsihw: virtio-scsi-single
+machine: q35
+cpu: host
+ostype: l26
+agent: 1
+balloon: 2048
+numa: 0
+onboot: 1</div>
+  </div>
+
+  <h3>Machine Types</h3>
+
+  <div class="comparison">
+    <div class="comp-side type1">
+      <div class="comp-header">i440fx (Legacy)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Emulates the classic Intel 440FX chipset</li>
+          <li><strong>Maximum compatibility</strong> — works with old OSes</li>
+          <li>PCI bus only (no native PCIe)</li>
+          <li>BIOS boot (SeaBIOS)</li>
+          <li>Good default if you don't need passthrough</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side type2">
+      <div class="comp-header">q35 (Modern)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Emulates the Intel ICH9/Q35 chipset</li>
+          <li><strong>Native PCIe</strong> — required for PCI passthrough</li>
+          <li>UEFI boot (OVMF) support</li>
+          <li>Secure Boot capable</li>
+          <li><strong>Required</strong> for GPU passthrough, NVMe passthrough</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>CPU Types</h3>
+
+  <table>
+    <tr>
+      <th>CPU Type</th>
+      <th>Description</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>host</code></td>
+      <td>Passes all host CPU flags to guest</td>
+      <td>Best performance; prevents migration to different CPU family</td>
+    </tr>
+    <tr>
+      <td><code>kvm64</code></td>
+      <td>Minimal x86_64 baseline</td>
+      <td>Safe for migration between any x86_64 hosts</td>
+    </tr>
+    <tr>
+      <td><code>qemu64</code></td>
+      <td>QEMU's default virtual CPU</td>
+      <td>Maximum compatibility, some perf trade-offs</td>
+    </tr>
+    <tr>
+      <td><code>x86-64-v2-AES</code></td>
+      <td>Microarch level 2 + AES-NI</td>
+      <td>Good balance: migratable within modern hardware</td>
+    </tr>
+    <tr>
+      <td>Named models<br>(<code>Skylake-Server</code>, <code>EPYC-Rome</code>, etc.)</td>
+      <td>Expose a well-defined CPU feature set</td>
+      <td>Migratable within same-generation hardware</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    Using <code>cpu: host</code> gives the best performance but <strong>prevents live migration</strong>
+    to a node with a different CPU generation. For mixed clusters, use a named model or <code>x86-64-v2-AES</code>.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- LXC Containers in Proxmox                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>LXC Containers in Proxmox</h2>
+
+  <p>Proxmox LXC containers are <strong>system containers</strong> — they run a full <code>init</code> system
+     (systemd, OpenRC) and behave like lightweight VMs. This is fundamentally different from Docker's
+     <strong>application containers</strong> that run a single process.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">What LXC Containers Share with the Host</div>
+      <ul>
+        <li><strong>Kernel</strong> — same kernel as the Proxmox host (cannot run Windows)</li>
+        <li><strong>Kernel modules</strong> — containers cannot load their own modules</li>
+        <li><strong>Hardware clock</strong></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">What LXC Containers Isolate</div>
+      <ul>
+        <li><strong>Mount namespace</strong> — own root filesystem</li>
+        <li><strong>PID namespace</strong> — PID 1 inside is container's init</li>
+        <li><strong>Network namespace</strong> — own interfaces, IPs, routes</li>
+        <li><strong>UTS namespace</strong> — own hostname</li>
+        <li><strong>IPC namespace</strong> — own shared memory, semaphores</li>
+        <li><strong>User namespace</strong> (unprivileged only) — UID mapping</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Privileged vs Unprivileged Containers</h3>
+
+  <div class="comparison">
+    <div class="comp-side bad">
+      <div class="comp-header">Privileged Container</div>
+      <div class="comp-body">
+        <ul>
+          <li>Container UID 0 = Host UID 0</li>
+          <li>Root inside container <strong>is real root</strong> on the host</li>
+          <li>Container escape = <strong>full host compromise</strong></li>
+          <li>Easier to set up (no UID mapping issues)</li>
+          <li>Needed for some workloads (NFS server, Docker-in-LXC)</li>
+          <li><strong>Avoid unless required</strong></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side good">
+      <div class="comp-header">Unprivileged Container</div>
+      <div class="comp-body">
+        <ul>
+          <li>Container UID 0 maps to Host UID <strong>100000+</strong></li>
+          <li>Root inside container is an <strong>unprivileged user</strong> on host</li>
+          <li>Container escape = <strong>nobody-level access</strong></li>
+          <li>Uses <strong>user namespaces</strong> for UID/GID mapping</li>
+          <li>Default and <strong>recommended</strong> for all new containers</li>
+          <li>Some features may need <code>features:</code> flags in config</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Unprivileged container UID mapping in config</span>
+    <div class="output">lxc.idmap: u 0 100000 65536
+lxc.idmap: g 0 100000 65536</div>
+    <span class="prompt"># Container root (UID 0) → Host UID 100000</span>
+    <span class="prompt"># Container UID 1000 → Host UID 101000</span>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- KVM vs LXC Comparison                     -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>KVM vs LXC — Side-by-Side Comparison</h2>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>KVM Virtual Machine</th>
+      <th>LXC Container</th>
+    </tr>
+    <tr>
+      <td><strong>Kernel</strong></td>
+      <td>Own kernel (any OS)</td>
+      <td>Shared host kernel (Linux only)</td>
+    </tr>
+    <tr>
+      <td><strong>Boot time</strong></td>
+      <td>~10-30 seconds</td>
+      <td>~1-2 seconds</td>
+    </tr>
+    <tr>
+      <td><strong>RAM overhead</strong></td>
+      <td>~256 MB+ (kernel + OS + workload)</td>
+      <td>Minimal (~10-30 MB base)</td>
+    </tr>
+    <tr>
+      <td><strong>Isolation</strong></td>
+      <td>Strong — hardware-level (VMCS, EPT)</td>
+      <td>Namespace-based — kernel shared</td>
+    </tr>
+    <tr>
+      <td><strong>OS support</strong></td>
+      <td>Any: Windows, BSD, Linux, etc.</td>
+      <td>Linux only</td>
+    </tr>
+    <tr>
+      <td><strong>Live migration</strong></td>
+      <td>Yes (pre-copy memory)</td>
+      <td>Yes (CRIU-based, less mature)</td>
+    </tr>
+    <tr>
+      <td><strong>Device passthrough</strong></td>
+      <td>Full PCI/VFIO, USB, GPU</td>
+      <td>Limited (bind mounts, some device nodes)</td>
+    </tr>
+    <tr>
+      <td><strong>Density</strong></td>
+      <td>Lower — each VM has full kernel</td>
+      <td>Higher — share kernel, minimal overhead</td>
+    </tr>
+    <tr>
+      <td><strong>Security profile</strong></td>
+      <td>Stronger (hardware boundary)</td>
+      <td>Weaker (kernel attack surface shared)</td>
+    </tr>
+    <tr>
+      <td><strong>Config location</strong></td>
+      <td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+      <td><code>/etc/pve/lxc/&lt;ctid&gt;.conf</code></td>
+    </tr>
+    <tr>
+      <td><strong>CLI tool</strong></td>
+      <td><code>qm</code></td>
+      <td><code>pct</code></td>
+    </tr>
+    <tr>
+      <td><strong>Best for</strong></td>
+      <td>Windows, untrusted workloads, GPU, custom kernels</td>
+      <td>Linux services, high density, fast provisioning</td>
+    </tr>
+  </table>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Proxmox Architecture Topology             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Proxmox Cluster Topology</h2>
+
+  <div class="topology">
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F5A5;</div>
+      <div class="topo-label">Node 1 (pve1)</div>
+      <div class="topo-detail">VM 100, CT 200</div>
+    </div>
+    <div class="topo-link">Corosync ring</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F5A5;</div>
+      <div class="topo-label">Node 2 (pve2)</div>
+      <div class="topo-detail">VM 101, CT 201</div>
+    </div>
+    <div class="topo-link">Corosync ring</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#x1F5A5;</div>
+      <div class="topo-label">Node 3 (pve3)</div>
+      <div class="topo-detail">VM 102, CT 202</div>
+    </div>
+  </div>
+
+  <p style="text-align:center; opacity:0.7;">All nodes share <code>/etc/pve/</code> via pmxcfs &mdash; configs are always in sync</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Cross References                          -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Cross-References</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">KVM/QEMU Internals</div>
+      <p>For deep dives into hypervisor types, VMCS, VMX transitions, and how KVM works at the CPU level,
+         see <strong>Virt 01 — Hypervisors</strong>.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Linux Namespaces</div>
+      <p>For detailed namespace mechanics (mount, PID, net, user, UTS, IPC, cgroup, time),
+         see <strong>Virt 02 — Namespaces</strong>.</p>
+    </div>
+  </div>
+
+</body>
+</html>
