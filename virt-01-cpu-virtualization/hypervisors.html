@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 01 — Hypervisors: Type 1, Type 2, and KVM</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 01 — Hypervisors: Type 1, Type 2, and KVM</h1>
+  <p class="subtitle">The software layer that makes virtual machines possible</p>
+
+  <!-- ===== SECTION 1: Type 1 vs Type 2 ===== -->
+  <h2>Type 1 vs Type 2 Hypervisors</h2>
+
+  <div class="panel">
+    <div class="panel-title">Two Fundamental Architectures</div>
+    <p>
+      Every hypervisor falls into one of two categories based on <strong>where it sits relative to the hardware</strong>.
+      The distinction determines overhead, performance, and use case.
+    </p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side type1">
+      <div class="comp-header type1">Type 1 — Bare-Metal</div>
+      <div class="comp-body">
+        <p>Runs <strong>directly on hardware</strong> — no host OS underneath.</p>
+        <ul>
+          <li>The hypervisor <em>is</em> the operating system</li>
+          <li>Direct access to CPU, memory, NIC, storage</li>
+          <li>Lower overhead — no host OS context switches</li>
+          <li>Used in datacenters and enterprise production</li>
+        </ul>
+        <p><strong>Examples:</strong> VMware ESXi, Xen, Microsoft Hyper-V</p>
+      </div>
+    </div>
+    <div class="comp-side type2">
+      <div class="comp-header type2">Type 2 — Hosted</div>
+      <div class="comp-body">
+        <p>Runs <strong>as an application</strong> on top of a host OS.</p>
+        <ul>
+          <li>The hypervisor is a regular userspace process</li>
+          <li>Hardware access goes through the host OS kernel</li>
+          <li>Higher overhead — extra OS layer in the path</li>
+          <li>Used for desktop development and testing</li>
+        </ul>
+        <p><strong>Examples:</strong> VirtualBox, VMware Workstation, QEMU (without KVM)</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Architecture Stack: Type 1</h3>
+  <div class="nest-box hardware">
+    <div class="nest-label">Hardware (CPU, RAM, NIC, Disk)</div>
+    <div class="nest-box hypervisor">
+      <div class="nest-label">Type 1 Hypervisor (ESXi / Xen / Hyper-V)</div>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div class="nest-box vm">
+          <div class="nest-label">VM 1</div>
+          <div class="nest-box os">
+            <div class="nest-label">Guest OS</div>
+            <p>Apps</p>
+          </div>
+        </div>
+        <div class="nest-box vm">
+          <div class="nest-label">VM 2</div>
+          <div class="nest-box os">
+            <div class="nest-label">Guest OS</div>
+            <p>Apps</p>
+          </div>
+        </div>
+        <div class="nest-box vm">
+          <div class="nest-label">VM 3</div>
+          <div class="nest-box os">
+            <div class="nest-label">Guest OS</div>
+            <p>Apps</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Architecture Stack: Type 2</h3>
+  <div class="nest-box hardware">
+    <div class="nest-label">Hardware (CPU, RAM, NIC, Disk)</div>
+    <div class="nest-box os">
+      <div class="nest-label">Host OS (Windows / macOS / Linux)</div>
+      <div class="nest-box hypervisor">
+        <div class="nest-label">Type 2 Hypervisor (VirtualBox / VMware Workstation)</div>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+          <div class="nest-box vm">
+            <div class="nest-label">VM 1</div>
+            <div class="nest-box os">
+              <div class="nest-label">Guest OS</div>
+              <p>Apps</p>
+            </div>
+          </div>
+          <div class="nest-box vm">
+            <div class="nest-label">VM 2</div>
+            <div class="nest-box os">
+              <div class="nest-label">Guest OS</div>
+              <p>Apps</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> Type 1 has one fewer layer. Every I/O request from a VM goes directly to the
+    hypervisor, which talks to hardware. In Type 2, it must traverse: VM &rarr; Hypervisor &rarr; Host OS kernel &rarr; Hardware.
+  </div>
+
+  <!-- ===== SECTION 2: KVM ===== -->
+  <h2>KVM: The Hybrid</h2>
+
+  <div class="panel">
+    <div class="panel-title">Kernel-based Virtual Machine</div>
+    <p>
+      KVM is a <strong>Linux kernel module</strong> (<code>kvm.ko</code> + <code>kvm-intel.ko</code> or <code>kvm-amd.ko</code>)
+      that turns the Linux kernel itself into a Type 1 hypervisor. It was merged into mainline Linux in 2007 (kernel 2.6.20).
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why KVM is Technically Type 1</div>
+    <ul>
+      <li>KVM runs <strong>inside the kernel</strong>, not as a userspace application</li>
+      <li>It uses hardware virtualization extensions (Intel VT-x / AMD-V) directly</li>
+      <li>The Linux kernel <em>becomes</em> the hypervisor — it is not running <em>on top of</em> an OS, it <em>is</em> the OS</li>
+      <li>But it retains all the power of a full Linux kernel: schedulers, drivers, filesystems, cgroups, namespaces</li>
+    </ul>
+  </div>
+
+  <h3>The /dev/kvm Interface</h3>
+
+  <div class="panel">
+    <div class="panel-title">How Userspace Talks to KVM</div>
+    <p>
+      KVM exposes itself via <code>/dev/kvm</code> — a character device file. Userspace programs (like QEMU) interact
+      with KVM entirely through <code>ioctl()</code> system calls on file descriptors obtained from this device.
+    </p>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">1</div>
+      <div class="label">open(/dev/kvm)</div>
+      <div class="desc">Get system fd — query capabilities, API version</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">2</div>
+      <div class="label">ioctl(KVM_CREATE_VM)</div>
+      <div class="desc">Returns a VM fd — represents one virtual machine</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">3</div>
+      <div class="label">ioctl(KVM_CREATE_VCPU)</div>
+      <div class="desc">Returns a vCPU fd — one per virtual processor</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">4</div>
+      <div class="label">ioctl(KVM_RUN)</div>
+      <div class="desc">Enter guest mode — CPU executes guest code natively</div>
+    </div>
+  </div>
+
+  <h3>VMs as Linux Processes</h3>
+
+  <div class="panel">
+    <div class="panel-title">The KVM Process Model</div>
+    <p>This is KVM's most elegant design decision:</p>
+    <ul>
+      <li>Each VM is a regular Linux <strong>process</strong> (specifically, a QEMU process)</li>
+      <li>Each vCPU is a <strong>thread</strong> within that QEMU process</li>
+      <li>VM memory is just the process's <strong>address space</strong> (anonymous mmap'd memory)</li>
+    </ul>
+    <p>This means VMs automatically get all Linux kernel capabilities:</p>
+  </div>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Scheduling</div>
+      <p>CFS (Completely Fair Scheduler) schedules vCPU threads alongside all other processes. No custom scheduler needed.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Resource Limits</div>
+      <p><code>cgroups</code> limit CPU, memory, I/O bandwidth per VM. Same tools you use for containers work for VMs.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Process Isolation</div>
+      <p>Standard Linux process isolation. <code>kill</code>, <code>nice</code>, <code>taskset</code>, <code>numactl</code> — all work on VMs.</p>
+    </div>
+  </div>
+
+  <h3>KVM Architecture Diagram</h3>
+
+  <div class="nest-box hardware">
+    <div class="nest-label">Hardware (CPU with VT-x/AMD-V, RAM, Devices)</div>
+    <div class="nest-box os">
+      <div class="nest-label">Linux Kernel + KVM Module (= Type 1 Hypervisor)</div>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div class="nest-box vm">
+          <div class="nest-label">QEMU Process (PID 1234) = VM 1</div>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <div class="nest-box runtime">
+              <div class="nest-label">Thread 1 = vCPU 0</div>
+            </div>
+            <div class="nest-box runtime">
+              <div class="nest-label">Thread 2 = vCPU 1</div>
+            </div>
+            <div class="nest-box runtime">
+              <div class="nest-label">I/O Thread</div>
+            </div>
+          </div>
+        </div>
+        <div class="nest-box vm">
+          <div class="nest-label">QEMU Process (PID 5678) = VM 2</div>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <div class="nest-box runtime">
+              <div class="nest-label">Thread 1 = vCPU 0</div>
+            </div>
+            <div class="nest-box runtime">
+              <div class="nest-label">Thread 2 = vCPU 1</div>
+            </div>
+            <div class="nest-box runtime">
+              <div class="nest-label">I/O Thread</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$</span> ps aux | grep qemu<br>
+    <span class="output">libvirt+ 1234 45.2 25.0 ... qemu-system-x86_64 -name vm1 -smp 2 -m 4096 ...</span><br>
+    <span class="output">libvirt+ 5678 32.1 12.5 ... qemu-system-x86_64 -name vm2 -smp 2 -m 2048 ...</span><br><br>
+    <span class="prompt">$</span> ls -la /dev/kvm<br>
+    <span class="output">crw-rw---- 1 root kvm 10, 232 Mar 31 10:00 /dev/kvm</span><br><br>
+    <span class="prompt">$</span> ls /proc/1234/task/<br>
+    <span class="output">1234  1235  1236  1237</span>
+    <span class="output"># Thread 1234 = main, 1235 = vCPU 0, 1236 = vCPU 1, 1237 = I/O</span>
+  </div>
+
+  <!-- ===== SECTION 3: QEMU ===== -->
+  <h2>QEMU: The Device Emulator</h2>
+
+  <div class="panel">
+    <div class="panel-title">What QEMU Actually Does</div>
+    <p>
+      QEMU (Quick Emulator) is a userspace program that can emulate an <strong>entire computer system</strong>:
+      CPU, memory, disk controllers, network cards, USB, display adapters, BIOS/UEFI firmware.
+    </p>
+  </div>
+
+  <h3>QEMU Alone vs QEMU + KVM</h3>
+
+  <div class="comparison">
+    <div class="comp-side bad">
+      <div class="comp-header bad">QEMU Alone (TCG Mode)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Uses <strong>Tiny Code Generator (TCG)</strong> — a JIT binary translator</li>
+          <li>Translates every guest instruction to host instructions at runtime</li>
+          <li>~5-10x overhead on CPU-bound workloads</li>
+          <li>Can emulate <em>different</em> architectures (e.g., ARM on x86)</li>
+          <li>No hardware virtualization extensions required</li>
+        </ul>
+        <p><strong>Use case:</strong> cross-architecture development, firmware testing</p>
+      </div>
+    </div>
+    <div class="comp-side good">
+      <div class="comp-header good">QEMU + KVM</div>
+      <div class="comp-body">
+        <ul>
+          <li>CPU runs guest code <strong>natively</strong> via hardware VT-x/AMD-V</li>
+          <li>KVM handles CPU virtualization — near-zero CPU overhead</li>
+          <li>QEMU handles <strong>device emulation</strong> only (I/O path)</li>
+          <li>Same architecture only (x86 guest on x86 host)</li>
+          <li>Requires VT-x/AMD-V support in CPU</li>
+        </ul>
+        <p><strong>Use case:</strong> production VMs, cloud infrastructure</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>What QEMU Emulates (Even with KVM)</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Storage</div>
+      <ul>
+        <li>IDE / AHCI controllers</li>
+        <li>SCSI controllers (LSI, megasas)</li>
+        <li>NVMe controllers</li>
+        <li>Floppy drives</li>
+        <li>virtio-blk, virtio-scsi</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Networking</div>
+      <ul>
+        <li>e1000 / e1000e (Intel GbE)</li>
+        <li>rtl8139 (Realtek)</li>
+        <li>virtio-net</li>
+        <li>TAP/bridge backends</li>
+        <li>User-mode networking (SLiRP)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Other Devices</div>
+      <ul>
+        <li>USB controllers (UHCI, EHCI, xHCI)</li>
+        <li>Display (VGA, QXL, virtio-gpu)</li>
+        <li>Sound (AC97, HDA)</li>
+        <li>BIOS (SeaBIOS) / UEFI (OVMF)</li>
+        <li>Serial, parallel ports</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>The QEMU Process Lifecycle</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">1</div>
+      <div class="label">Start QEMU</div>
+      <div class="desc"><code>qemu-system-x86_64</code> process launches with VM config (CPU, RAM, devices)</div>
+    </div>
+    <div class="arrow">&darr;</div>
+    <div class="flow-step">
+      <div class="icon">2</div>
+      <div class="label">Open /dev/kvm</div>
+      <div class="desc"><code>open("/dev/kvm")</code> &rarr; get system fd, check API version and extensions</div>
+    </div>
+    <div class="arrow">&darr;</div>
+    <div class="flow-step">
+      <div class="icon">3</div>
+      <div class="label">Create VM</div>
+      <div class="desc"><code>ioctl(KVM_CREATE_VM)</code> &rarr; allocate memory regions, set up address space</div>
+    </div>
+    <div class="arrow">&darr;</div>
+    <div class="flow-step">
+      <div class="icon">4</div>
+      <div class="label">Create vCPUs</div>
+      <div class="desc"><code>ioctl(KVM_CREATE_VCPU)</code> per vCPU &rarr; spawn one thread per vCPU</div>
+    </div>
+    <div class="arrow">&darr;</div>
+    <div class="flow-step">
+      <div class="icon">5</div>
+      <div class="label">Enter Guest Mode</div>
+      <div class="desc">Each vCPU thread calls <code>ioctl(KVM_RUN)</code> in a loop</div>
+    </div>
+    <div class="arrow">&darr;</div>
+    <div class="flow-step">
+      <div class="icon">6</div>
+      <div class="label">VM Exit Handling</div>
+      <div class="desc">On I/O, MMIO, or exception &rarr; KVM_RUN returns &rarr; QEMU handles it &rarr; re-enter guest</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The KVM_RUN loop:</strong> Each vCPU thread spends most of its time in guest mode (ring 0 of the guest, non-root mode
+    of VT-x). When the guest does something the hardware can't handle alone — like an I/O port access, an MMIO write, or a
+    <code>HLT</code> instruction — the CPU triggers a <strong>VM exit</strong>, returning control to the KVM module, which
+    either handles it in-kernel or bounces it to QEMU userspace.
+  </div>
+
+  <h3>VM Exit Flow</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">&circlearrowright;</div>
+      <div class="label">Guest Code</div>
+      <div class="desc">CPU in VMX non-root mode, executing guest instructions natively</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">&uarr;</div>
+      <div class="label">VM Exit</div>
+      <div class="desc">Guest accesses I/O port, MMIO region, or executes privileged instruction</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">&darr;</div>
+      <div class="label">KVM (Kernel)</div>
+      <div class="desc">Handles simple exits in-kernel (e.g., CR register access, MSR read/write)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">&darr;</div>
+      <div class="label">QEMU (Userspace)</div>
+      <div class="desc">Handles complex exits — device I/O emulation, MMIO to emulated hardware</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">&circlearrowright;</div>
+      <div class="label">VM Entry</div>
+      <div class="desc"><code>KVM_RUN</code> again &rarr; VMLAUNCH/VMRESUME &rarr; back to guest code</div>
+    </div>
+  </div>
+
+  <!-- ===== SECTION 4: virtio ===== -->
+  <h2>virtio: Paravirtualized Devices</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Problem with Emulated Hardware</div>
+    <p>
+      When QEMU emulates a real hardware device (e.g., an Intel e1000 NIC), every single I/O register access from the guest
+      triggers a <strong>VM exit</strong>. A single network packet might cause dozens of exits. Each exit involves:
+    </p>
+    <ol>
+      <li>CPU saves guest state to VMCS (VM Control Structure)</li>
+      <li>CPU transitions from VMX non-root &rarr; VMX root mode</li>
+      <li>KVM module runs exit handler</li>
+      <li>If I/O-related, control passes to QEMU userspace (kernel &rarr; user context switch)</li>
+      <li>QEMU emulates the hardware register access</li>
+      <li>QEMU calls KVM_RUN again (user &rarr; kernel context switch)</li>
+      <li>CPU restores guest state from VMCS, re-enters VMX non-root mode</li>
+    </ol>
+    <p>
+      <strong>Cost:</strong> Each VM exit/entry cycle takes ~1-2 microseconds. At high I/O rates, this dominates performance.
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Solution: virtio</div>
+    <p>
+      <strong>virtio</strong> is a standardized paravirtualization framework (OASIS standard). Instead of emulating
+      real hardware, both the guest and host agree on an efficient <strong>virtual device protocol</strong>.
+    </p>
+    <ul>
+      <li>The guest <em>knows</em> it is virtualized — no pretending to be real hardware</li>
+      <li>Communication uses <strong>shared memory ring buffers</strong> (virtqueues) instead of I/O port traps</li>
+      <li>Batches of I/O operations per single notification — amortizes VM exit cost</li>
+    </ul>
+  </div>
+
+  <h3>virtio Device Family</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">virtio-net</div>
+      <p>Virtual network card. Guest places packets into a TX virtqueue, host picks them up. Incoming packets placed in RX virtqueue.</p>
+      <p>Supports: checksum offload, TSO/GSO, multiqueue, RSS, VLAN.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">virtio-blk</div>
+      <p>Virtual block device. Guest submits read/write requests directly to a virtqueue — no SCSI/IDE command translation.</p>
+      <p>Simpler and faster than emulated IDE. One virtqueue for requests.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">virtio-scsi</div>
+      <p>Virtual SCSI controller. More feature-rich than virtio-blk: supports many LUNs, hot-plug, SCSI passthrough.</p>
+      <p>Preferred for VMs needing many disks.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Others</div>
+      <ul>
+        <li><strong>virtio-gpu</strong> — 3D-accelerated virtual display</li>
+        <li><strong>virtio-serial</strong> — guest-host communication channel</li>
+        <li><strong>virtio-balloon</strong> — dynamic memory management</li>
+        <li><strong>virtio-rng</strong> — entropy source for guest</li>
+        <li><strong>virtio-fs</strong> — shared filesystem (via FUSE)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Guest drivers required:</strong> The guest OS must have virtio drivers installed. Linux has had them built-in since kernel 2.6.25.
+    For Windows guests, you need to install the <strong>virtio-win</strong> driver package (Red Hat provides ISO images).
+  </div>
+
+  <h3>virtio Architecture: The Virtqueue</h3>
+
+  <div class="panel">
+    <div class="panel-title">How a Virtqueue Works</div>
+    <p>
+      A virtqueue is a shared-memory ring buffer with three regions:
+    </p>
+    <ul>
+      <li><strong>Descriptor Table</strong> — array of buffer descriptors (address, length, flags, next pointer)</li>
+      <li><strong>Available Ring</strong> — guest writes descriptor indices here (producer: guest)</li>
+      <li><strong>Used Ring</strong> — host writes completed descriptor indices here (producer: host)</li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">1</div>
+      <div class="label">Guest Prepares Buffers</div>
+      <div class="desc">Guest driver fills descriptor table entries with data buffer addresses</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">2</div>
+      <div class="label">Guest Publishes</div>
+      <div class="desc">Guest adds descriptor indices to the Available Ring</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">3</div>
+      <div class="label">Guest Kicks</div>
+      <div class="desc">Guest writes to a notification register (triggers VM exit to signal host)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">4</div>
+      <div class="label">Host Processes</div>
+      <div class="desc">Host reads descriptors, processes I/O (sends packet, writes block)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">5</div>
+      <div class="label">Host Completes</div>
+      <div class="desc">Host adds completed descriptors to Used Ring, injects interrupt into guest</div>
+    </div>
+  </div>
+
+  <div class="nest-box vm">
+    <div class="nest-label">Guest VM</div>
+    <div class="nest-box os">
+      <div class="nest-label">Guest Kernel</div>
+      <div class="nest-box runtime">
+        <div class="nest-label">virtio Driver (e.g., virtio-net, virtio-blk)</div>
+        <p>&darr; writes to shared memory &darr;</p>
+      </div>
+    </div>
+  </div>
+  <p style="text-align: center; font-size: 1.5rem;">&udarr; Shared Memory: Virtqueue (Descriptor Table + Available Ring + Used Ring) &udarr;</p>
+  <div class="nest-box hypervisor">
+    <div class="nest-label">Host</div>
+    <div class="nest-box os">
+      <div class="nest-label">QEMU Process</div>
+      <div class="nest-box runtime">
+        <div class="nest-label">virtio Backend (device emulation)</div>
+        <p>&darr; actual I/O &darr;</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key optimization:</strong> Multiple I/O operations can be batched into the virtqueue before a single "kick"
+    notification. This means one VM exit can process many packets/blocks, amortizing the exit cost dramatically.
+  </div>
+
+  <!-- ===== SECTION 5: vhost ===== -->
+  <h2>vhost: Kernel Data-Plane</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Remaining Bottleneck</div>
+    <p>
+      Even with virtio, there's still a problem: the host side of the virtqueue is processed by <strong>QEMU in userspace</strong>.
+      Every batch of I/O requires:
+    </p>
+    <ol>
+      <li>VM exit from guest to KVM (kernel)</li>
+      <li>KVM returns to QEMU (kernel &rarr; userspace context switch)</li>
+      <li>QEMU processes the virtqueue</li>
+      <li>QEMU makes syscalls to do actual I/O (userspace &rarr; kernel context switch)</li>
+    </ol>
+    <p>
+      That's <strong>two extra context switches</strong> per I/O batch just because QEMU sits in userspace.
+    </p>
+  </div>
+
+  <h3>vhost Moves the Data-Plane to the Kernel</h3>
+
+  <div class="comparison">
+    <div class="comp-side bad">
+      <div class="comp-header bad">Without vhost (QEMU handles data)</div>
+      <div class="comp-body">
+        <p>Data path:</p>
+        <ol>
+          <li>Guest &rarr; virtqueue &rarr; VM exit</li>
+          <li>KVM &rarr; return to QEMU userspace</li>
+          <li>QEMU reads virtqueue</li>
+          <li>QEMU &rarr; syscall &rarr; kernel for actual I/O</li>
+          <li>Kernel &rarr; back to QEMU</li>
+          <li>QEMU injects interrupt &rarr; guest</li>
+        </ol>
+        <p><strong>Context switches:</strong> kernel &rarr; user &rarr; kernel &rarr; user</p>
+      </div>
+    </div>
+    <div class="comp-side good">
+      <div class="comp-header good">With vhost (kernel handles data)</div>
+      <div class="comp-body">
+        <p>Data path:</p>
+        <ol>
+          <li>Guest &rarr; virtqueue &rarr; VM exit</li>
+          <li>KVM signals vhost kernel thread</li>
+          <li>vhost thread reads virtqueue directly</li>
+          <li>vhost thread does actual I/O (already in kernel)</li>
+          <li>vhost thread injects interrupt &rarr; guest</li>
+        </ol>
+        <p><strong>Context switches:</strong> stays in kernel the entire time</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>vhost Variants</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">vhost-net</div>
+      <p>
+        Kernel module (<code>vhost_net.ko</code>) that handles virtio-net data plane in kernel space.
+        The vhost-net kernel thread directly moves packets between the guest's virtqueue and a TAP device — no QEMU involvement for data.
+      </p>
+      <p><strong>Benefit:</strong> ~2x network throughput improvement over QEMU-handled virtio-net.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">vhost-scsi</div>
+      <p>
+        Kernel module that handles virtio-scsi data plane. Directly passes SCSI commands from guest virtqueue to the host's
+        target subsystem (LIO/TCM).
+      </p>
+      <p><strong>Benefit:</strong> Lower latency, higher IOPS for block storage.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">vhost-user</div>
+      <p>
+        Same virtqueue bypass concept, but the data-plane runs in a <strong>separate userspace process</strong>
+        instead of the kernel. Communication via Unix domain sockets and shared memory.
+      </p>
+      <p><strong>Used by:</strong> DPDK (for line-rate packet processing), Open vSwitch (OVS-DPDK), SPDK (for storage).</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Control vs Data Plane Split</div>
+      <p>
+        QEMU <strong>always</strong> handles the control plane: device setup, feature negotiation, live migration state.
+        vhost only takes over the <strong>data plane</strong> — the hot path of moving bytes between guest and host.
+      </p>
+      <p>This separation keeps QEMU's device model intact while removing it from the performance-critical path.</p>
+    </div>
+  </div>
+
+  <h3>vhost-net Architecture</h3>
+
+  <div class="nest-box hardware">
+    <div class="nest-label">Hardware (NIC)</div>
+    <div class="nest-box os">
+      <div class="nest-label">Linux Kernel</div>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start;">
+        <div class="nest-box hypervisor">
+          <div class="nest-label">KVM Module</div>
+          <p>VM exits / entries</p>
+        </div>
+        <div class="nest-box runtime">
+          <div class="nest-label">vhost-net Kernel Thread</div>
+          <p>Reads virtqueue directly<br>Writes to TAP fd<br>No userspace round-trip</p>
+        </div>
+        <div class="nest-box container">
+          <div class="nest-label">TAP Device (tap0)</div>
+          <p>Bridge to physical NIC</p>
+        </div>
+      </div>
+      <div class="nest-box vm">
+        <div class="nest-label">QEMU Process (userspace)</div>
+        <p>Control plane only: setup, feature negotiation, live migration</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SECTION 6: Performance Comparison ===== -->
+  <h2>Performance Comparison</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Approach</th>
+        <th>CPU Overhead</th>
+        <th>I/O Overhead</th>
+        <th>Guest Changes Needed</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Full Emulation</strong><br>(QEMU TCG)</td>
+        <td>Very high (~5-10x)<br>Binary translation of every instruction</td>
+        <td>Very high<br>All devices emulated in software</td>
+        <td>None — guest is unaware of virtualization</td>
+        <td>Cross-arch dev (ARM on x86), firmware debugging, no VT-x available</td>
+      </tr>
+      <tr>
+        <td><strong>KVM + Emulated Devices</strong><br>(e.g., e1000, IDE)</td>
+        <td>Near-zero<br>Native CPU execution via VT-x</td>
+        <td>High<br>Every I/O register access = VM exit + QEMU emulation</td>
+        <td>None — guest uses standard drivers (e1000, IDE, etc.)</td>
+        <td>Compatibility-first: unmodified guests, legacy OS, driver availability</td>
+      </tr>
+      <tr>
+        <td><strong>KVM + virtio</strong></td>
+        <td>Near-zero<br>Native CPU execution via VT-x</td>
+        <td>Low<br>Batched I/O via shared ring buffers, fewer VM exits</td>
+        <td>virtio drivers required<br>(built into Linux, separate install for Windows)</td>
+        <td>Production Linux VMs, cloud instances (AWS, GCP use virtio)</td>
+      </tr>
+      <tr>
+        <td><strong>KVM + virtio + vhost</strong></td>
+        <td>Near-zero<br>Native CPU execution via VT-x</td>
+        <td>Very low<br>Data-plane in kernel, no QEMU in hot path</td>
+        <td>virtio drivers required + vhost kernel modules on host</td>
+        <td>High-performance networking/storage, telco NFV, latency-sensitive workloads</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Cloud providers and virtio:</strong> AWS (Nitro/ENA is virtio-based), GCP (uses virtio-net and virtio-scsi),
+    and most OpenStack deployments default to virtio devices. If you've used a cloud VM, you've used virtio.
+  </div>
+
+  <h3>The Full Stack: From Slowest to Fastest</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">1</div>
+      <div class="label">Full Emulation</div>
+      <div class="desc">TCG + emulated HW<br>~5-10x CPU, very high I/O overhead</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">2</div>
+      <div class="label">KVM + Emulated HW</div>
+      <div class="desc">Native CPU, emulated I/O<br>Near-zero CPU, high I/O overhead</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">3</div>
+      <div class="label">KVM + virtio</div>
+      <div class="desc">Native CPU, paravirt I/O<br>Near-zero CPU, low I/O overhead</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="icon">4</div>
+      <div class="label">KVM + virtio + vhost</div>
+      <div class="desc">Native CPU, kernel data-plane<br>Near-zero CPU, very low I/O overhead</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Summary: The Layered Optimization Story</div>
+    <ol>
+      <li><strong>KVM</strong> solved CPU overhead — guest code runs natively on hardware</li>
+      <li><strong>virtio</strong> solved device emulation overhead — shared memory rings replace I/O port traps</li>
+      <li><strong>vhost</strong> solved context switch overhead — data-plane stays in kernel, QEMU exits the hot path</li>
+    </ol>
+    <p>
+      Each layer addresses a specific bottleneck. Together, they achieve near-native performance for
+      both CPU and I/O workloads — which is why KVM+QEMU+virtio+vhost is the dominant virtualization stack
+      in production today (powering AWS, GCP, OpenStack, and most Linux-based clouds).
+    </p>
+  </div>
+
+</body>
+</html>

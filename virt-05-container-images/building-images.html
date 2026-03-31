@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 05 — Building Container Images</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Building Container Images</h1>
+  <p class="subtitle">Dockerfile mechanics, layer caching, multi-stage builds, and BuildKit</p>
+
+  <!-- ========================================== -->
+  <h2>Dockerfile Mechanics</h2>
+  <!-- ========================================== -->
+
+  <p>A Dockerfile is a sequence of instructions that produce an OCI image. Each instruction is executed
+     in order, and some create new filesystem layers while others only modify image metadata.</p>
+
+  <div class="grid-2">
+    <div class="panel" style="border-color: #34d399;">
+      <div class="panel-title" style="color: #34d399;">Layer-Creating Instructions</div>
+      <p>These instructions modify the filesystem and produce a new layer in the image:</p>
+      <table>
+        <tr><th>Instruction</th><th>What It Does</th></tr>
+        <tr><td><code>RUN</code></td><td>Executes a command in a temporary container, snapshots the filesystem changes</td></tr>
+        <tr><td><code>COPY</code></td><td>Copies files from build context into the image filesystem</td></tr>
+        <tr><td><code>ADD</code></td><td>Like COPY, but also auto-extracts tar archives and supports URLs (prefer COPY)</td></tr>
+      </table>
+    </div>
+    <div class="panel" style="border-color: #60a5fa;">
+      <div class="panel-title" style="color: #60a5fa;">Metadata-Only Instructions</div>
+      <p>These modify the image config JSON but do <strong>not</strong> create filesystem layers:</p>
+      <table>
+        <tr><th>Instruction</th><th>What It Sets</th></tr>
+        <tr><td><code>ENV</code></td><td>Environment variables in config</td></tr>
+        <tr><td><code>EXPOSE</code></td><td>Documents ports (does NOT publish them)</td></tr>
+        <tr><td><code>LABEL</code></td><td>Key-value metadata on the image</td></tr>
+        <tr><td><code>CMD</code></td><td>Default arguments to entrypoint</td></tr>
+        <tr><td><code>ENTRYPOINT</code></td><td>The executable to run</td></tr>
+        <tr><td><code>WORKDIR</code></td><td>Sets working directory for subsequent instructions</td></tr>
+        <tr><td><code>USER</code></td><td>Sets UID/GID for RUN, CMD, ENTRYPOINT</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3>The Build Context</h3>
+
+  <div class="panel">
+    <div class="panel-title">What Gets Sent to the Daemon</div>
+    <p>When you run <code>docker build .</code>, the entire directory (the <strong>build context</strong>)
+       is tar'd and sent to the Docker daemon. This happens <em>before</em> any Dockerfile instruction runs.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Without a .dockerignore, everything is sent</strong> — including <code>.git/</code> (potentially hundreds of MB),
+    <code>node_modules/</code>, build artifacts, secrets, etc. This slows down builds and risks leaking sensitive files.
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">No .dockerignore</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt">$ </span>docker build .<br>
+          <span class="output">Sending build context: 847MB</span><br>
+          <span class="cm"># .git/ alone is 200MB</span><br>
+          <span class="cm"># node_modules/ is 500MB</span><br>
+          <span class="cm"># Entire build takes 45 seconds</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With .dockerignore</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt">$ </span>cat .dockerignore<br>
+          <span class="output">.git<br>node_modules<br>*.log<br>dist/<br>.env*</span><br><br>
+          <span class="prompt">$ </span>docker build .<br>
+          <span class="output">Sending build context: 2.3MB</span><br>
+          <span class="cm"># Build takes 3 seconds</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Layer Caching Rules</h2>
+  <!-- ========================================== -->
+
+  <p>Docker's build cache is the primary mechanism for fast incremental builds. Understanding the cache
+     invalidation rules is critical for writing efficient Dockerfiles.</p>
+
+  <div class="panel">
+    <div class="panel-title">How the Cache Works</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Docker processes instructions <strong>top-down</strong>, one at a time</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>For each instruction, it checks: <strong>same instruction text</strong> + <strong>same parent layer</strong>?
+             If yes &rarr; <strong>cache hit</strong>, reuse the cached layer</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>For <code>COPY</code> / <code>ADD</code>: cache is based on <strong>file content checksums</strong>,
+             not timestamps. Changed file content &rarr; cache miss</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>Any cache miss invalidates ALL subsequent layers.</strong> Every instruction after the
+             first miss must be re-executed, even if they haven't changed</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The cascade rule:</strong> Once the cache is busted at instruction N, instructions N+1, N+2, ...
+    all rebuild from scratch. This is why instruction ordering matters enormously.
+  </div>
+
+  <h3>Instruction Ordering: The Critical Optimization</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">BAD — deps reinstalled on every code change</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">FROM</span> node:20-alpine
+
+<span class="kw">WORKDIR</span> /app
+
+<span class="cm"># Copies EVERYTHING — including source code</span>
+<span class="kw">COPY</span> . .            <span class="cm"># cache busts when ANY file changes</span>
+
+<span class="kw">RUN</span> npm install     <span class="cm"># forced to re-run every time!</span>
+<span class="kw">RUN</span> npm run build   <span class="cm"># also re-runs every time</span>
+
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"dist/server.js"</span>]</code></pre>
+        <p style="color: #f87171; font-size: 13px; margin-top: 8px;">
+          Changed one line of code? Full <code>npm install</code> runs again (minutes).
+        </p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">GOOD — deps cached, only code rebuilds</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">FROM</span> node:20-alpine
+
+<span class="kw">WORKDIR</span> /app
+
+<span class="cm"># Copy ONLY dependency files first</span>
+<span class="kw">COPY</span> package.json package-lock.json ./
+
+<span class="cm"># Install deps — cached unless package*.json changed</span>
+<span class="kw">RUN</span> npm ci
+
+<span class="cm"># NOW copy source code</span>
+<span class="kw">COPY</span> . .            <span class="cm"># cache busts here on code change</span>
+<span class="kw">RUN</span> npm run build   <span class="cm"># only this re-runs</span>
+
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"dist/server.js"</span>]</code></pre>
+        <p style="color: #34d399; font-size: 13px; margin-top: 8px;">
+          Changed one line of code? <code>npm ci</code> is cached (seconds).
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> Order Dockerfile instructions from <strong>least frequently changing</strong>
+    (top) to <strong>most frequently changing</strong> (bottom). Base image &rarr; system packages &rarr;
+    dependency manifests &rarr; dependency install &rarr; source code &rarr; build.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Multi-Stage Builds</h2>
+  <!-- ========================================== -->
+
+  <p>Multi-stage builds use <strong>multiple <code>FROM</code> instructions</strong> in a single Dockerfile.
+     Each <code>FROM</code> starts a new stage with a fresh filesystem. You can copy artifacts between stages
+     using <code>COPY --from=</code>. Only the <strong>final stage</strong> becomes the output image.</p>
+
+  <div class="panel">
+    <div class="panel-title">Use Case: Build in Full SDK, Deploy Minimal Runtime</div>
+    <pre><code><span class="cm"># ---- Stage 1: Build ----</span>
+<span class="kw">FROM</span> golang:1.21 <span class="kw">AS</span> <span class="type">builder</span>
+<span class="kw">WORKDIR</span> /src
+<span class="kw">COPY</span> go.mod go.sum ./
+<span class="kw">RUN</span> go mod download
+<span class="kw">COPY</span> . .
+<span class="kw">RUN</span> CGO_ENABLED=0 go build -o /app/server ./cmd/server
+
+<span class="cm"># ---- Stage 2: Runtime ----</span>
+<span class="kw">FROM</span> alpine:3.18
+<span class="kw">RUN</span> apk --no-cache add ca-certificates
+<span class="kw">COPY</span> --from=<span class="type">builder</span> /app/server /app/server
+<span class="kw">USER</span> 1000:1000
+<span class="kw">CMD</span> [<span class="str">"/app/server"</span>]</code></pre>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Single-Stage Build</div>
+      <div class="comp-body">
+        <p>Final image contains:</p>
+        <ul>
+          <li>Go compiler + toolchain (~400 MB)</li>
+          <li>All source code</li>
+          <li>All build dependencies</li>
+          <li>The compiled binary</li>
+        </ul>
+        <p style="color: #f87171; font-weight: bold; margin-top: 8px;">Image size: ~1.1 GB</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Multi-Stage Build</div>
+      <div class="comp-body">
+        <p>Final image contains:</p>
+        <ul>
+          <li>Alpine base (~5 MB)</li>
+          <li>CA certificates (~1 MB)</li>
+          <li>The compiled binary (~10 MB)</li>
+          <li>Nothing else</li>
+        </ul>
+        <p style="color: #34d399; font-weight: bold; margin-top: 8px;">Image size: ~16 MB</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Named stages:</strong> Use <code>AS builder</code> to name stages for readability.
+    You can also reference stages by index: <code>COPY --from=0</code> copies from the first <code>FROM</code>.
+    Named stages are strongly preferred.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>BuildKit</h2>
+  <!-- ========================================== -->
+
+  <p>BuildKit is the next-generation image builder, the default since Docker 23.0.
+     It replaces the legacy builder with a fundamentally different architecture.</p>
+
+  <h3>Key Improvements Over Legacy Builder</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #a78bfa;">Parallel Stage Building</div>
+      <p>BuildKit analyzes the Dockerfile as a <strong>DAG</strong> (directed acyclic graph). Independent stages
+         build concurrently. If stage A and stage B don't depend on each other, they run in parallel.</p>
+      <div class="flow" style="margin-top: 10px;">
+        <div class="flow-step" style="min-width: 100px;">
+          <div class="label">Stage A</div>
+          <div class="desc">Build frontend</div>
+        </div>
+        <div class="flow-step" style="min-width: 100px;">
+          <div class="label">Stage B</div>
+          <div class="desc">Build backend</div>
+        </div>
+        <div class="arrow">&rarr;</div>
+        <div class="flow-step" style="min-width: 100px;">
+          <div class="label">Stage C</div>
+          <div class="desc">COPY --from A,B</div>
+        </div>
+      </div>
+      <p style="font-size: 13px; color: #888; margin-top: 8px;">Stages A and B run concurrently; C waits for both.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #22d3ee;">LLB (Low-Level Build)</div>
+      <p>BuildKit doesn't execute Dockerfile instructions directly. It compiles the Dockerfile into
+         <strong>LLB</strong> — an intermediate representation that is a DAG of build operations.</p>
+      <ul>
+        <li>Enables optimizations (dead code elimination, parallel execution)</li>
+        <li>Alternative frontends can generate LLB (not just Dockerfiles)</li>
+        <li>Operations are content-addressable and cacheable independently</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Cache Mounts</h3>
+
+  <p>Persist package manager caches between builds. The cache directory is mounted into the <code>RUN</code>
+     instruction but is <strong>not</strong> included in the final layer.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Python (pip)</div>
+      <pre><code><span class="cm"># syntax=docker/dockerfile:1</span>
+<span class="kw">FROM</span> python:3.12-slim
+
+<span class="kw">COPY</span> requirements.txt .
+<span class="kw">RUN</span> --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt</code></pre>
+      <p style="font-size: 12px; color: #888;">pip cache persists between builds. Adding one new dependency
+         doesn't redownload all the others.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Go (modules)</div>
+      <pre><code><span class="cm"># syntax=docker/dockerfile:1</span>
+<span class="kw">FROM</span> golang:1.21
+
+<span class="kw">COPY</span> go.mod go.sum ./
+<span class="kw">RUN</span> --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download</code></pre>
+      <p style="font-size: 12px; color: #888;">Both the module cache and build cache persist across builds.</p>
+    </div>
+  </div>
+
+  <h3>Secret Mounts</h3>
+
+  <p>Make secrets available during build <strong>without baking them into any image layer</strong>.</p>
+
+  <div class="panel">
+    <div class="panel-title">Example: Private NPM Registry</div>
+    <pre><code><span class="cm"># syntax=docker/dockerfile:1</span>
+<span class="kw">FROM</span> node:20-alpine
+
+<span class="kw">WORKDIR</span> /app
+<span class="kw">COPY</span> package.json package-lock.json ./
+
+<span class="cm"># .npmrc is mounted at build time but NOT stored in the layer</span>
+<span class="kw">RUN</span> --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    npm ci --production
+
+<span class="kw">COPY</span> . .
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"server.js"</span>]</code></pre>
+
+    <div class="terminal" style="margin-top: 10px;">
+      <span class="cm"># Build with the secret:</span><br>
+      <span class="prompt">$ </span>docker build --secret id=npmrc,src=$HOME/.npmrc -t myapp .<br><br>
+      <span class="cm"># The .npmrc is NEVER in any layer — even if you docker history the image</span>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Legacy builder had no secret support.</strong> People used to <code>COPY</code> secrets in,
+    run the command, then <code>RUN rm</code> the secret — but the secret was still in the layer history.
+    Secret mounts solve this properly.
+  </div>
+
+  <h3>Cache Export/Import for CI</h3>
+
+  <div class="panel">
+    <div class="panel-title">CI Cache Strategy</div>
+    <pre><code><span class="cm"># Export cache to a registry (end of CI build):</span>
+docker build \
+  --cache-to type=registry,ref=myrepo/myapp:buildcache,mode=max \
+  -t myrepo/myapp:latest .
+
+<span class="cm"># Import cache from registry (start of next CI build):</span>
+docker build \
+  --cache-from type=registry,ref=myrepo/myapp:buildcache \
+  -t myrepo/myapp:latest .</code></pre>
+    <p style="font-size: 13px; color: #888; margin-top: 8px;"><code>mode=max</code> exports all layers
+       (including intermediate stages), not just the final image layers.</p>
+  </div>
+
+  <h3>Dockerfile Syntax Directive</h3>
+
+  <div class="note">
+    <strong>Always add this as the first line:</strong> <code># syntax=docker/dockerfile:1</code><br>
+    This tells BuildKit which Dockerfile parser to use, enabling features like <code>--mount</code>.
+    Without it, some BuildKit features won't work. This line must be the very first line of the file
+    (before any comments or blank lines).
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Image Best Practices</h2>
+  <!-- ========================================== -->
+
+  <h3>Base Image Selection</h3>
+
+  <table>
+    <tr>
+      <th>Base Image</th>
+      <th>Size</th>
+      <th>Shell</th>
+      <th>Pkg Manager</th>
+      <th>libc</th>
+      <th>When to Use</th>
+    </tr>
+    <tr>
+      <td><code>scratch</code></td>
+      <td>0 B</td>
+      <td>No</td>
+      <td>No</td>
+      <td>None</td>
+      <td>Statically compiled binaries (Go with <code>CGO_ENABLED=0</code>)</td>
+    </tr>
+    <tr>
+      <td><code>distroless</code></td>
+      <td>~2 MB</td>
+      <td>No</td>
+      <td>No</td>
+      <td>glibc</td>
+      <td>Dynamic binaries that need libc but no shell (Java, Python, Node)</td>
+    </tr>
+    <tr>
+      <td><code>alpine</code></td>
+      <td>~5 MB</td>
+      <td>Yes (ash)</td>
+      <td>apk</td>
+      <td>musl</td>
+      <td>General purpose minimal. Watch for musl compatibility issues (DNS, locale)</td>
+    </tr>
+    <tr>
+      <td><code>debian-slim</code></td>
+      <td>~30 MB</td>
+      <td>Yes (bash)</td>
+      <td>apt</td>
+      <td>glibc</td>
+      <td>When you need glibc compat + shell + apt. Good default for most apps</td>
+    </tr>
+    <tr>
+      <td><code>ubuntu</code></td>
+      <td>~30 MB</td>
+      <td>Yes (bash)</td>
+      <td>apt</td>
+      <td>glibc</td>
+      <td>When you need universe/multiverse packages or LTS support</td>
+    </tr>
+  </table>
+
+  <h3>Reducing Image Size</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Do</div>
+      <ul>
+        <li>Use multi-stage builds — build tools stay in the builder stage</li>
+        <li>Chain <code>RUN</code> commands to reduce layers:
+          <pre style="margin-top: 6px;"><code><span class="kw">RUN</span> apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*</code></pre>
+        </li>
+        <li>Clean up in the <strong>same layer</strong> as the install (otherwise the files exist in the lower layer forever)</li>
+        <li>Use <code>.dockerignore</code> to exclude build artifacts, tests, docs</li>
+        <li>Use <code>--no-install-recommends</code> with <code>apt-get</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #f87171;">Don't</div>
+      <ul>
+        <li>Install debug tools in production images (curl, vim, strace)</li>
+        <li>Leave package manager caches in the image:
+          <pre style="margin-top: 6px;"><code><span class="cm"># BAD: cache is in layer 1, rm is in layer 2</span>
+<span class="cm"># layer 1 still contains the cache!</span>
+<span class="kw">RUN</span> apt-get update && apt-get install -y curl
+<span class="kw">RUN</span> rm -rf /var/lib/apt/lists/*</code></pre>
+        </li>
+        <li>Use <code>ADD</code> for remote URLs (use <code>RUN curl</code> instead — more explicit, cacheable)</li>
+        <li>Run as root (use <code>USER 1000:1000</code>)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Non-Root User</h3>
+
+  <div class="panel">
+    <div class="panel-title">Running as Non-Root</div>
+    <pre><code><span class="kw">FROM</span> node:20-alpine
+
+<span class="cm"># Create a non-root user</span>
+<span class="kw">RUN</span> addgroup -S appgroup && adduser -S appuser -G appgroup
+
+<span class="kw">WORKDIR</span> /app
+<span class="kw">COPY</span> --chown=appuser:appgroup . .
+
+<span class="cm"># Switch to non-root before CMD</span>
+<span class="kw">USER</span> appuser
+
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"server.js"</span>]</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Why non-root matters:</strong> If an attacker escapes the container, they land on the host
+    with the same UID. Running as root inside the container means root on the host (unless user namespaces
+    are configured). Running as UID 1000 limits the blast radius.
+  </div>
+
+  <h3>Layer Count vs. Layer Size</h3>
+
+  <div class="panel">
+    <div class="panel-title">Trade-offs</div>
+    <div class="grid-2">
+      <div>
+        <p style="color: #60a5fa; font-weight: bold;">Fewer layers (chain RUN commands)</p>
+        <ul>
+          <li>Smaller image (cleanup happens in same layer)</li>
+          <li>Fewer metadata entries</li>
+          <li>Faster push/pull (fewer HTTP requests)</li>
+          <li>Worse caching — one change rebuilds the entire chained command</li>
+        </ul>
+      </div>
+      <div>
+        <p style="color: #fbbf24; font-weight: bold;">More layers (separate RUN commands)</p>
+        <ul>
+          <li>Better cache granularity</li>
+          <li>Faster iterative development</li>
+          <li>Potentially larger image (can't clean up previous layer's files)</li>
+          <li>More pull requests to registry</li>
+        </ul>
+      </div>
+    </div>
+    <p style="margin-top: 10px; color: #888;">In practice: group logically related operations (e.g., apt install + cleanup)
+       but keep distinct phases separate (deps install vs. source copy).</p>
+  </div>
+
+</body>
+</html>

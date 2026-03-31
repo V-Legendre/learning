@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 09 — PV, PVC & StorageClass</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 09 — PV, PVC & StorageClass</h1>
+  <p class="subtitle">Kubernetes persistent storage — abstracting infrastructure from applications</p>
+
+  <!-- ============================================
+       The PV/PVC Abstraction
+       ============================================ -->
+  <h2>The PV/PVC Abstraction</h2>
+
+  <div class="panel">
+    <div class="panel-title">PersistentVolume (PV)</div>
+    <p>A piece of storage provisioned by an admin or dynamically. Represents the <strong>actual storage</strong> — an NFS share, an EBS volume, a local disk, a Ceph RBD image. It is a cluster-level resource (not namespaced).</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">PersistentVolumeClaim (PVC)</div>
+    <p>A <strong>request for storage</strong> by a user or pod. "I need 10Gi of RWO storage." PVCs are namespaced — they live alongside the pods that use them.</p>
+  </div>
+
+  <h3>Separation of Concerns</h3>
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">Infra Team</div>
+      <div class="comp-body">
+        <ul>
+          <li>Provisions PVs (static) or configures StorageClasses (dynamic)</li>
+          <li>Manages underlying storage backends</li>
+          <li>Sets reclaim policies, access modes, capacity</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">App Team</div>
+      <div class="comp-body">
+        <ul>
+          <li>Creates PVCs — "give me 10Gi of fast storage"</li>
+          <li>Doesn't care whether it's NFS, EBS, or Ceph</li>
+          <li>Mounts PVC into pod spec as a volume</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p>A PVC <strong>binds</strong> to a matching PV based on: capacity, access mode, storage class, and optional label selectors.</p>
+
+  <h3>The Storage Chain</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Pod</div>
+      <div class="desc">Mounts a volume via <code>volumes</code> + <code>volumeMounts</code></div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">PVC</div>
+      <div class="desc">App team's request: "10Gi, RWO, fast-ssd"</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">PV</div>
+      <div class="desc">Infra team's provisioned storage resource</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">Actual Storage</div>
+      <div class="desc">Disk / NFS / EBS / Ceph RBD / cloud volume</div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Access Modes
+       ============================================ -->
+  <h2>Access Modes</h2>
+
+  <table>
+    <tr>
+      <th>Mode</th>
+      <th>Abbreviation</th>
+      <th>Description</th>
+      <th>Typical Backend</th>
+    </tr>
+    <tr>
+      <td><code>ReadWriteOnce</code></td>
+      <td><strong>RWO</strong></td>
+      <td>Single node read-write</td>
+      <td>Block storage (EBS, local disk)</td>
+    </tr>
+    <tr>
+      <td><code>ReadOnlyMany</code></td>
+      <td><strong>ROX</strong></td>
+      <td>Multiple nodes read-only</td>
+      <td>NFS, CephFS</td>
+    </tr>
+    <tr>
+      <td><code>ReadWriteMany</code></td>
+      <td><strong>RWX</strong></td>
+      <td>Multiple nodes read-write</td>
+      <td>NFS, CephFS, GlusterFS</td>
+    </tr>
+    <tr>
+      <td><code>ReadWriteOncePod</code></td>
+      <td><strong>RWOP</strong></td>
+      <td>Single pod read-write (K8s 1.27+)</td>
+      <td>Block storage</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Note:</strong> Access modes are <em>capabilities</em>, not enforcement. RWO means the volume can be mounted read-write on one node — but if two pods land on the same node, both can mount it. RWOP closes that gap by restricting to a single pod.
+  </div>
+
+  <!-- ============================================
+       Reclaim Policies
+       ============================================ -->
+  <h2>Reclaim Policies</h2>
+
+  <table>
+    <tr>
+      <th>Policy</th>
+      <th>Behavior</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>Retain</code></td>
+      <td>PV kept after PVC deletion, data preserved, requires manual cleanup</td>
+      <td>Production data — you don't want accidental deletion</td>
+    </tr>
+    <tr>
+      <td><code>Delete</code></td>
+      <td>PV and underlying storage deleted when PVC is deleted</td>
+      <td>Dynamic provisioning, dev/staging environments</td>
+    </tr>
+    <tr>
+      <td><code>Recycle</code></td>
+      <td>(Deprecated) Runs <code>rm -rf /thevolume/*</code> on the volume</td>
+      <td>Don't use — deprecated in favor of dynamic provisioning</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Warning:</strong> With <code>Delete</code> reclaim policy, deleting a PVC also deletes the underlying storage (e.g., the EBS volume). This is permanent data loss. Use <code>Retain</code> for anything you care about.
+  </div>
+
+  <!-- ============================================
+       StorageClass: Dynamic Provisioning
+       ============================================ -->
+  <h2>StorageClass: Dynamic Provisioning</h2>
+
+  <p>Instead of pre-creating PVs manually, define a <strong>StorageClass</strong> and let Kubernetes create PVs automatically when PVCs request storage from that class.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Static Provisioning</div>
+      <div class="comp-body">
+        <ul>
+          <li>Admin creates PVs ahead of time</li>
+          <li>PVCs bind to existing PVs</li>
+          <li>Manual capacity planning</li>
+          <li>Admin must know what teams need in advance</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Dynamic Provisioning</div>
+      <div class="comp-body">
+        <ul>
+          <li>Admin creates StorageClass once</li>
+          <li>PVC triggers automatic PV creation</li>
+          <li>No pre-provisioning needed</li>
+          <li>Self-service for app teams</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>StorageClass YAML</h3>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">storage.k8s.io/v1</span>
+<span class="kw">kind:</span> <span class="type">StorageClass</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">fast-ssd</span>
+<span class="kw">provisioner:</span> <span class="str">ebs.csi.aws.com</span>        <span class="cm"># CSI driver for AWS EBS</span>
+<span class="kw">parameters:</span>
+  <span class="kw">type:</span> <span class="str">gp3</span>                         <span class="cm"># EBS volume type</span>
+  <span class="kw">iops:</span> <span class="str">"5000"</span>                       <span class="cm"># provisioned IOPS</span>
+<span class="kw">reclaimPolicy:</span> <span class="str">Delete</span>                 <span class="cm"># what happens when PVC is deleted</span>
+<span class="kw">volumeBindingMode:</span> <span class="str">WaitForFirstConsumer</span> <span class="cm"># delay provisioning until pod is scheduled</span></code></pre>
+
+  <h3>PVC Referencing a StorageClass</h3>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">v1</span>
+<span class="kw">kind:</span> <span class="type">PersistentVolumeClaim</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">my-data</span>
+<span class="kw">spec:</span>
+  <span class="kw">storageClassName:</span> <span class="str">fast-ssd</span>    <span class="cm"># references the StorageClass above</span>
+  <span class="kw">accessModes:</span>
+    - <span class="str">ReadWriteOnce</span>
+  <span class="kw">resources:</span>
+    <span class="kw">requests:</span>
+      <span class="kw">storage:</span> <span class="str">10Gi</span></code></pre>
+
+  <!-- ============================================
+       volumeBindingMode
+       ============================================ -->
+  <h2>volumeBindingMode</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Immediate</div>
+      <div class="comp-body">
+        <p>PV is provisioned as soon as PVC is created.</p>
+        <ul>
+          <li>May provision in the <strong>wrong availability zone</strong></li>
+          <li>Pod can't schedule if volume is in a different zone</li>
+          <li>Acceptable for zone-agnostic storage (NFS, CephFS)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">WaitForFirstConsumer</div>
+      <div class="comp-body">
+        <p>PV provisioning is <strong>delayed</strong> until a pod using the PVC is scheduled.</p>
+        <ul>
+          <li>Zone-aware: volume is created in the same zone as the node</li>
+          <li><strong>Recommended</strong> for cloud block storage</li>
+          <li>Avoids zone mismatch entirely</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best practice:</strong> Always use <code>WaitForFirstConsumer</code> for cloud block storage (EBS, GCE PD, Azure Disk). Use <code>Immediate</code> only for storage that is accessible from any zone (NFS, CephFS).
+  </div>
+
+  <!-- ============================================
+       Volume Types
+       ============================================ -->
+  <h2>Volume Types (Inline and PV-backed)</h2>
+
+  <h3>emptyDir</h3>
+  <div class="panel">
+    <div class="panel-title">Temporary per-pod storage</div>
+    <ul>
+      <li>Created when the pod starts, <strong>deleted when the pod is removed</strong></li>
+      <li>All containers in a pod share it — useful for sidecar communication</li>
+      <li><code>medium: Memory</code> backed by tmpfs (RAM) — fast but uses the pod's memory limit</li>
+      <li>Use cases: scratch space, cache, sharing files between init container and app container</li>
+    </ul>
+    <pre><code><span class="kw">volumes:</span>
+  - <span class="kw">name:</span> <span class="str">scratch</span>
+    <span class="kw">emptyDir:</span> {}              <span class="cm"># disk-backed</span>
+  - <span class="kw">name:</span> <span class="str">cache</span>
+    <span class="kw">emptyDir:</span>
+      <span class="kw">medium:</span> <span class="str">Memory</span>         <span class="cm"># tmpfs (RAM-backed)</span>
+      <span class="kw">sizeLimit:</span> <span class="str">256Mi</span></code></pre>
+  </div>
+
+  <h3>hostPath</h3>
+  <div class="panel">
+    <div class="panel-title">Mount a path from the node's filesystem</div>
+    <ul>
+      <li>Mounts a file or directory from the host node into the pod</li>
+      <li>Types: <code>Directory</code>, <code>File</code>, <code>Socket</code>, <code>CharDevice</code>, <code>BlockDevice</code></li>
+      <li>Data is <strong>node-specific</strong> — no portability, no replication</li>
+      <li>If pod moves to another node, the data is gone</li>
+    </ul>
+    <pre><code><span class="kw">volumes:</span>
+  - <span class="kw">name:</span> <span class="str">host-logs</span>
+    <span class="kw">hostPath:</span>
+      <span class="kw">path:</span> <span class="str">/var/log</span>
+      <span class="kw">type:</span> <span class="str">Directory</span></code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Security risk:</strong> <code>hostPath</code> lets pods access <em>any</em> host file. A pod with <code>hostPath: /</code> has root-level access to the entire node filesystem. Avoid in production. Use PodSecurityStandards / OPA / Kyverno to restrict hostPath usage.
+  </div>
+
+  <h3>configMap / secret</h3>
+  <div class="panel">
+    <div class="panel-title">Mount configuration and secrets as files</div>
+    <ul>
+      <li>Mount ConfigMap or Secret data as files inside the container</li>
+      <li>Updates propagate eventually (kubelet sync period, ~1 minute by default)</li>
+      <li><code>subPath</code>: mount a single key as a file at a specific path (but disables auto-update)</li>
+    </ul>
+    <pre><code><span class="kw">volumes:</span>
+  - <span class="kw">name:</span> <span class="str">config</span>
+    <span class="kw">configMap:</span>
+      <span class="kw">name:</span> <span class="str">app-config</span>
+  - <span class="kw">name:</span> <span class="str">certs</span>
+    <span class="kw">secret:</span>
+      <span class="kw">secretName:</span> <span class="str">tls-certs</span>
+
+<span class="cm"># Using subPath to mount a single key as a file</span>
+<span class="kw">volumeMounts:</span>
+  - <span class="kw">name:</span> <span class="str">config</span>
+    <span class="kw">mountPath:</span> <span class="str">/etc/app/config.yaml</span>
+    <span class="kw">subPath:</span> <span class="str">config.yaml</span>          <span class="cm"># mount only this key</span></code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> When using <code>subPath</code>, config/secret updates will <strong>not</strong> be reflected in the mounted file. The pod must be restarted to pick up changes.
+  </div>
+
+  <h3>NFS</h3>
+  <div class="panel">
+    <div class="panel-title">Network File System</div>
+    <ul>
+      <li>Classic shared storage — the original "distributed filesystem"</li>
+      <li>Supports <strong>RWX</strong> — multiple pods on multiple nodes can read-write simultaneously</li>
+      <li>Good for legacy workloads, shared file access patterns</li>
+      <li>Performance can be a bottleneck for high-IOPS workloads</li>
+    </ul>
+    <pre><code><span class="kw">volumes:</span>
+  - <span class="kw">name:</span> <span class="str">shared-data</span>
+    <span class="kw">nfs:</span>
+      <span class="kw">server:</span> <span class="str">nfs.example.com</span>
+      <span class="kw">path:</span> <span class="str">/exports/data</span></code></pre>
+  </div>
+
+  <h3>local</h3>
+  <div class="panel">
+    <div class="panel-title">Real local disk (not hostPath)</div>
+    <ul>
+      <li>Uses a real local disk or partition — not just a directory like <code>hostPath</code></li>
+      <li>Requires <strong>node affinity</strong> — pod must schedule on the node with the disk</li>
+      <li>K8s handles the scheduling constraint automatically</li>
+      <li>Good for distributed databases that manage their own replication (Cassandra, CockroachDB, Elasticsearch)</li>
+    </ul>
+    <pre><code><span class="kw">apiVersion:</span> <span class="str">v1</span>
+<span class="kw">kind:</span> <span class="type">PersistentVolume</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">local-pv</span>
+<span class="kw">spec:</span>
+  <span class="kw">capacity:</span>
+    <span class="kw">storage:</span> <span class="str">100Gi</span>
+  <span class="kw">accessModes:</span>
+    - <span class="str">ReadWriteOnce</span>
+  <span class="kw">local:</span>
+    <span class="kw">path:</span> <span class="str">/mnt/disks/ssd0</span>
+  <span class="kw">nodeAffinity:</span>                     <span class="cm"># required for local volumes</span>
+    <span class="kw">required:</span>
+      <span class="kw">nodeSelectorTerms:</span>
+        - <span class="kw">matchExpressions:</span>
+            - <span class="kw">key:</span> <span class="str">kubernetes.io/hostname</span>
+              <span class="kw">operator:</span> <span class="str">In</span>
+              <span class="kw">values:</span>
+                - <span class="str">worker-node-01</span></code></pre>
+  </div>
+
+  <!-- ============================================
+       PV/PVC Lifecycle
+       ============================================ -->
+  <h2>PV/PVC Lifecycle</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Provisioning</strong><br>
+        <strong>Static:</strong> Admin manually creates a PV with a specific capacity, access mode, and backend.<br>
+        <strong>Dynamic:</strong> A StorageClass automatically creates a PV when a PVC is submitted.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Binding</strong><br>
+        PVC binds to a matching PV. The binding is <strong>one-to-one</strong> — a PV can only be bound to a single PVC. The control plane matches on capacity (must be >= requested), access modes, storage class, and selectors.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Using</strong><br>
+        Pod mounts the PVC as a volume. The kubelet calls the storage backend (or CSI driver) to mount the volume into the container's filesystem.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Releasing</strong><br>
+        When the PVC is deleted, the PV enters the <code>Released</code> state. The data still exists on the volume, but it cannot be bound to a new PVC until reclaimed.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Reclaiming</strong><br>
+        Based on the reclaim policy: <code>Retain</code> (manual cleanup), <code>Delete</code> (PV + underlying storage removed), or <code>Recycle</code> (deprecated).
+      </div>
+    </div>
+  </div>
+
+  <h3>Lifecycle State Diagram</h3>
+
+  <div class="state-diagram">
+    <div class="state initial">Available</div>
+    <div class="state-arrow">&#8594;</div>
+    <div class="state active">Bound</div>
+    <div class="state-arrow">&#8594;</div>
+    <div class="state waiting">Released</div>
+    <div class="state-arrow">&#8594;</div>
+    <div class="state closed">Deleted / Retained</div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> A <code>Released</code> PV with <code>Retain</code> policy cannot be automatically rebound. To reuse it, an admin must: (1) delete the PV object (keeping the data), (2) optionally clean up data on the storage backend, (3) create a new PV pointing to the same storage.
+  </div>
+
+  <!-- ============================================
+       Quick Reference: Pod Volume Mount
+       ============================================ -->
+  <h2>Quick Reference: Pod Volume Mount</h2>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">v1</span>
+<span class="kw">kind:</span> <span class="type">Pod</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">my-app</span>
+<span class="kw">spec:</span>
+  <span class="kw">containers:</span>
+    - <span class="kw">name:</span> <span class="str">app</span>
+      <span class="kw">image:</span> <span class="str">my-app:latest</span>
+      <span class="kw">volumeMounts:</span>                <span class="cm"># where to mount inside the container</span>
+        - <span class="kw">name:</span> <span class="str">data</span>
+          <span class="kw">mountPath:</span> <span class="str">/app/data</span>
+        - <span class="kw">name:</span> <span class="str">cache</span>
+          <span class="kw">mountPath:</span> <span class="str">/tmp/cache</span>
+  <span class="kw">volumes:</span>                         <span class="cm"># define volumes at the pod level</span>
+    - <span class="kw">name:</span> <span class="str">data</span>
+      <span class="kw">persistentVolumeClaim:</span>
+        <span class="kw">claimName:</span> <span class="str">my-data</span>         <span class="cm"># references a PVC</span>
+    - <span class="kw">name:</span> <span class="str">cache</span>
+      <span class="kw">emptyDir:</span>
+        <span class="kw">medium:</span> <span class="str">Memory</span></code></pre>
+
+  <div class="tip">
+    <strong>Pattern:</strong> <code>volumes[]</code> defines <em>what</em> storage to use. <code>volumeMounts[]</code> defines <em>where</em> to mount it in the container. They are linked by <code>name</code>.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 02 — Linux Namespaces: Theory & Core Types</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 02 — Linux Namespaces: Theory & Core Types</h1>
+  <p class="subtitle">The isolation primitive — giving each process its own view of the system</p>
+
+  <!-- ===== WHAT NAMESPACES ARE ===== -->
+  <h2>What Namespaces Are</h2>
+
+  <p>Namespaces are a <strong>Linux kernel feature</strong> that partitions kernel resources so that one set of processes sees one set of resources, while another set of processes sees a completely different set. Each process lives in exactly one namespace of each type.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Key Properties</div>
+      <ul>
+        <li>Namespaces isolate <strong>views</strong>, not resources themselves</li>
+        <li>Each process belongs to exactly <strong>one namespace per type</strong></li>
+        <li>Child processes <strong>inherit</strong> their parent's namespaces by default</li>
+        <li>Modern Linux has <strong>8 namespace types</strong></li>
+        <li>Each namespace is visible as a file descriptor in <code>/proc/[pid]/ns/</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">What They Are NOT</div>
+      <ul>
+        <li><strong>Not security boundaries</strong> on their own &mdash; they isolate views, not access</li>
+        <li><strong>Not VMs</strong> &mdash; all namespaces share the same kernel</li>
+        <li><strong>Not cgroups</strong> &mdash; namespaces isolate <em>visibility</em>, cgroups limit <em>usage</em></li>
+        <li><strong>Not containers</strong> &mdash; a container is namespaces + cgroups + filesystem + security policies combined</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Security warning:</strong> A namespace alone does <strong>not</strong> prevent a process from escaping. A process in a new PID namespace but still in the host mount namespace can read <code>/proc</code> on the host. You need <strong>multiple namespaces + seccomp + capabilities + cgroups</strong> together for real isolation.
+  </div>
+
+  <!-- ===== VISUAL: NAMESPACE CONCEPT ===== -->
+  <h3>Conceptual Model: Same Kernel, Different Views</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Hardware</span>
+    <div class="nest-box os" style="margin-top: 10px;">
+      <span class="nest-label">Linux Kernel (shared)</span>
+      <div style="display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap;">
+        <div class="nest-box namespace" style="flex: 1; min-width: 200px;">
+          <span class="nest-label">Namespace Set A</span>
+          <p style="font-size: 13px; margin-top: 5px;">PID 1: nginx<br>Hostname: web-01<br>Mounts: /app, /etc/nginx<br>Network: 10.0.0.2/24</p>
+        </div>
+        <div class="nest-box namespace" style="flex: 1; min-width: 200px;">
+          <span class="nest-label">Namespace Set B</span>
+          <p style="font-size: 13px; margin-top: 5px;">PID 1: postgres<br>Hostname: db-01<br>Mounts: /var/lib/postgres<br>Network: 10.0.0.3/24</p>
+        </div>
+        <div class="nest-box namespace" style="flex: 1; min-width: 200px;">
+          <span class="nest-label">Namespace Set C (Host)</span>
+          <p style="font-size: 13px; margin-top: 5px;">PID 1: systemd<br>Hostname: prod-server<br>Mounts: / (full tree)<br>Network: 192.168.1.10/24</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== THE THREE SYSCALLS ===== -->
+  <h2>The Three Syscalls</h2>
+
+  <p>All namespace operations boil down to three system calls. Everything else (<code>docker run</code>, <code>unshare</code> CLI, <code>ip netns</code>) is a wrapper around these.</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">clone()</div>
+      <p style="font-size: 14px;">Creates a <strong>new process</strong> in new namespace(s). Pass <code>CLONE_NEW*</code> flags to specify which namespaces to create.</p>
+      <pre><code><span class="cm">// Create child in new PID + mount NS</span>
+<span class="fn">clone</span>(child_fn, stack,
+  <span class="type">CLONE_NEWPID</span> | <span class="type">CLONE_NEWNS</span> | <span class="type">SIGCHLD</span>,
+  arg);</code></pre>
+      <p style="font-size: 13px; color: #888;">This is what container runtimes use under the hood.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">unshare()</div>
+      <p style="font-size: 14px;">Moves the <strong>current process</strong> into new namespace(s). No new process is created.</p>
+      <pre><code><span class="cm">// Current process gets new mount NS</span>
+<span class="fn">unshare</span>(<span class="type">CLONE_NEWNS</span>);</code></pre>
+      <p style="font-size: 13px; color: #888;">The <code>unshare</code> command-line tool wraps this syscall.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">setns()</div>
+      <p style="font-size: 14px;"><strong>Joins</strong> an existing namespace by opening its fd from <code>/proc/[pid]/ns/xxx</code>.</p>
+      <pre><code><span class="cm">// Join PID 1234's network NS</span>
+<span class="kw">int</span> fd = <span class="fn">open</span>(
+  <span class="str">"/proc/1234/ns/net"</span>, <span class="type">O_RDONLY</span>);
+<span class="fn">setns</span>(fd, <span class="type">CLONE_NEWNET</span>);</code></pre>
+      <p style="font-size: 13px; color: #888;"><code>nsenter</code> and <code>docker exec</code> use this.</p>
+    </div>
+  </div>
+
+  <h3>unshare CLI Example</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create new PID + mount namespaces and fork into them</span><br>
+    <span class="output">$ sudo unshare --pid --mount --fork bash</span><br><br>
+    <span class="prompt"># --pid:   new PID namespace</span><br>
+    <span class="prompt"># --mount: new mount namespace (needed to remount /proc)</span><br>
+    <span class="prompt"># --fork:  fork so the new shell is PID 1 in the new PID NS</span><br><br>
+    <span class="prompt"># Inside the new namespace, mount a fresh /proc</span><br>
+    <span class="output">$ mount -t proc proc /proc</span><br><br>
+    <span class="prompt"># Now ps only shows processes in this namespace</span><br>
+    <span class="output">$ ps aux</span><br>
+    <span class="output">USER  PID %CPU %MEM   VSZ  RSS TTY STAT START TIME COMMAND</span><br>
+    <span class="output">root    1  0.0  0.0  7236 3968 pts/0 S 12:00 0:00 bash</span><br>
+    <span class="output">root    2  0.0  0.0 10072 3312 pts/0 R+ 12:00 0:00 ps aux</span>
+  </div>
+
+  <!-- ===== /proc/[pid]/ns/ ===== -->
+  <h2>/proc/[pid]/ns/ — Namespace File Descriptors</h2>
+
+  <p>Every namespace instance is represented as a <strong>pseudo-file</strong> (actually a symlink) in <code>/proc/[pid]/ns/</code>. The symlink target includes the namespace type and an inode number that uniquely identifies the namespace instance.</p>
+
+  <div class="terminal">
+    <span class="prompt"># List all namespace fds for PID 1 (init/systemd)</span><br>
+    <span class="output">$ ls -la /proc/1/ns/</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 cgroup -> 'cgroup:[4026531835]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 ipc -> 'ipc:[4026531839]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 mnt -> 'mnt:[4026531840]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 net -> 'net:[4026531992]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 pid -> 'pid:[4026531836]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 pid_for_children -> 'pid_for_children:[4026531836]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 time -> 'time:[4026531834]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 user -> 'user:[4026531837]'</span><br>
+    <span class="output">lrwxrwxrwx 1 root root 0 Mar 31 12:00 uts -> 'uts:[4026531838]'</span>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Checking if Two Processes Share a Namespace</div>
+      <div class="terminal" style="margin-top: 8px;">
+        <span class="prompt"># Same inode = same namespace</span><br>
+        <span class="output">$ readlink /proc/1/ns/net</span><br>
+        <span class="output">net:[4026531992]</span><br><br>
+        <span class="output">$ readlink /proc/1234/ns/net</span><br>
+        <span class="output">net:[4026531992]</span><br>
+        <span class="prompt"># Same! Both in host network NS</span><br><br>
+        <span class="output">$ readlink /proc/5678/ns/net</span><br>
+        <span class="output">net:[4026532456]</span><br>
+        <span class="prompt"># Different! PID 5678 is in a container</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">nsenter: Joining a Process's Namespaces</div>
+      <div class="terminal" style="margin-top: 8px;">
+        <span class="prompt"># Enter ALL namespaces of PID 1234</span><br>
+        <span class="output">$ nsenter -t 1234 -a bash</span><br><br>
+        <span class="prompt"># Enter only network namespace</span><br>
+        <span class="output">$ nsenter -t 1234 -n ip addr</span><br><br>
+        <span class="prompt"># Enter network + mount namespaces</span><br>
+        <span class="output">$ nsenter -t 1234 -n -m bash</span><br><br>
+        <span class="prompt"># This is what "docker exec" does</span><br>
+        <span class="prompt"># internally (via setns syscall)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MOUNT NAMESPACE ===== -->
+  <h2>Mount Namespace (mnt) — <code>CLONE_NEWNS</code></h2>
+
+  <p>The <strong>first namespace type ever added</strong> to Linux (2.4.19, 2002). It was so new the flag is just <code>CLONE_NEWNS</code> ("new namespace") rather than <code>CLONE_NEWMNT</code> because nobody imagined there'd be more types.</p>
+
+  <div class="panel">
+    <div class="panel-title">What It Isolates</div>
+    <p>Each mount namespace has its own <strong>mount table</strong> &mdash; an independent list of mount points. Mounting or unmounting filesystems in one namespace has <strong>no effect</strong> on other namespaces (assuming private propagation).</p>
+    <ul>
+      <li>Independent <code>/</code>, <code>/tmp</code>, <code>/proc</code>, <code>/sys</code>, <code>/dev</code></li>
+      <li>Container gets its own rootfs (from the image) without affecting the host</li>
+      <li>Bind mounts, tmpfs mounts, overlay mounts &mdash; all per-namespace</li>
+    </ul>
+  </div>
+
+  <h3>pivot_root vs chroot</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">chroot (weak)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Changes the <strong>apparent</strong> root directory for a process</li>
+          <li>Original root is still accessible &mdash; easy to <strong>escape</strong></li>
+          <li>A process with <code>CAP_SYS_CHROOT</code> can break out by creating a new chroot and using <code>..</code> traversal</li>
+          <li>Does NOT change the mount table</li>
+          <li>Meant for build environments, not security</li>
+        </ul>
+        <div class="terminal" style="margin-top: 10px;">
+          <span class="prompt"># Classic chroot escape</span><br>
+          <span class="output">$ chroot /newroot /bin/bash</span><br>
+          <span class="prompt"># Process can still access</span><br>
+          <span class="prompt"># host root via fd tricks</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">pivot_root (proper isolation)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Swaps</strong> the root mount &mdash; old root becomes a subdirectory</li>
+          <li>Old root can be <strong>unmounted</strong> &mdash; truly inaccessible</li>
+          <li>Requires a mount namespace (can't affect host mounts)</li>
+          <li>This is what container runtimes actually use</li>
+          <li>No escape path once old root is unmounted</li>
+        </ul>
+        <div class="terminal" style="margin-top: 10px;">
+          <span class="prompt"># pivot_root swaps root mount</span><br>
+          <span class="output">$ pivot_root /newroot /newroot/.old</span><br>
+          <span class="output">$ umount -l /.old</span><br>
+          <span class="prompt"># Old root is gone. No escape.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Mount Propagation</h3>
+
+  <p>When namespaces share mount points, <strong>mount propagation</strong> controls whether mounts in one namespace appear in another. There are four modes:</p>
+
+  <table>
+    <tr>
+      <th>Mode</th>
+      <th>Behavior</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>shared</code></td>
+      <td>Mounts propagate <strong>both ways</strong> between namespaces</td>
+      <td>Host systemd mounts, initial setup</td>
+    </tr>
+    <tr>
+      <td><code>private</code></td>
+      <td>Mounts <strong>never propagate</strong> &mdash; fully independent</td>
+      <td><strong>Default for containers</strong></td>
+    </tr>
+    <tr>
+      <td><code>slave</code></td>
+      <td>Mounts propagate <strong>one way</strong> (host &rarr; container, not back)</td>
+      <td>Container sees new host mounts but can't leak its own</td>
+    </tr>
+    <tr>
+      <td><code>unbindable</code></td>
+      <td>Like private, but also <strong>can't be bind-mounted</strong></td>
+      <td>Prevent recursive bind mount explosions</td>
+    </tr>
+  </table>
+
+  <div class="terminal">
+    <span class="prompt"># Check propagation type of a mount</span><br>
+    <span class="output">$ findmnt -o TARGET,PROPAGATION</span><br>
+    <span class="output">TARGET         PROPAGATION</span><br>
+    <span class="output">/              shared</span><br>
+    <span class="output">/tmp           private</span><br>
+    <span class="output">/run/user/1000 shared</span><br><br>
+    <span class="prompt"># Make a mount private</span><br>
+    <span class="output">$ mount --make-private /mnt/data</span><br><br>
+    <span class="prompt"># Make a mount shared</span><br>
+    <span class="output">$ mount --make-shared /mnt/data</span>
+  </div>
+
+  <!-- ===== PID NAMESPACE ===== -->
+  <h2>PID Namespace (pid) — <code>CLONE_NEWPID</code></h2>
+
+  <p>PID namespaces give each container its own <strong>process ID numbering</strong> starting at 1. The first process in a PID namespace becomes PID 1 and has special responsibilities.</p>
+
+  <h3>Nested PID View</h3>
+
+  <p>A process has a <strong>PID in every ancestor namespace</strong>. The host always sees the "real" PID; the container sees its own numbering:</p>
+
+  <div class="nest-box os">
+    <span class="nest-label">Host PID Namespace</span>
+    <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px;">
+      <div style="flex: 1; min-width: 250px;">
+        <p style="font-size: 13px; color: #888;">Host view (ps aux on host):</p>
+        <div class="terminal" style="margin-top: 6px;">
+          <span class="output">PID   COMMAND</span><br>
+          <span class="output">  1   systemd</span><br>
+          <span class="output">856   containerd</span><br>
+          <span class="output">12345 nginx: master</span><br>
+          <span class="output">12346 nginx: worker</span><br>
+          <span class="output">12400 postgres</span>
+        </div>
+      </div>
+      <div class="nest-box namespace" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">Container A PID NS</span>
+        <p style="font-size: 13px; color: #888; margin-top: 6px;">Container view (ps aux inside):</p>
+        <div class="terminal" style="margin-top: 6px;">
+          <span class="output">PID COMMAND</span><br>
+          <span class="output">  1 nginx: master</span><br>
+          <span class="output">  2 nginx: worker</span>
+        </div>
+        <p style="font-size: 12px; color: #666; margin-top: 6px;">PID 1 inside = PID 12345 outside</p>
+      </div>
+      <div class="nest-box namespace" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">Container B PID NS</span>
+        <p style="font-size: 13px; color: #888; margin-top: 6px;">Container view (ps aux inside):</p>
+        <div class="terminal" style="margin-top: 6px;">
+          <span class="output">PID COMMAND</span><br>
+          <span class="output">  1 postgres</span>
+        </div>
+        <p style="font-size: 12px; color: #666; margin-top: 6px;">PID 1 inside = PID 12400 outside</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>The PID 1 Problem: Zombie Reaping</h3>
+
+  <div class="panel">
+    <div class="panel-title">Why PID 1 Matters in Containers</div>
+    <p>In Linux, PID 1 has a special kernel-level responsibility: it <strong>adopts orphaned child processes</strong> and must call <code>wait()</code> on them. If it doesn't, <strong>zombie processes accumulate</strong>.</p>
+    <ul>
+      <li>On a normal host, <code>systemd</code>/<code>init</code> handles this &mdash; it's designed for it</li>
+      <li>In a container, your app (nginx, node, python) is often PID 1 &mdash; but <strong>most apps don't reap children</strong></li>
+      <li>Zombies consume PID space. Enough of them and the container can't spawn new processes</li>
+      <li>PID 1 also gets <strong>different signal handling</strong>: <code>SIGTERM</code> and <code>SIGINT</code> are <strong>not</strong> delivered unless the process explicitly registers a handler</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without Init (zombie risk)</div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Dockerfile</span>
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"server.js"</span>]
+
+<span class="cm"># node is PID 1</span>
+<span class="cm"># If it spawns child processes</span>
+<span class="cm"># (e.g., child_process.exec),</span>
+<span class="cm"># orphans become zombies</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With tini / dumb-init</div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Dockerfile</span>
+<span class="kw">RUN</span> apt-get install -y tini
+<span class="kw">ENTRYPOINT</span> [<span class="str">"/usr/bin/tini"</span>, <span class="str">"--"</span>]
+<span class="kw">CMD</span> [<span class="str">"node"</span>, <span class="str">"server.js"</span>]
+
+<span class="cm"># tini is PID 1, reaps zombies</span>
+<span class="cm"># node runs as PID 2</span>
+<span class="cm"># Signals are forwarded properly</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Docker --init:</strong> You can also use <code>docker run --init myimage</code> which injects <code>tini</code> as PID 1 automatically, without modifying the Dockerfile. Kubernetes doesn't have a built-in equivalent &mdash; bake tini into the image or use the <code>shareProcessNamespace</code> feature (where the kubelet becomes PID 1).
+  </div>
+
+  <h3>Demo: PID Namespace in Action</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create new PID + mount namespaces</span><br>
+    <span class="output">$ sudo unshare --pid --fork --mount-proc bash</span><br><br>
+    <span class="prompt"># --mount-proc remounts /proc so ps works correctly</span><br>
+    <span class="prompt"># We are now PID 1 inside the new namespace</span><br><br>
+    <span class="output">$ ps aux</span><br>
+    <span class="output">USER  PID %CPU %MEM   VSZ  RSS TTY STAT START TIME COMMAND</span><br>
+    <span class="output">root    1  0.0  0.0  7236 3968 pts/0 S 12:00 0:00 bash</span><br>
+    <span class="output">root    2  0.0  0.0 10072 3312 pts/0 R+ 12:00 0:00 ps aux</span><br><br>
+    <span class="output">$ echo $$</span><br>
+    <span class="output">1</span><br><br>
+    <span class="prompt"># Meanwhile, on the host, this bash has a normal PID (e.g., 54321)</span>
+  </div>
+
+  <!-- ===== UTS NAMESPACE ===== -->
+  <h2>UTS Namespace (uts) — <code>CLONE_NEWUTS</code></h2>
+
+  <p>The simplest namespace type. UTS stands for <strong>"UNIX Time-Sharing"</strong> &mdash; named after the <code>struct utsname</code> in the kernel (returned by the <code>uname()</code> syscall).</p>
+
+  <div class="panel">
+    <div class="panel-title">What It Isolates</div>
+    <ul>
+      <li><strong>Hostname</strong> (<code>nodename</code>) &mdash; each container has its own hostname</li>
+      <li><strong>NIS domain name</strong> (<code>domainname</code>) &mdash; rarely used in containers</li>
+      <li>Setting <code>hostname</code> inside a container does <strong>not</strong> affect the host</li>
+      <li>This is why <code>docker run --hostname myapp</code> works &mdash; it creates a new UTS namespace</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create a new UTS namespace</span><br>
+    <span class="output">$ sudo unshare --uts bash</span><br><br>
+    <span class="prompt"># Change hostname inside the namespace</span><br>
+    <span class="output">$ hostname container-web-01</span><br>
+    <span class="output">$ hostname</span><br>
+    <span class="output">container-web-01</span><br><br>
+    <span class="prompt"># Open another terminal on the host</span><br>
+    <span class="output">$ hostname</span><br>
+    <span class="output">prod-server</span><br>
+    <span class="prompt"># Host hostname is unaffected</span>
+  </div>
+
+  <div class="tip">
+    <strong>Kubernetes note:</strong> Each pod gets its own UTS namespace. The pod's <code>hostname</code> defaults to the pod name. You can override it with <code>spec.hostname</code> and <code>spec.subdomain</code> in the pod spec.
+  </div>
+
+  <!-- ===== CROSS-REFERENCE ===== -->
+  <div class="note" style="margin-top: 40px;">
+    <strong>Network namespaces</strong> are covered in detail in <a href="../net-09-linux-internals/namespaces-veth.html">Net 09 &mdash; Namespaces & Virtual Interfaces</a>. That page covers <code>CLONE_NEWNET</code>, veth pairs, bridges, and how container networking is built on top of network namespaces.
+  </div>
+
+  <!-- ===== SUMMARY DIAGRAM ===== -->
+  <h2>Summary: Core Namespace Lifecycle</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">clone() / unshare()</div>
+      <div class="desc">Create new namespace(s) with CLONE_NEW* flags</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Process runs isolated</div>
+      <div class="desc">Own PID tree, mount table, hostname, etc.</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">/proc/[pid]/ns/*</div>
+      <div class="desc">NS persists as long as any process or fd references it</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">setns() / nsenter</div>
+      <div class="desc">Other processes can join via fd</div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 01 — CPU Virtualization: Protection Rings & Traps</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 01 — CPU Virtualization: Protection Rings &amp; Traps</h1>
+  <p class="subtitle">How CPUs protect themselves — and why virtualizing x86 was a 20-year puzzle</p>
+
+  <!-- ============================================
+       SECTION 1: Protection Rings
+       ============================================ -->
+  <h2>1. Protection Rings (Ring 0–3)</h2>
+
+  <p>
+    x86 CPUs implement <strong>hardware-enforced privilege levels</strong> called <em>protection rings</em>.
+    They are numbered 0 through 3, where lower numbers mean higher privilege.
+    The CPU checks the Current Privilege Level (CPL) stored in the <code>CS</code> register
+    before executing any instruction that touches hardware or system state.
+  </p>
+
+  <div class="panel">
+    <div class="panel-title">Ring Privileges at a Glance</div>
+    <table>
+      <tr>
+        <th>Ring</th>
+        <th>Name</th>
+        <th>Who Runs Here</th>
+        <th>Can Do</th>
+      </tr>
+      <tr>
+        <td><strong>Ring 0</strong></td>
+        <td>Kernel mode</td>
+        <td>OS kernel, drivers</td>
+        <td>Everything — direct hardware I/O, modify page tables, disable interrupts</td>
+      </tr>
+      <tr>
+        <td><strong>Ring 1</strong></td>
+        <td>OS services</td>
+        <td>Historically unused on modern OSes</td>
+        <td>Originally for device drivers (OS/2 used it)</td>
+      </tr>
+      <tr>
+        <td><strong>Ring 2</strong></td>
+        <td>OS services</td>
+        <td>Historically unused on modern OSes</td>
+        <td>Originally for privileged utilities</td>
+      </tr>
+      <tr>
+        <td><strong>Ring 3</strong></td>
+        <td>User mode</td>
+        <td>Applications, shells, browsers</td>
+        <td>Compute, read own memory — must syscall for anything else</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>In practice</strong>, modern OSes (Linux, Windows, macOS) use only Ring 0 and Ring 3.
+    Rings 1 and 2 are architecturally present but ignored — the OS puts everything privileged in Ring 0
+    and everything else in Ring 3. This two-ring model is sometimes called "kernel mode vs. user mode."
+  </div>
+
+  <h3>Ring Nesting Diagram</h3>
+  <p>Think of rings as concentric protection boundaries. Inner rings have strictly more power than outer ones.</p>
+
+  <div class="nest-box hardware" style="max-width: 700px;">
+    <span class="nest-label">Hardware (CPU)</span>
+    <div class="nest-box os" style="margin-top: 14px;">
+      <span class="nest-label">Ring 0 — Kernel Mode</span>
+      <p style="margin: 10px 0 4px; color: #fbbf24; font-size: 13px;">
+        Full hardware access: page tables, I/O ports, interrupt control, MSRs
+      </p>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+        <div class="nest-box namespace" style="flex: 1; min-width: 200px;">
+          <span class="nest-label">Ring 3 — User Mode</span>
+          <p style="color: #60a5fa; font-size: 13px; margin-top: 10px;">
+            Applications execute here. Attempting a privileged instruction triggers a
+            <strong style="color: #e94560;">#GP (General Protection) fault</strong> — the CPU traps to Ring 0.
+          </p>
+          <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+            <code style="background: #2a2a4a; padding: 4px 10px; border-radius: 4px; font-size: 12px;">nginx</code>
+            <code style="background: #2a2a4a; padding: 4px 10px; border-radius: 4px; font-size: 12px;">python3</code>
+            <code style="background: #2a2a4a; padding: 4px 10px; border-radius: 4px; font-size: 12px;">bash</code>
+            <code style="background: #2a2a4a; padding: 4px 10px; border-radius: 4px; font-size: 12px;">chrome</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Privileged vs. Sensitive Instructions</h3>
+
+  <p>
+    These two categories are the key to understanding the virtualization problem. They sound similar but are
+    architecturally distinct:
+  </p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Privileged Instructions</div>
+      <div class="comp-body">
+        <p><strong>Definition:</strong> Instructions that <em>trap</em> (cause a #GP fault) when executed outside Ring 0.</p>
+        <p style="margin-top: 10px;"><strong>Examples:</strong></p>
+        <ul>
+          <li><code>HLT</code> — halt the CPU</li>
+          <li><code>LGDT</code> — load Global Descriptor Table register</li>
+          <li><code>MOV to CR3</code> — change page table base</li>
+          <li><code>CLI / STI</code> — disable / enable interrupts</li>
+          <li><code>WRMSR</code> — write Model-Specific Register</li>
+        </ul>
+        <div class="tip" style="margin-top: 12px;">
+          <strong>Good for virtualization:</strong> these trap automatically, so a VMM can intercept and emulate them.
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header kernel">Sensitive Instructions</div>
+      <div class="comp-body">
+        <p><strong>Definition:</strong> Instructions that <em>read or modify</em> machine state (reveal privileged information or change system behavior).</p>
+        <p style="margin-top: 10px;"><strong>Examples:</strong></p>
+        <ul>
+          <li><code>SGDT</code> — store GDT register (reveals kernel state)</li>
+          <li><code>SIDT</code> — store IDT register (reveals kernel state)</li>
+          <li><code>PUSHF</code> — push FLAGS (includes IF bit — interrupt state)</li>
+          <li><code>POPF</code> — pop FLAGS (silently ignores IF in Ring 3)</li>
+          <li><code>SMSW</code> — store Machine Status Word</li>
+        </ul>
+        <div class="warn" style="margin-top: 12px;">
+          <strong>Bad for virtualization:</strong> some of these execute silently in Ring 3 without trapping — the "x86 hole."
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       SECTION 2: The Fundamental Virtualization Problem
+       ============================================ -->
+  <h2>2. The Fundamental Virtualization Problem (Popek-Goldberg)</h2>
+
+  <div class="panel">
+    <div class="panel-title">The 1974 Theorem (Popek &amp; Goldberg)</div>
+    <p>
+      In their seminal 1974 paper, Popek and Goldberg defined the formal requirements for a
+      <strong>Virtual Machine Monitor (VMM)</strong>. The key theorem:
+    </p>
+    <blockquote style="border-left: 3px solid #a78bfa; padding: 10px 16px; margin: 14px 0; color: #ccc; background: #0f0f1a; border-radius: 0 8px 8px 0;">
+      <em>"For any conventional third-generation computer, a VMM may be constructed if the set of
+      <strong>sensitive instructions</strong> is a subset of the set of <strong>privileged instructions</strong>."</em>
+    </blockquote>
+    <p>
+      In plain English: <strong>every instruction that can reveal or affect machine state must trap
+      when executed by a guest OS</strong>. If it traps, the VMM catches it and emulates it.
+      If it silently succeeds, the VMM is blind to it — and correctness breaks.
+    </p>
+  </div>
+
+  <h3>The x86 Virtualization Hole</h3>
+
+  <p>
+    x86 violated the Popek-Goldberg theorem. There are <strong>~17 instructions</strong> that are
+    <em>sensitive but not privileged</em>. They execute in Ring 3 without trapping, but they
+    reveal or affect Ring 0 state:
+  </p>
+
+  <div class="panel">
+    <div class="panel-title">The Problematic Instructions</div>
+    <table>
+      <tr>
+        <th>Instruction</th>
+        <th>What It Does</th>
+        <th>Why It Breaks Virtualization</th>
+      </tr>
+      <tr>
+        <td><code>SGDT</code></td>
+        <td>Stores the GDT register to memory</td>
+        <td>Guest reads the <em>host's</em> GDT address, not its own — breaks isolation</td>
+      </tr>
+      <tr>
+        <td><code>SIDT</code></td>
+        <td>Stores the IDT register to memory</td>
+        <td>Guest sees host's IDT, can fingerprint the VMM</td>
+      </tr>
+      <tr>
+        <td><code>SLDT</code></td>
+        <td>Stores the LDT register to memory</td>
+        <td>Leaks host LDT selector</td>
+      </tr>
+      <tr>
+        <td><code>SMSW</code></td>
+        <td>Stores Machine Status Word (CR0 low bits)</td>
+        <td>Reveals real protection/paging mode</td>
+      </tr>
+      <tr>
+        <td><code>PUSHF / POPF</code></td>
+        <td>Push/pop FLAGS register</td>
+        <td><code>PUSHF</code> exposes the real IF (interrupt flag); <code>POPF</code> silently ignores IF changes in Ring 3</td>
+      </tr>
+      <tr>
+        <td><code>LAR, LSL, VERR, VERW</code></td>
+        <td>Segment descriptor queries</td>
+        <td>Expose host segment configuration</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>The practical consequence:</strong> you cannot simply run a guest OS in Ring 3 and rely on traps
+    to catch everything. A guest Linux kernel calling <code>SGDT</code> would silently get the host's GDT
+    address — it wouldn't trap, and the VMM would never know it happened. The guest kernel
+    would get confused or, worse, an attacker could use this to detect or escape the VM.
+  </div>
+
+  <h3>Visualizing the Problem</h3>
+
+  <div style="max-width: 600px; margin: 20px 0;">
+    <div style="display: flex; gap: 0; flex-direction: column;">
+      <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 12px 12px 0 0; padding: 16px; text-align: center;">
+        <div style="font-weight: bold; color: #34d399; font-size: 14px;">Ideal (Popek-Goldberg compliant)</div>
+        <div style="color: #ccc; font-size: 13px; margin-top: 6px;">
+          Sensitive instructions <span style="color: #34d399;">&#8838;</span> Privileged instructions
+        </div>
+        <div style="color: #888; font-size: 12px; margin-top: 4px;">
+          Every sensitive instruction traps &rarr; VMM can intercept everything
+        </div>
+      </div>
+      <div style="background: #ef444420; border: 2px solid #ef4444; border-top: none; border-radius: 0 0 12px 12px; padding: 16px; text-align: center;">
+        <div style="font-weight: bold; color: #f87171; font-size: 14px;">Reality (x86 before VT-x)</div>
+        <div style="color: #ccc; font-size: 13px; margin-top: 6px;">
+          Sensitive instructions <span style="color: #ef4444;">&#8836;</span> Privileged instructions
+        </div>
+        <div style="color: #888; font-size: 12px; margin-top: 4px;">
+          ~17 instructions slip through without trapping &rarr; VMM is blind
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       SECTION 3: Software Solutions
+       ============================================ -->
+  <h2>3. Software Solutions (Working Around the Hole)</h2>
+
+  <p>
+    Before hardware support arrived in 2005–2006, three major approaches were developed to work around
+    the x86 virtualization hole. Each makes a different trade-off.
+  </p>
+
+  <h3>3a. Trap-and-Emulate (Classical Approach)</h3>
+
+  <div class="panel">
+    <div class="panel-title">How It Works</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Run the guest OS in a lower privilege ring (e.g., Ring 1 or Ring 3).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>When the guest executes a <strong>privileged instruction</strong>, the CPU traps (#GP fault).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>The VMM (running in Ring 0) catches the trap and <strong>emulates</strong> the instruction on behalf of the guest.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>The VMM returns control to the guest, which continues unaware.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Why it fails on x86:</strong> The ~17 sensitive-but-unprivileged instructions
+    <em>don't trap</em>. They execute silently in Ring 3, so the VMM never gets a chance to
+    intercept them. Pure trap-and-emulate is <strong>not possible</strong> on x86.
+  </div>
+
+  <h3>3b. Binary Translation (VMware, 1999)</h3>
+
+  <div class="panel">
+    <div class="panel-title">VMware's Breakthrough</div>
+    <p>
+      VMware's insight: if the hardware won't trap on those instructions, <strong>rewrite the guest
+      code before it runs</strong>. The VMM scans each basic block of guest kernel code and replaces
+      problematic instructions with calls into the VMM.
+    </p>
+    <div class="steps" style="margin-top: 14px;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>Scan:</strong> Before executing a block of guest kernel code, the VMM inspects it instruction by instruction.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>Translate:</strong> Replace sensitive instructions (<code>SGDT</code>, <code>PUSHF</code>, etc.) with safe equivalents or VMM hypercalls.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>Cache:</strong> Store translated blocks in a translation cache for reuse (avoids re-scanning hot paths).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>Execute:</strong> Run the translated code. Safe instructions run natively at full speed; only problematic ones are replaced.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Advantages</div>
+      <div class="comp-body">
+        <ul>
+          <li>No guest OS modification required — runs unmodified Windows, Linux, etc.</li>
+          <li>User-mode code (Ring 3) runs <strong>natively</strong> at full speed — only kernel code needs translation</li>
+          <li>Translation cache amortizes cost over time</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Disadvantages</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>~5–20% overhead</strong> on kernel-heavy workloads (syscall-heavy apps, I/O)</li>
+          <li>Complexity — the translator is essentially a JIT compiler</li>
+          <li>Edge cases: self-modifying code, code in read-only pages, etc.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>3c. Paravirtualization (Xen, 2003)</h3>
+
+  <div class="panel">
+    <div class="panel-title">A Different Philosophy</div>
+    <p>
+      Instead of hiding virtualization from the guest, <strong>tell the guest it's virtualized</strong> and
+      give it explicit APIs to talk to the hypervisor. The guest OS is modified to replace sensitive
+      instructions with <strong>hypercalls</strong> — explicit calls into the VMM, analogous to syscalls
+      but guest-to-hypervisor instead of app-to-kernel.
+    </p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header kernel">Syscall (App &rarr; Kernel)</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">// App in Ring 3 needs to write to a file</span>
+<span class="cm">// Uses syscall to transition to Ring 0</span>
+
+<span class="fn">write</span>(<span class="num">fd</span>, <span class="str">buf</span>, <span class="num">len</span>);
+<span class="cm">// Triggers: SYSCALL instruction</span>
+<span class="cm">// CPU: Ring 3 → Ring 0</span>
+<span class="cm">// Kernel handles the I/O</span>
+<span class="cm">// Returns to Ring 3</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header type1">Hypercall (Guest &rarr; Hypervisor)</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">// Guest kernel needs to update page tables</span>
+<span class="cm">// Instead of MOV to CR3 (would trap or fail),</span>
+<span class="cm">// calls the hypervisor directly</span>
+
+<span class="fn">HYPERVISOR_mmu_update</span>(<span class="num">reqs</span>, <span class="num">count</span>);
+<span class="cm">// Triggers: special trap (e.g., VMCALL)</span>
+<span class="cm">// CPU: Guest → Hypervisor</span>
+<span class="cm">// Hypervisor handles page table update</span>
+<span class="cm">// Returns to guest</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Advantages</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Near-native performance</strong> — no binary translation overhead</li>
+          <li>Fewer VM exits than trap-and-emulate (batch operations via hypercalls)</li>
+          <li>Guest is aware of virtualization — can cooperate (e.g., balloon drivers)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Disadvantages</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Requires guest OS source code modification</strong> — can't run unmodified Windows</li>
+          <li>Porting effort for each OS</li>
+          <li>Guest is tied to a specific hypervisor's hypercall ABI</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Software Solutions Compared</h3>
+
+  <div class="panel">
+    <div class="panel-title">Side-by-Side Summary</div>
+    <table>
+      <tr>
+        <th>Approach</th>
+        <th>Guest Modified?</th>
+        <th>Handles x86 Hole?</th>
+        <th>Overhead</th>
+        <th>Key Product</th>
+      </tr>
+      <tr>
+        <td>Trap-and-Emulate</td>
+        <td>No</td>
+        <td style="color: #f87171;">No (fails on x86)</td>
+        <td>Low (on compliant CPUs)</td>
+        <td>IBM System/370</td>
+      </tr>
+      <tr>
+        <td>Binary Translation</td>
+        <td>No</td>
+        <td style="color: #34d399;">Yes</td>
+        <td>5–20% (kernel code)</td>
+        <td>VMware Workstation (1999)</td>
+      </tr>
+      <tr>
+        <td>Paravirtualization</td>
+        <td style="color: #fbbf24;">Yes</td>
+        <td style="color: #34d399;">Yes (avoids them)</td>
+        <td>&lt;5%</td>
+        <td>Xen (2003)</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ============================================
+       SECTION 4: Hardware-Assisted Virtualization
+       ============================================ -->
+  <h2>4. Hardware-Assisted Virtualization (VT-x / AMD-V)</h2>
+
+  <p>
+    In 2005–2006, Intel and AMD finally fixed the x86 virtualization hole in silicon. Instead of
+    patching around the problem in software, they added <strong>new CPU operating modes</strong>
+    designed specifically for virtualization.
+  </p>
+
+  <div class="panel">
+    <div class="panel-title">Intel VT-x (2005) / AMD-V (2006)</div>
+    <p>
+      Both introduce two new CPU modes that exist <em>orthogonally</em> to the Ring 0–3 privilege levels:
+    </p>
+    <div class="comparison" style="margin-top: 14px;">
+      <div class="comp-side">
+        <div class="comp-header type1">VMX Root Mode</div>
+        <div class="comp-body">
+          <p><strong>Who runs here:</strong> The hypervisor / VMM</p>
+          <p style="margin-top: 8px;"><strong>Privilege:</strong> Full control of hardware. Can configure which guest operations cause VM exits.</p>
+          <p style="margin-top: 8px;"><strong>Ring 0 in root mode</strong> = traditional Ring 0 with VMM superpowers.</p>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header vm">VMX Non-Root Mode</div>
+        <div class="comp-body">
+          <p><strong>Who runs here:</strong> The guest OS and its applications</p>
+          <p style="margin-top: 8px;"><strong>Privilege:</strong> Guest kernel runs in Ring 0 of non-root mode — it <em>thinks</em> it has full control, but sensitive operations trigger <strong>VM exits</strong>.</p>
+          <p style="margin-top: 8px;"><strong>Ring 0 in non-root mode</strong> = looks like Ring 0, but the CPU silently intercepts configured operations.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key insight:</strong> The guest kernel runs in Ring 0 — its <em>own</em> Ring 0. It doesn't need to be
+    deprivileged to Ring 1 or Ring 3. The CPU's non-root mode automatically traps sensitive operations
+    regardless of the ring level. This eliminates the Popek-Goldberg hole entirely.
+  </div>
+
+  <h3>Nesting Diagram: VMX Modes + Rings</h3>
+
+  <div class="nest-box hardware" style="max-width: 750px;">
+    <span class="nest-label">Physical CPU</span>
+    <div style="display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap;">
+      <div class="nest-box hypervisor" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">VMX Root Mode</span>
+        <div class="nest-box os" style="margin-top: 10px;">
+          <span class="nest-label">Ring 0</span>
+          <p style="color: #fbbf24; font-size: 13px; margin-top: 8px;">
+            Hypervisor (KVM, ESXi, Hyper-V)
+          </p>
+        </div>
+      </div>
+      <div class="nest-box vm" style="flex: 1.5; min-width: 300px;">
+        <span class="nest-label">VMX Non-Root Mode (Guest)</span>
+        <div class="nest-box os" style="margin-top: 10px;">
+          <span class="nest-label">Ring 0 (Guest Kernel)</span>
+          <p style="color: #fbbf24; font-size: 13px; margin-top: 8px;">
+            Guest Linux / Windows kernel — thinks it has full control
+          </p>
+        </div>
+        <div class="nest-box namespace" style="margin-top: 4px;">
+          <span class="nest-label">Ring 3 (Guest Userspace)</span>
+          <p style="color: #60a5fa; font-size: 13px; margin-top: 8px;">
+            Guest applications (nginx, python, etc.)
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>VMCS — Virtual Machine Control Structure</h3>
+
+  <div class="panel">
+    <div class="panel-title">The Per-vCPU Data Structure</div>
+    <p>
+      Each virtual CPU has its own <strong>VMCS</strong> — a 4 KB hardware-managed data structure
+      in memory. The CPU reads from and writes to the VMCS during VM entries and exits. It contains
+      three main areas:
+    </p>
+    <div class="grid-3" style="margin-top: 14px;">
+      <div class="panel" style="border-color: #e94560;">
+        <div class="panel-title" style="color: #e94560;">Guest-State Area</div>
+        <p style="font-size: 13px;">Saved/restored on VM entry/exit:</p>
+        <ul style="font-size: 13px;">
+          <li>General-purpose registers</li>
+          <li><code>CR0</code>, <code>CR3</code>, <code>CR4</code></li>
+          <li><code>CS</code>, <code>SS</code>, <code>DS</code> (segments)</li>
+          <li><code>GDTR</code>, <code>IDTR</code></li>
+          <li><code>RIP</code>, <code>RSP</code>, <code>RFLAGS</code></li>
+        </ul>
+      </div>
+      <div class="panel" style="border-color: #34d399;">
+        <div class="panel-title" style="color: #34d399;">Host-State Area</div>
+        <p style="font-size: 13px;">Loaded on VM exit (return to VMM):</p>
+        <ul style="font-size: 13px;">
+          <li>Host <code>CR0</code>, <code>CR3</code>, <code>CR4</code></li>
+          <li>Host segment selectors</li>
+          <li>Host <code>RIP</code> (VMM entry point)</li>
+          <li>Host <code>RSP</code></li>
+          <li>Host <code>GDTR</code>, <code>IDTR</code></li>
+        </ul>
+      </div>
+      <div class="panel" style="border-color: #a78bfa;">
+        <div class="panel-title" style="color: #a78bfa;">VM-Execution Controls</div>
+        <p style="font-size: 13px;">Configure what triggers VM exits:</p>
+        <ul style="font-size: 13px;">
+          <li>Pin-based (external interrupts, NMIs)</li>
+          <li>Processor-based (HLT, I/O, CR access, MSR access)</li>
+          <li>Exception bitmap (which exceptions cause exits)</li>
+          <li>I/O bitmap</li>
+          <li>MSR bitmap</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>VMCS access:</strong> The hypervisor reads/writes VMCS fields using special instructions
+    <code>VMREAD</code> and <code>VMWRITE</code> — it's not a simple memory-mapped struct. The CPU
+    manages the internal format, and it can vary between CPU generations.
+  </div>
+
+  <h3>VM Entry / VM Exit Cycle</h3>
+
+  <p>
+    The <strong>VM Entry &rarr; Guest Execution &rarr; VM Exit</strong> cycle is the heartbeat of
+    hardware-assisted virtualization. Every vCPU spends its life oscillating between these states:
+  </p>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="num">1</div>
+      <div class="label" style="color: #a78bfa;">Hypervisor (VMX Root)</div>
+      <div class="desc">VMM prepares VMCS, decides which guest to run</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="num">2</div>
+      <div class="label" style="color: #34d399;">VMLAUNCH / VMRESUME</div>
+      <div class="desc">VM Entry: CPU loads guest state from VMCS, switches to non-root mode</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="num">3</div>
+      <div class="label" style="color: #60a5fa;">Guest Runs (VMX Non-Root)</div>
+      <div class="desc">Guest kernel + apps execute natively at near-full speed</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="num">4</div>
+      <div class="label" style="color: #e94560;">VM Exit (Trap)</div>
+      <div class="desc">Sensitive op, I/O, interrupt, or timer &rarr; CPU saves guest state to VMCS, returns to root mode</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="num">5</div>
+      <div class="label" style="color: #fbbf24;">VMM Handles Exit</div>
+      <div class="desc">Emulates the operation, updates VMCS, then VMRESUME back to step 3</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Common VM Exit Reasons</div>
+    <table>
+      <tr>
+        <th>Exit Reason</th>
+        <th>Trigger</th>
+        <th>VMM Action</th>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_CPUID</code></td>
+        <td>Guest executes <code>CPUID</code></td>
+        <td>Return virtualized CPU feature flags</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_IO_INSTRUCTION</code></td>
+        <td>Guest does port I/O (<code>IN</code>/<code>OUT</code>)</td>
+        <td>Emulate the I/O device</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_CR_ACCESS</code></td>
+        <td>Guest writes to <code>CR0</code>, <code>CR3</code>, <code>CR4</code></td>
+        <td>Validate and apply (e.g., update shadow page tables)</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_MSR_WRITE</code></td>
+        <td>Guest writes an MSR</td>
+        <td>Emulate or pass through</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_HLT</code></td>
+        <td>Guest executes <code>HLT</code></td>
+        <td>Schedule another vCPU or idle</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_EPT_VIOLATION</code></td>
+        <td>Guest accesses unmapped guest-physical memory</td>
+        <td>Handle memory mapping (lazy allocation, MMIO emulation)</td>
+      </tr>
+      <tr>
+        <td><code>EXIT_REASON_EXTERNAL_INTERRUPT</code></td>
+        <td>Hardware interrupt arrives for the host</td>
+        <td>Return to host to handle the interrupt</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>VM exits are expensive:</strong> Each exit costs ~1,000–3,000 CPU cycles (context switch
+    between root and non-root mode, VMCS state save/restore). Minimizing unnecessary exits is a
+    major optimization target. This is why the VMCS has fine-grained control bitmaps — you only
+    trap on the operations you actually need to intercept.
+  </div>
+
+  <!-- ============================================
+       SECTION 5: Extended Page Tables
+       ============================================ -->
+  <h2>5. Extended Page Tables (EPT / NPT)</h2>
+
+  <p>
+    Memory virtualization is one of the most performance-critical aspects of running a VM.
+    The core challenge: the guest OS manages its own page tables, but those tables map to
+    <strong>guest-physical addresses</strong> — not real hardware addresses.
+  </p>
+
+  <h3>The Two-Level Address Translation Problem</h3>
+
+  <div class="panel">
+    <div class="panel-title">Address Spaces in a VM</div>
+    <div class="mapping">
+      <div><strong style="color: #60a5fa;">Guest Virtual Address (GVA)</strong><br><span style="font-size: 12px; color: #888;">What guest applications use</span></div>
+      <div class="arr">&rarr;<br><span style="font-size: 11px;">Guest page table</span></div>
+      <div><strong style="color: #a78bfa;">Guest Physical Address (GPA)</strong><br><span style="font-size: 12px; color: #888;">What the guest kernel thinks is "physical memory"</span></div>
+    </div>
+    <div class="mapping">
+      <div><strong style="color: #a78bfa;">Guest Physical Address (GPA)</strong><br><span style="font-size: 12px; color: #888;">An abstraction managed by the hypervisor</span></div>
+      <div class="arr">&rarr;<br><span style="font-size: 11px;">EPT / NPT</span></div>
+      <div><strong style="color: #34d399;">Host Physical Address (HPA)</strong><br><span style="font-size: 12px; color: #888;">Actual DRAM address on the hardware</span></div>
+    </div>
+    <p style="margin-top: 12px; color: #888; font-size: 13px;">
+      Full translation path: GVA &rarr; (guest page table) &rarr; GPA &rarr; (EPT/NPT) &rarr; HPA
+    </p>
+  </div>
+
+  <h3>Before EPT: Shadow Page Tables</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Shadow Page Tables (Pre-EPT)</div>
+      <div class="comp-body">
+        <p>The VMM maintains a <strong>shadow copy</strong> of the guest's page tables that maps directly from GVA &rarr; HPA.</p>
+        <ul style="margin-top: 10px;">
+          <li>VMM intercepts every guest page table write (trap on <code>MOV to CR3</code>)</li>
+          <li>VMM walks the guest page table, translates each GPA to HPA, writes shadow entries</li>
+          <li>Hardware MMU uses the shadow tables (guest never knows)</li>
+          <li>Every guest page fault = VM exit + VMM handling</li>
+          <li>Every guest <code>CR3</code> switch (context switch) = VM exit + full shadow rebuild</li>
+        </ul>
+        <div class="warn" style="margin-top: 10px;">
+          <strong>Cost:</strong> Extremely high VM exit rate for memory-intensive workloads. A guest
+          context switch that takes ~1 &mu;s natively can take 10–50 &mu;s with shadow page tables.
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Extended Page Tables (EPT/NPT)</div>
+      <div class="comp-body">
+        <p>The <strong>CPU hardware</strong> walks both levels of page tables automatically — no VMM intervention needed.</p>
+        <ul style="margin-top: 10px;">
+          <li>Guest manages its own page tables (GVA &rarr; GPA) — no trapping</li>
+          <li>VMM maintains EPT (GPA &rarr; HPA) — set up once, rarely changed</li>
+          <li>Hardware MMU walks <em>both</em> tables in a single operation</li>
+          <li>Guest page faults handled by guest kernel (no VM exit)</li>
+          <li>Guest <code>CR3</code> switches are free (no VM exit)</li>
+        </ul>
+        <div class="tip" style="margin-top: 10px;">
+          <strong>Result:</strong> 5–10x fewer VM exits for memory-intensive workloads. Guest context
+          switches run at near-native speed.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>The Two-Dimensional Page Walk</h3>
+
+  <p>
+    With EPT, a single guest memory access triggers a <strong>2D page walk</strong>. The hardware
+    walks the guest page table (4 levels on x86-64), but at each level it also needs to
+    translate the guest-physical address of the next page table entry through the EPT (another 4 levels).
+  </p>
+
+  <div class="panel">
+    <div class="panel-title">Worst-Case Walk Depth</div>
+    <p>
+      For a 4-level guest page table with 4-level EPT, a single TLB miss can require up to:
+    </p>
+    <p style="text-align: center; margin: 14px 0;">
+      <strong style="font-size: 20px; color: #e94560;">4 &times; 4 + 4 = 20 memory accesses</strong>
+    </p>
+    <p style="color: #888; font-size: 13px; text-align: center;">
+      (4 guest page table levels &times; 4 EPT levels each, plus 4 EPT levels for the final data page)
+    </p>
+    <p style="margin-top: 12px;">
+      This is why the <strong>TLB (Translation Lookaside Buffer)</strong> is even more critical in VMs.
+      Modern CPUs have:
+    </p>
+    <ul>
+      <li><strong>VPID (Virtual Processor ID)</strong> — tags TLB entries per-vCPU so they survive VM exits (no TLB flush on every exit)</li>
+      <li><strong>Large page support in EPT</strong> — 2 MB and 1 GB EPT pages reduce walk depth</li>
+      <li><strong>EPT-specific TLB entries</strong> — cached GPA &rarr; HPA translations</li>
+    </ul>
+  </div>
+
+  <h3>EPT Performance Impact</h3>
+
+  <div class="panel">
+    <div class="panel-title">Real-World Numbers (approximate)</div>
+    <table>
+      <tr>
+        <th>Metric</th>
+        <th>Shadow Page Tables</th>
+        <th>EPT / NPT</th>
+      </tr>
+      <tr>
+        <td>VM exits per second (memory-heavy workload)</td>
+        <td style="color: #f87171;">50,000–200,000</td>
+        <td style="color: #34d399;">1,000–5,000</td>
+      </tr>
+      <tr>
+        <td>Guest context switch overhead</td>
+        <td style="color: #f87171;">10–50 &mu;s</td>
+        <td style="color: #34d399;">1–3 &mu;s</td>
+      </tr>
+      <tr>
+        <td>TLB miss penalty</td>
+        <td>~4 memory accesses (uses shadow tables directly)</td>
+        <td>Up to 20 accesses (2D walk, mitigated by TLB/VPID)</td>
+      </tr>
+      <tr>
+        <td>Overall memory-intensive workload overhead</td>
+        <td style="color: #f87171;">15–40%</td>
+        <td style="color: #34d399;">2–5%</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Bottom line:</strong> EPT/NPT trades a slower TLB miss path (20 vs 4 memory accesses) for
+    dramatically fewer VM exits. Since TLB hit rates are typically &gt;99%, this is an overwhelmingly
+    good trade. EPT is why modern VMs can run memory-intensive workloads with barely measurable
+    overhead.
+  </div>
+
+  <!-- ============================================
+       SECTION 6: Putting It All Together
+       ============================================ -->
+  <h2>6. The Full Picture: Modern CPU Virtualization Stack</h2>
+
+  <div class="layer-diagram" style="max-width: 750px;">
+    <div class="layer l7">
+      <div class="layer-name">Guest Application</div>
+      <div class="layer-protocols">Ring 3 in VMX non-root mode &mdash; runs natively at full speed</div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-name">Guest Kernel</div>
+      <div class="layer-protocols">Ring 0 in VMX non-root mode &mdash; sensitive ops trigger VM exits</div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-name">VMCS</div>
+      <div class="layer-protocols">Per-vCPU state &mdash; saved/restored on VM exit/entry</div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-name">EPT / NPT</div>
+      <div class="layer-protocols">GPA &rarr; HPA translation &mdash; hardware-walked, no VM exits</div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-name">Hypervisor (VMM)</div>
+      <div class="layer-protocols">Ring 0 in VMX root mode &mdash; KVM, ESXi, Hyper-V, Xen</div>
+    </div>
+    <div class="layer l1">
+      <div class="layer-name">Physical CPU (VT-x / AMD-V)</div>
+      <div class="layer-protocols">VMX root/non-root modes, EPT hardware, VPID TLB tags</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Timeline recap:</strong>
+    1974 — Popek-Goldberg theorem published.
+    1999 — VMware ships binary translation (first practical x86 virtualization).
+    2003 — Xen ships paravirtualization.
+    2005 — Intel VT-x released.
+    2006 — AMD-V released.
+    2008 — Intel EPT / AMD NPT released.
+    Today — hardware-assisted virtualization with EPT is the universal standard.
+  </div>
+
+</body>
+</html>

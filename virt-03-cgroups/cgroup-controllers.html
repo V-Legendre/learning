@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 03 — cgroup Controllers</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 03 — cgroup Controllers</h1>
+  <p class="subtitle">CPU throttling, memory limits, I/O control, and fork bomb protection</p>
+
+  <!-- ===== CPU CONTROLLER ===== -->
+  <h2>CPU Controller</h2>
+
+  <p>The CPU controller manages how much processor time a cgroup gets. It has two distinct mechanisms: <strong>proportional sharing</strong> (how to divide CPU when contended) and <strong>bandwidth limiting</strong> (hard cap regardless of contention).</p>
+
+  <h3>cpu.weight — Proportional CPU Sharing</h3>
+
+  <div class="panel">
+    <div class="panel-title">cpu.weight (v2) / cpu.shares (v1)</div>
+    <ul>
+      <li><strong>Default:</strong> 100 (range: 1 - 10000)</li>
+      <li>Only matters when CPU is <strong>contended</strong> — if only one cgroup is busy, it gets 100% regardless of its weight</li>
+      <li>Weights are relative: a cgroup with weight 200 gets <strong>2x</strong> the CPU time of a cgroup with weight 100</li>
+      <li>Think of it as "priority shares" — the kernel divides available CPU proportionally</li>
+    </ul>
+  </div>
+
+  <!-- Weight example diagram -->
+  <div style="padding: 25px; background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 12px; margin: 15px 0;">
+    <p style="text-align: center; color: #fff; font-weight: bold; margin-bottom: 15px;">CPU Contention Example: 1 CPU, 3 cgroups all busy</p>
+    <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+      <div style="text-align: center; flex: 1; min-width: 140px;">
+        <div style="background: #3b82f620; border: 2px solid #3b82f6; border-radius: 8px; padding: 14px;">
+          <div style="color: #60a5fa; font-weight: bold;">App A</div>
+          <div style="color: #888; font-size: 13px;">weight: 200</div>
+          <div style="color: #34d399; font-weight: bold; font-size: 18px; margin-top: 8px;">50%</div>
+          <div style="color: #888; font-size: 11px;">200/(200+100+100)</div>
+        </div>
+      </div>
+      <div style="text-align: center; flex: 1; min-width: 140px;">
+        <div style="background: #a78bfa20; border: 2px solid #a78bfa; border-radius: 8px; padding: 14px;">
+          <div style="color: #a78bfa; font-weight: bold;">App B</div>
+          <div style="color: #888; font-size: 13px;">weight: 100</div>
+          <div style="color: #34d399; font-weight: bold; font-size: 18px; margin-top: 8px;">25%</div>
+          <div style="color: #888; font-size: 11px;">100/(200+100+100)</div>
+        </div>
+      </div>
+      <div style="text-align: center; flex: 1; min-width: 140px;">
+        <div style="background: #fbbf2420; border: 2px solid #fbbf24; border-radius: 8px; padding: 14px;">
+          <div style="color: #fbbf24; font-weight: bold;">App C</div>
+          <div style="color: #888; font-size: 13px;">weight: 100</div>
+          <div style="color: #34d399; font-weight: bold; font-size: 18px; margin-top: 8px;">25%</div>
+          <div style="color: #888; font-size: 11px;">100/(200+100+100)</div>
+        </div>
+      </div>
+    </div>
+    <p style="text-align: center; color: #888; font-size: 13px; margin-top: 12px;">If App B and App C become idle, App A gets 100% — weights only matter under contention</p>
+  </div>
+
+  <h3>cpu.max — Hard CPU Bandwidth Limit</h3>
+
+  <div class="panel">
+    <div class="panel-title">cpu.max (v2) / cpu.cfs_quota_us + cpu.cfs_period_us (v1)</div>
+    <ul>
+      <li><strong>Format:</strong> <code>$MAX $PERIOD</code> (both in microseconds)</li>
+      <li>The cgroup can use at most <code>$MAX</code> microseconds of CPU per <code>$PERIOD</code> microsecond window</li>
+      <li><strong>Default:</strong> <code>max 100000</code> (unlimited quota, 100ms period)</li>
+      <li>CFS bandwidth throttling: when quota is exhausted, <strong>all threads in the cgroup are paused</strong> until the next period</li>
+    </ul>
+  </div>
+
+  <table>
+    <tr>
+      <th>cpu.max Value</th>
+      <th>Effective Limit</th>
+      <th>Docker Equivalent</th>
+    </tr>
+    <tr>
+      <td><code>200000 100000</code></td>
+      <td>2 CPUs (200ms per 100ms period)</td>
+      <td><code>--cpus 2</code></td>
+    </tr>
+    <tr>
+      <td><code>100000 100000</code></td>
+      <td>1 CPU (100ms per 100ms period)</td>
+      <td><code>--cpus 1</code></td>
+    </tr>
+    <tr>
+      <td><code>50000 100000</code></td>
+      <td>0.5 CPUs (50ms per 100ms period)</td>
+      <td><code>--cpus 0.5</code></td>
+    </tr>
+    <tr>
+      <td><code>25000 100000</code></td>
+      <td>0.25 CPUs (25ms per 100ms period)</td>
+      <td><code>--cpus 0.25</code></td>
+    </tr>
+    <tr>
+      <td><code>max 100000</code></td>
+      <td>Unlimited</td>
+      <td>(default — no <code>--cpus</code> flag)</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>The period is typically 100ms (100000us).</strong> With <code>200000 100000</code>, the cgroup can burn 200ms of CPU time per 100ms wall-clock period. Since this exceeds 100ms, it must use multiple CPU cores to fill the quota — that is how you express "2 CPUs" in cgroup terms.
+  </div>
+
+  <h3>cpuset Controller — CPU Pinning</h3>
+
+  <div class="panel">
+    <div class="panel-title">cpuset: Pin Processes to Specific Cores</div>
+    <ul>
+      <li><code>cpuset.cpus</code> = <code>0-3</code> means only use cores 0, 1, 2, 3</li>
+      <li><code>cpuset.cpus</code> = <code>0,2,4</code> means only use cores 0, 2, and 4</li>
+      <li><code>cpuset.mems</code> = NUMA node pinning (which memory banks to use)</li>
+    </ul>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Use Cases for CPU Pinning</div>
+      <ul>
+        <li>Latency-sensitive workloads (avoid cache thrashing from core migration)</li>
+        <li>NUMA-aware placement (keep processes close to their memory)</li>
+        <li>Isolating noisy neighbors (dedicate cores to critical services)</li>
+        <li>Real-time workloads that need consistent performance</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">cpuset vs cpu.max</div>
+      <ul>
+        <li><strong>cpuset</strong>: controls <em>which</em> cores — spatial partitioning</li>
+        <li><strong>cpu.max</strong>: controls <em>how much time</em> — temporal throttling</li>
+        <li>They can be combined: pin to cores 0-3, AND limit to 2 CPUs of bandwidth</li>
+        <li>cpuset alone does not limit CPU usage within the allowed cores</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== MEMORY CONTROLLER ===== -->
+  <h2>Memory Controller</h2>
+
+  <p>The memory controller manages RAM and swap consumption. It provides a layered set of limits — from hard kills to soft pressure — giving fine-grained control over how the kernel handles memory scarcity.</p>
+
+  <h3>Memory Limit Hierarchy</h3>
+
+  <!-- Memory limits stacked diagram -->
+  <div style="padding: 25px; background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 12px; margin: 15px 0;">
+    <div style="display: flex; flex-direction: column; gap: 0; max-width: 600px; margin: 0 auto;">
+      <div style="background: #ef444420; border: 2px solid #ef4444; border-radius: 8px 8px 0 0; padding: 14px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="color: #f87171; font-weight: bold;">memory.max</div>
+            <div style="color: #888; font-size: 13px;">Hard limit. OOM killer fires when exceeded.</div>
+          </div>
+          <div style="color: #f87171; font-weight: bold; font-size: 18px;">512M</div>
+        </div>
+      </div>
+      <div style="background: #f59e0b20; border: 2px solid #f59e0b; border-left: 2px solid #f59e0b; border-right: 2px solid #f59e0b; padding: 14px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="color: #fbbf24; font-weight: bold;">memory.high</div>
+            <div style="color: #888; font-size: 13px;">Soft throttle. Triggers aggressive reclaim, slows allocation.</div>
+          </div>
+          <div style="color: #fbbf24; font-weight: bold; font-size: 18px;">400M</div>
+        </div>
+      </div>
+      <div style="background: #3b82f620; border: 2px solid #3b82f6; border-left: 2px solid #3b82f6; border-right: 2px solid #3b82f6; padding: 14px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="color: #60a5fa; font-weight: bold;">memory.low</div>
+            <div style="color: #888; font-size: 13px;">Best-effort protection. Memory below this is protected from reclaim.</div>
+          </div>
+          <div style="color: #60a5fa; font-weight: bold; font-size: 18px;">128M</div>
+        </div>
+      </div>
+      <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 0 0 8px 8px; padding: 14px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="color: #34d399; font-weight: bold;">memory.min</div>
+            <div style="color: #888; font-size: 13px;">Hard protection. Memory below this is NEVER reclaimed.</div>
+          </div>
+          <div style="color: #34d399; font-weight: bold; font-size: 18px;">64M</div>
+        </div>
+      </div>
+    </div>
+    <p style="text-align: center; color: #888; font-size: 13px; margin-top: 15px;">Limits enforce a ceiling. Protections enforce a floor.</p>
+  </div>
+
+  <h3>OOM Killer Behavior</h3>
+
+  <div class="panel">
+    <div class="panel-title">What Happens When memory.max Is Hit</div>
+    <ul>
+      <li>The kernel attempts memory reclaim (swap, page cache eviction) first</li>
+      <li>If reclaim cannot free enough memory, the <strong>OOM killer activates</strong></li>
+      <li>The OOM killer selects and kills a process <em>within the cgroup</em> — not system-wide</li>
+      <li><code>memory.oom.group = 1</code> — when set, the OOM killer kills <strong>all processes</strong> in the cgroup instead of picking one</li>
+      <li>This is what happens when a Kubernetes pod gets <code>OOMKilled</code></li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header kernel">Without memory.oom.group</div>
+      <div class="comp-body">
+        <p>OOM killer picks <strong>one process</strong> in the cgroup (based on oom_score). Other processes in the cgroup continue running.</p>
+        <p style="color: #888; margin-top: 8px;">May leave the application in an inconsistent state if only one worker dies.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">With memory.oom.group = 1</div>
+      <div class="comp-body">
+        <p>OOM killer terminates <strong>all processes</strong> in the cgroup at once.</p>
+        <p style="color: #888; margin-top: 8px;">Clean kill. This is what containers typically want — kill the whole container, let the orchestrator restart it.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Swap Limits and Accounting</h3>
+
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>memory.swap.max</code></td>
+      <td>Maximum swap usage (independent of RAM limit). Set to <code>0</code> to disable swap for this cgroup.</td>
+    </tr>
+    <tr>
+      <td><code>memory.current</code></td>
+      <td>Current total memory usage (RSS + page cache)</td>
+    </tr>
+    <tr>
+      <td><code>memory.swap.current</code></td>
+      <td>Current swap usage</td>
+    </tr>
+    <tr>
+      <td><code>memory.stat</code></td>
+      <td>Detailed breakdown: anon (RSS), file (page cache), kernel stacks, slab, sock, shmem, swap</td>
+    </tr>
+    <tr>
+      <td><code>memory.peak</code></td>
+      <td>High-water mark — maximum memory.current ever reached</td>
+    </tr>
+  </table>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cat /sys/fs/cgroup/my-app/worker/memory.stat<br>
+    <span class="output">anon 25165824<br>
+file 16777216<br>
+kernel 1048576<br>
+sock 0<br>
+shmem 0<br>
+zswap 0<br>
+zswapped 0<br>
+file_mapped 4194304<br>
+file_dirty 0<br>
+file_writeback 0<br>
+swapcached 0<br>
+anon_thp 0<br>
+inactive_anon 12582912<br>
+active_anon 12582912<br>
+inactive_file 8388608<br>
+active_file 8388608<br>
+pgfault 15234<br>
+pgmajfault 3<br>
+...</span>
+  </div>
+
+  <!-- ===== I/O CONTROLLER ===== -->
+  <h2>I/O Controller</h2>
+
+  <p>The I/O controller limits disk read/write bandwidth and IOPS per block device. Like the CPU controller, it supports both proportional sharing and hard limits.</p>
+
+  <h3>I/O Control Files</h3>
+
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Purpose</th>
+      <th>Format</th>
+    </tr>
+    <tr>
+      <td><code>io.weight</code></td>
+      <td>Proportional I/O bandwidth (like cpu.weight)</td>
+      <td><code>default 100</code> or <code>MAJ:MIN 200</code></td>
+    </tr>
+    <tr>
+      <td><code>io.max</code></td>
+      <td>Hard I/O limits per device</td>
+      <td><code>MAJ:MIN rbps=X wbps=Y riops=Z wiops=W</code></td>
+    </tr>
+    <tr>
+      <td><code>io.latency</code></td>
+      <td>Latency-based I/O control</td>
+      <td><code>MAJ:MIN target=Xus</code></td>
+    </tr>
+    <tr>
+      <td><code>io.stat</code></td>
+      <td>Per-device I/O statistics</td>
+      <td>(read-only)</td>
+    </tr>
+  </table>
+
+  <h3>io.max Examples</h3>
+
+  <div class="terminal">
+    <span class="prompt"># </span><span class="cm"># Find the major:minor numbers for /dev/sda</span><br>
+    <span class="prompt">$ </span>lsblk -o NAME,MAJ:MIN<br>
+    <span class="output">NAME    MAJ:MIN<br>
+sda       8:0<br>
+|-sda1    8:1<br>
+|-sda2    8:2</span><br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Limit /dev/sda reads to 10 MB/s</span><br>
+    <span class="prompt"># </span>echo "8:0 rbps=10485760" > /sys/fs/cgroup/my-app/worker/io.max<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Limit both reads and writes, plus IOPS</span><br>
+    <span class="prompt"># </span>echo "8:0 rbps=10485760 wbps=5242880 riops=1000 wiops=500" > io.max<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Limit format explanation:</span><br>
+    <span class="prompt"># </span><span class="cm">#   rbps  = read bytes per second   (10 MB/s)</span><br>
+    <span class="prompt"># </span><span class="cm">#   wbps  = write bytes per second  (5 MB/s)</span><br>
+    <span class="prompt"># </span><span class="cm">#   riops = read I/O ops per second  (1000)</span><br>
+    <span class="prompt"># </span><span class="cm">#   wiops = write I/O ops per second (500)</span>
+  </div>
+
+  <div class="warn">
+    <strong>Caveat:</strong> I/O cgroup throttling only works reliably with <strong>direct I/O</strong> or when the filesystem supports <strong>cgroup-aware writeback</strong>. With buffered I/O, writes go to the page cache first and are written back by kernel threads that may be in a different cgroup — the limits may not apply as expected. ext4 and btrfs support cgroup writeback; XFS gained support in kernel 5.18+.
+  </div>
+
+  <!-- ===== PIDS CONTROLLER ===== -->
+  <h2>PIDs Controller</h2>
+
+  <p>The simplest controller — it limits the maximum number of processes (and threads) in a cgroup.</p>
+
+  <div class="panel">
+    <div class="panel-title">Fork Bomb Protection</div>
+    <ul>
+      <li><code>pids.max</code> — maximum number of processes/threads allowed in the cgroup</li>
+      <li><code>pids.current</code> — current count of processes/threads</li>
+      <li>When the limit is hit, <code>fork()</code> and <code>clone()</code> return <code>EAGAIN</code></li>
+      <li>Without this, a runaway container running <code>:(){ :|:& };:</code> can exhaust the host's entire PID space and freeze the system</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without pids.max</div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Fork bomb in a container</span>
+:(){ :|:& };:
+
+<span class="cm"># Result: exponential process creation</span>
+<span class="cm"># Consumes all PIDs on the host</span>
+<span class="cm"># Host becomes unresponsive</span>
+<span class="cm"># Even SSH may stop working</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With pids.max = 100</div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Fork bomb in a container</span>
+:(){ :|:& };:
+
+<span class="cm"># Result: stops at 100 processes</span>
+<span class="cm"># fork() returns EAGAIN</span>
+<span class="cm"># Container is broken, but host is fine</span>
+<span class="cm"># Other containers unaffected</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DEVICES CONTROLLER ===== -->
+  <h2>Devices Controller</h2>
+
+  <p>Controls which block and character devices a cgroup can access. This prevents containers from accessing host hardware directly.</p>
+
+  <div class="panel">
+    <div class="panel-title">Device Access Model</div>
+    <ul>
+      <li><strong>v1:</strong> Explicit device controller with <code>devices.allow</code> and <code>devices.deny</code></li>
+      <li><strong>v2:</strong> Device access is managed via eBPF programs attached to the cgroup (the <code>devices</code> controller was replaced by <code>BPF_PROG_TYPE_CGROUP_DEVICE</code>)</li>
+      <li><strong>Allowlist model:</strong> deny all by default, then allow specific devices</li>
+    </ul>
+  </div>
+
+  <h3>Typical Container Device Allowlist</h3>
+
+  <table>
+    <tr>
+      <th>Device</th>
+      <th>Type</th>
+      <th>Allowed</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>/dev/null</code></td>
+      <td>char 1:3</td>
+      <td style="color: #34d399;">Yes</td>
+      <td>Discard output</td>
+    </tr>
+    <tr>
+      <td><code>/dev/zero</code></td>
+      <td>char 1:5</td>
+      <td style="color: #34d399;">Yes</td>
+      <td>Zero bytes source</td>
+    </tr>
+    <tr>
+      <td><code>/dev/urandom</code></td>
+      <td>char 1:9</td>
+      <td style="color: #34d399;">Yes</td>
+      <td>Random number generator</td>
+    </tr>
+    <tr>
+      <td><code>/dev/tty</code></td>
+      <td>char 5:0</td>
+      <td style="color: #34d399;">Yes</td>
+      <td>Terminal access</td>
+    </tr>
+    <tr>
+      <td><code>/dev/sda</code></td>
+      <td>block 8:0</td>
+      <td style="color: #ef4444;">No</td>
+      <td>Host disk — denied</td>
+    </tr>
+    <tr>
+      <td><code>/dev/kmsg</code></td>
+      <td>char 1:11</td>
+      <td style="color: #ef4444;">No</td>
+      <td>Kernel message buffer — denied</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Docker <code>--device</code> flag:</strong> When you run <code>docker run --device /dev/fuse</code>, Docker adds that device to the cgroup's allowlist and bind-mounts it into the container's filesystem. Without <code>--device</code>, the container cannot access it even if it has the right capabilities.
+  </div>
+
+  <!-- ===== SUMMARY TABLE ===== -->
+  <h2>Controller Summary</h2>
+
+  <table>
+    <tr>
+      <th>Controller</th>
+      <th>Key Files (v2)</th>
+      <th>What It Controls</th>
+      <th>Default Behavior</th>
+    </tr>
+    <tr>
+      <td><strong>cpu</strong></td>
+      <td><code>cpu.weight</code>, <code>cpu.max</code></td>
+      <td>CPU time (proportional sharing + bandwidth)</td>
+      <td>Unlimited, fair share</td>
+    </tr>
+    <tr>
+      <td><strong>memory</strong></td>
+      <td><code>memory.max</code>, <code>memory.high</code>, <code>memory.low</code></td>
+      <td>RAM + swap consumption</td>
+      <td>Unlimited</td>
+    </tr>
+    <tr>
+      <td><strong>io</strong></td>
+      <td><code>io.weight</code>, <code>io.max</code></td>
+      <td>Disk bandwidth and IOPS</td>
+      <td>Unlimited</td>
+    </tr>
+    <tr>
+      <td><strong>pids</strong></td>
+      <td><code>pids.max</code></td>
+      <td>Process/thread count</td>
+      <td>Unlimited</td>
+    </tr>
+    <tr>
+      <td><strong>cpuset</strong></td>
+      <td><code>cpuset.cpus</code>, <code>cpuset.mems</code></td>
+      <td>CPU core and NUMA pinning</td>
+      <td>All CPUs, all NUMA nodes</td>
+    </tr>
+    <tr>
+      <td><strong>devices</strong></td>
+      <td>(eBPF-based in v2)</td>
+      <td>Block/char device access</td>
+      <td>All denied (allowlist model)</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Remember:</strong> All of these have "unlimited" as the default. Containers get their limits because the container runtime (Docker, containerd, CRI-O) writes values to these files when creating the container's cgroup. Without a runtime setting limits, a container could consume all host resources.
+  </div>
+
+</body>
+</html>

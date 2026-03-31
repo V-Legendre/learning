@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 07 — Docker Volumes &amp; Storage</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 07 — Docker Volumes &amp; Storage</h1>
+  <p class="subtitle">Solving the persistence problem — bind mounts, named volumes, and tmpfs</p>
+
+  <!-- ============================================
+       The Persistence Problem
+       ============================================ -->
+  <h2>The Persistence Problem</h2>
+
+  <div class="panel">
+    <div class="panel-title">Why Container Storage Is Not Enough</div>
+    <ul>
+      <li>Container's <strong>read-write layer</strong> (overlay2 upperdir) is <strong>ephemeral</strong> — destroyed when the container is removed</li>
+      <li>Overlay2 <strong>copy-on-write</strong> adds overhead for write-heavy workloads: first write to a file copies the entire file from lowerdir to upperdir</li>
+      <li><strong>Two problems:</strong>
+        <ul>
+          <li><strong>Data loss</strong> — database files, uploads, state all vanish with <code>docker rm</code></li>
+          <li><strong>Performance</strong> — CoW overhead is unacceptable for databases, logging, I/O-intensive apps</li>
+        </ul>
+      </li>
+      <li><strong>Solution:</strong> mount host storage directly into the container, bypassing the overlay filesystem entirely</li>
+    </ul>
+  </div>
+
+  <!-- ============================================
+       Three Mount Types
+       ============================================ -->
+  <h2>Three Mount Types</h2>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Bind Mounts</div>
+      <ul>
+        <li>Map a host directory/file directly into the container</li>
+        <li>Kernel <code>bind mount</code> — same underlying filesystem, direct access</li>
+        <li>Changes are <strong>bidirectional and immediate</strong></li>
+        <li>Container sees host files; host sees container writes</li>
+      </ul>
+      <pre><code><span class="cm"># -v syntax</span>
+docker run -v /host/path:/container/path
+
+<span class="cm"># --mount syntax (preferred)</span>
+docker run --mount \
+  <span class="attr">type</span>=<span class="str">bind</span>,\
+  <span class="attr">source</span>=<span class="str">/host/path</span>,\
+  <span class="attr">target</span>=<span class="str">/container/path</span>
+
+<span class="cm"># Read-only bind mount</span>
+docker run --mount \
+  <span class="attr">type</span>=<span class="str">bind</span>,\
+  <span class="attr">source</span>=<span class="str">/host/path</span>,\
+  <span class="attr">target</span>=<span class="str">/container/path</span>,\
+  <span class="attr">readonly</span></code></pre>
+      <p><strong>Good for:</strong> development (live code reload), sharing config files</p>
+      <p><strong>Risk:</strong> container can modify host files (unless <code>readonly</code>)</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Named Volumes</div>
+      <ul>
+        <li>Managed by Docker, stored in <code>/var/lib/docker/volumes/&lt;name&gt;/_data</code></li>
+        <li>Docker manages lifecycle: create, list, inspect, remove</li>
+        <li><strong>Volume population:</strong> if the image has data at the mount point, Docker copies it into the volume on first use</li>
+        <li>Volume drivers: local (default), NFS, AWS EBS, Azure Files</li>
+      </ul>
+      <pre><code><span class="cm"># -v syntax</span>
+docker run -v mydata:/container/path
+
+<span class="cm"># --mount syntax (preferred)</span>
+docker run --mount \
+  <span class="attr">type</span>=<span class="str">volume</span>,\
+  <span class="attr">source</span>=<span class="str">mydata</span>,\
+  <span class="attr">target</span>=<span class="str">/container/path</span>
+
+<span class="cm"># Volume management</span>
+docker volume create mydata
+docker volume ls
+docker volume inspect mydata
+docker volume rm mydata</code></pre>
+      <p><strong>Good for:</strong> databases, persistent application data</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">tmpfs Mounts</div>
+      <ul>
+        <li>In-memory filesystem, <strong>never written to disk</strong></li>
+        <li>Data lost when container stops</li>
+        <li>Faster than disk-backed storage</li>
+        <li>Not shared between containers</li>
+      </ul>
+      <pre><code><span class="cm"># --tmpfs syntax</span>
+docker run --tmpfs /container/path
+
+<span class="cm"># --mount syntax (preferred)</span>
+docker run --mount \
+  <span class="attr">type</span>=<span class="str">tmpfs</span>,\
+  <span class="attr">target</span>=<span class="str">/container/path</span>
+
+<span class="cm"># With size limit</span>
+docker run --mount \
+  <span class="attr">type</span>=<span class="str">tmpfs</span>,\
+  <span class="attr">target</span>=<span class="str">/run/secrets</span>,\
+  <span class="attr">tmpfs-size</span>=<span class="str">64m</span></code></pre>
+      <p><strong>Good for:</strong> secrets, temporary scratch space, sensitive data that shouldn't persist on disk</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key difference:</strong> Bind mounts depend on the host's directory structure. Named volumes are fully
+    managed by Docker and portable. Always prefer <code>--mount</code> syntax over <code>-v</code> — it's more
+    explicit and catches errors (e.g., <code>-v</code> silently creates a directory if the source doesn't exist;
+    <code>--mount</code> fails with an error for bind mounts).
+  </div>
+
+  <!-- ============================================
+       How Mounts Bypass Overlay
+       ============================================ -->
+  <h2>How Mounts Bypass Overlay</h2>
+  <p>Volumes and bind mounts are overlaid <strong>on top of</strong> the overlay2 merged view at specific mount points.
+    Writes to those paths go directly to the backing storage, completely bypassing the copy-on-write mechanism.</p>
+
+  <div class="nest-box os">
+    <span class="nest-label">Container Filesystem View</span>
+    <div class="nest-box runtime" style="margin-top: 16px;">
+      <span class="nest-label">Overlay2 Merged View (lowerdir + upperdir)</span>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding: 16px 8px 8px;">
+        <div class="panel" style="margin: 0; text-align: center;">
+          <div class="panel-title" style="font-size: 13px;">/usr, /bin, /lib, ...</div>
+          <p style="font-size: 12px; color: #888;">Read from image layers (lowerdir)<br>Write via CoW to upperdir</p>
+        </div>
+        <div class="panel" style="margin: 0; border-color: #34d399; text-align: center;">
+          <div class="panel-title" style="font-size: 13px; color: #34d399;">/var/lib/mysql</div>
+          <p style="font-size: 12px; color: #888;">Named volume<br><strong style="color: #34d399;">Direct I/O — bypasses overlay</strong></p>
+        </div>
+        <div class="panel" style="margin: 0; border-color: #60a5fa; text-align: center;">
+          <div class="panel-title" style="font-size: 13px; color: #60a5fa;">/app/src</div>
+          <p style="font-size: 12px; color: #888;">Bind mount<br><strong style="color: #60a5fa;">Direct I/O — bypasses overlay</strong></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #888;">
+      <div class="label">Write to /usr/bin/foo</div>
+      <div class="desc">Goes through overlay2 CoW</div>
+    </div>
+    <div class="arrow">vs</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label">Write to /var/lib/mysql/data</div>
+      <div class="desc">Direct to volume — no CoW overhead</div>
+    </div>
+    <div class="arrow">vs</div>
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="label">Write to /app/src/main.py</div>
+      <div class="desc">Direct to host directory — visible immediately</div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Storage Drivers vs Volumes
+       ============================================ -->
+  <h2>Storage Drivers vs Volumes</h2>
+
+  <table>
+    <tr>
+      <th>Aspect</th>
+      <th>Storage Driver (overlay2)</th>
+      <th>Volumes</th>
+    </tr>
+    <tr>
+      <td><strong>Purpose</strong></td>
+      <td>Container filesystem (image layers + RW layer)</td>
+      <td>Persistent data</td>
+    </tr>
+    <tr>
+      <td><strong>Performance</strong></td>
+      <td>Copy-on-write overhead on first write</td>
+      <td>Direct I/O — native filesystem performance</td>
+    </tr>
+    <tr>
+      <td><strong>Lifecycle</strong></td>
+      <td>Dies with the container (<code>docker rm</code>)</td>
+      <td>Independent of container lifecycle</td>
+    </tr>
+    <tr>
+      <td><strong>Sharing</strong></td>
+      <td>Not shareable between containers</td>
+      <td>Can be shared (mounted into multiple containers)</td>
+    </tr>
+    <tr>
+      <td><strong>Backup</strong></td>
+      <td>Complex — data is in overlay layer format</td>
+      <td>Simple — regular directory on the host filesystem</td>
+    </tr>
+    <tr>
+      <td><strong>Portability</strong></td>
+      <td>Tied to image build</td>
+      <td>Independent, can be backed by NFS/cloud drivers</td>
+    </tr>
+  </table>
+
+  <!-- ============================================
+       Volume Population Behavior
+       ============================================ -->
+  <h2>Volume Population — Bind Mounts vs Named Volumes</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header docker">Named Volume (First Use)</div>
+      <div class="comp-body">
+        <p>If the image has files at <code>/usr/share/nginx/html</code>:</p>
+        <pre><code>docker run -v mysite:/usr/share/nginx/html nginx</code></pre>
+        <p>Docker <strong>copies image files into the volume</strong> on first mount (volume is empty).
+          Subsequent mounts use the volume's existing data.</p>
+        <p style="color: #34d399;"><strong>Image data is preserved.</strong></p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Bind Mount</div>
+      <div class="comp-body">
+        <p>If the image has files at <code>/usr/share/nginx/html</code>:</p>
+        <pre><code>docker run -v /my/html:/usr/share/nginx/html nginx</code></pre>
+        <p>The host directory <strong>completely obscures</strong> the image contents.
+          If <code>/my/html</code> is empty, the container sees an empty directory.</p>
+        <p style="color: #f87171;"><strong>Image data is hidden.</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Best Practices
+       ============================================ -->
+  <h2>Best Practices</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Databases</div>
+      <p>Always use <strong>named volumes</strong>. Never store database data in the container layer.</p>
+      <pre><code>docker run -d \
+  --name postgres \
+  -v pgdata:/var/lib/postgresql/data \
+  postgres:16</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Config Files</div>
+      <p>Use <strong>bind mounts</strong> with <code>:ro</code> (read-only) to inject configuration.</p>
+      <pre><code>docker run -d \
+  --name nginx \
+  --mount type=bind,\
+source=./nginx.conf,\
+target=/etc/nginx/nginx.conf,\
+readonly \
+  nginx</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Secrets / Sensitive Data</div>
+      <p>Use <strong>tmpfs mounts</strong> so secrets never touch disk. In Swarm mode, use Docker secrets.</p>
+      <pre><code>docker run -d \
+  --mount type=tmpfs,\
+target=/run/secrets,\
+tmpfs-size=1m \
+  myapp</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Development</div>
+      <p>Use <strong>bind mounts</strong> for live code reload — edit on host, see changes immediately in container.</p>
+      <pre><code>docker run -d \
+  -v $(pwd)/src:/app/src \
+  -p 3000:3000 \
+  node-dev</code></pre>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Warning:</strong> Don't mount <code>/var/run/docker.sock</code> into a container unless absolutely necessary.
+    This gives the container full control over Docker and effectively root access to the host.
+    See <a href="docker-architecture.html">Docker Architecture — Socket File Security</a>.
+  </div>
+
+  <!-- ============================================
+       Volume Commands Quick Reference
+       ============================================ -->
+  <h2>Volume Commands — Quick Reference</h2>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker volume create mydata<br>
+    <span class="output">mydata</span><br><br>
+    <span class="prompt">$ </span>docker volume ls<br>
+    <span class="output">DRIVER    VOLUME NAME<br>local     mydata<br>local     pgdata</span><br><br>
+    <span class="prompt">$ </span>docker volume inspect mydata<br>
+    <span class="output">[{<br>    "CreatedAt": "2026-03-31T10:00:00Z",<br>    "Driver": "local",<br>    "Mountpoint": "/var/lib/docker/volumes/mydata/_data",<br>    "Name": "mydata",<br>    "Scope": "local"<br>}]</span><br><br>
+    <span class="prompt">$ </span>docker volume rm mydata<br>
+    <span class="output">mydata</span><br><br>
+    <span class="prompt">$ </span>docker volume prune<br>
+    <span class="output">WARNING! This will remove anonymous local volumes not used by at least one container.<br>Total reclaimed space: 1.2GB</span>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> Use <code>docker volume prune</code> periodically to clean up orphaned anonymous volumes.
+    Named volumes are not removed by prune — only anonymous (unnamed) volumes that are no longer referenced by any container.
+  </div>
+
+</body>
+</html>

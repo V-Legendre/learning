@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 09 — Container Storage Interface (CSI)</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 09 — Container Storage Interface (CSI)</h1>
+  <p class="subtitle">Decoupling storage providers from Kubernetes — the plugin architecture</p>
+
+  <!-- ============================================
+       Why CSI Exists
+       ============================================ -->
+  <h2>Why CSI Exists</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Before CSI (In-tree Drivers)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Storage drivers compiled <strong>into K8s binaries</strong></li>
+          <li>Every new storage backend = K8s code change + release cycle</li>
+          <li>Bugs in storage drivers could crash the kubelet</li>
+          <li>Vendors had to wait for K8s releases to ship fixes</li>
+          <li>Growing codebase — 20+ storage plugins in <code>k8s.io/kubernetes</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">After CSI (Out-of-tree Drivers)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Standardized <strong>gRPC interface</strong> between K8s and storage providers</li>
+          <li>Storage vendors ship their own CSI drivers independently</li>
+          <li>Decoupled release cycles — vendor ships when ready</li>
+          <li>Same spec used by K8s, Mesos, Docker (K8s is the primary consumer)</li>
+          <li>Crashes isolated to driver pods, not kubelet</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> CSI is not a K8s-specific standard. It is a <strong>container orchestrator-agnostic</strong> specification. K8s just happens to be its biggest adopter. The spec defines a set of gRPC services that any storage provider must implement.
+  </div>
+
+  <!-- ============================================
+       CSI Architecture
+       ============================================ -->
+  <h2>CSI Architecture</h2>
+
+  <p>A CSI driver deploys two components in the cluster:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">Controller Plugin (Deployment)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Usually <strong>1 replica</strong> (with leader election for HA)</li>
+          <li>Handles <strong>cluster-level</strong> operations:</li>
+          <li style="list-style: none; padding-left: 20px;">
+            <ul>
+              <li>Create / delete volumes</li>
+              <li>Attach / detach volumes from nodes</li>
+              <li>Create / delete snapshots</li>
+              <li>Expand volumes</li>
+            </ul>
+          </li>
+          <li>Runs <strong>anywhere</strong> in the cluster — doesn't need to be on the node with the storage</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">Node Plugin (DaemonSet)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Runs on <strong>every node</strong> that needs to mount volumes</li>
+          <li>Handles <strong>node-level</strong> operations:</li>
+          <li style="list-style: none; padding-left: 20px;">
+            <ul>
+              <li>Stage / unstage volumes on the node</li>
+              <li>Mount / unmount volumes into pods</li>
+              <li>Report node capabilities</li>
+            </ul>
+          </li>
+          <li>Communicates via <strong>Unix socket</strong> on the node</li>
+          <li>Registered with kubelet via <code>node-driver-registrar</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Topology Diagram</h3>
+
+  <div class="nest-box hardware" style="max-width: 800px;">
+    <span class="nest-label">Kubernetes Cluster</span>
+
+    <div style="display: flex; gap: 15px; margin-top: 15px; flex-wrap: wrap;">
+
+      <div class="nest-box namespace" style="flex: 1; min-width: 200px;">
+        <span class="nest-label">Controller (Deployment)</span>
+        <div style="padding: 10px;">
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">CSI Controller Container</div>
+            <p style="font-size: 12px; color: #999;">CreateVolume, DeleteVolume, ControllerPublishVolume, ControllerUnpublishVolume, CreateSnapshot</p>
+          </div>
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">Sidecar Containers</div>
+            <p style="font-size: 12px; color: #999;">external-provisioner, external-attacher, external-snapshotter, external-resizer</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="nest-box os" style="flex: 1; min-width: 200px;">
+        <span class="nest-label">Node 1 (DaemonSet Pod)</span>
+        <div style="padding: 10px;">
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">CSI Node Container</div>
+            <p style="font-size: 12px; color: #999;">NodeStageVolume, NodePublishVolume, NodeUnstageVolume, NodeUnpublishVolume</p>
+          </div>
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">node-driver-registrar</div>
+            <p style="font-size: 12px; color: #999;">Registers plugin with kubelet</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="nest-box os" style="flex: 1; min-width: 200px;">
+        <span class="nest-label">Node 2 (DaemonSet Pod)</span>
+        <div style="padding: 10px;">
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">CSI Node Container</div>
+            <p style="font-size: 12px; color: #999;">NodeStageVolume, NodePublishVolume, NodeUnstageVolume, NodeUnpublishVolume</p>
+          </div>
+          <div class="panel" style="margin: 5px 0;">
+            <div class="panel-title" style="font-size: 13px;">node-driver-registrar</div>
+            <p style="font-size: 12px; color: #999;">Registers plugin with kubelet</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================
+       Sidecar Containers
+       ============================================ -->
+  <h2>Sidecar Containers</h2>
+
+  <p>CSI drivers don't talk to the K8s API directly. Instead, <strong>sidecar containers</strong> (maintained by the K8s storage SIG) bridge the gap between K8s API objects and CSI gRPC calls:</p>
+
+  <table>
+    <tr>
+      <th>Sidecar</th>
+      <th>Role</th>
+      <th>Watches</th>
+    </tr>
+    <tr>
+      <td><code>external-provisioner</code></td>
+      <td>Creates/deletes PVs for PVCs</td>
+      <td>PVC objects</td>
+    </tr>
+    <tr>
+      <td><code>external-attacher</code></td>
+      <td>Attaches/detaches volumes to nodes</td>
+      <td>VolumeAttachment objects</td>
+    </tr>
+    <tr>
+      <td><code>external-snapshotter</code></td>
+      <td>Creates/restores volume snapshots</td>
+      <td>VolumeSnapshot objects</td>
+    </tr>
+    <tr>
+      <td><code>external-resizer</code></td>
+      <td>Expands volumes (online resize)</td>
+      <td>PVC resize requests</td>
+    </tr>
+    <tr>
+      <td><code>node-driver-registrar</code></td>
+      <td>Registers node plugin with kubelet</td>
+      <td>(runs on node plugin pod)</td>
+    </tr>
+    <tr>
+      <td><code>livenessprobe</code></td>
+      <td>Health check for the CSI driver</td>
+      <td>(sidecar health endpoint)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Design pattern:</strong> The sidecars are the "K8s-aware" part. The CSI driver itself only needs to implement gRPC methods — it never imports K8s client libraries. This clean separation is what makes CSI portable across orchestrators.
+  </div>
+
+  <!-- ============================================
+       Full Volume Lifecycle Through CSI
+       ============================================ -->
+  <h2>Full Volume Lifecycle Through CSI</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Provision (Dynamic)</strong><br>
+        User creates PVC &#8594; <code>external-provisioner</code> watches PVC &#8594; calls <code>CreateVolume</code> on CSI controller &#8594; storage backend creates volume &#8594; external-provisioner creates PV &#8594; PVC binds to PV.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Attach</strong><br>
+        Pod is scheduled to a node &#8594; kubelet creates <code>VolumeAttachment</code> object &#8594; <code>external-attacher</code> watches &#8594; calls <code>ControllerPublishVolume</code> on CSI controller &#8594; storage backend makes volume accessible to node (e.g., iSCSI login, EBS attach API call).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Stage (Node)</strong><br>
+        kubelet calls <code>NodeStageVolume</code> on CSI node plugin &#8594; format filesystem if needed (<code>mkfs.ext4</code>) &#8594; mount to a <strong>global staging path</strong> on the node (e.g., <code>/var/lib/kubelet/plugins/kubernetes.io/csi/...</code>).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Mount (Node)</strong><br>
+        kubelet calls <code>NodePublishVolume</code> on CSI node plugin &#8594; <strong>bind mount</strong> from the staging path to the pod's volume directory (e.g., <code>/var/lib/kubelet/pods/&lt;uid&gt;/volumes/...</code>).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Unmount</strong><br>
+        Pod terminates &#8594; kubelet calls <code>NodeUnpublishVolume</code> &#8594; removes the bind mount from the pod's directory.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>Unstage</strong><br>
+        No more pods using the volume on this node &#8594; kubelet calls <code>NodeUnstageVolume</code> &#8594; unmount from the global staging path.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong>Detach</strong><br>
+        kubelet deletes <code>VolumeAttachment</code> &#8594; <code>external-attacher</code> calls <code>ControllerUnpublishVolume</code> &#8594; storage backend detaches volume from node (e.g., EBS detach API call).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div>
+        <strong>Delete</strong><br>
+        PVC deleted + <code>Delete</code> reclaim policy &#8594; <code>external-provisioner</code> calls <code>DeleteVolume</code> &#8594; storage backend deletes volume &#8594; PV deleted.
+      </div>
+    </div>
+  </div>
+
+  <h3>Visual Flow: Mount Path</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">CreateVolume</div>
+      <div class="desc">Storage backend creates volume</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">ControllerPublish</div>
+      <div class="desc">Volume attached to node</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">NodeStage</div>
+      <div class="desc">Format + mount to staging path</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">NodePublish</div>
+      <div class="desc">Bind mount into pod</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">NodeUnpublish</div>
+      <div class="desc">Unmount from pod</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">NodeUnstage</div>
+      <div class="desc">Unmount from staging</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">7</div>
+      <div class="label">ControllerUnpublish</div>
+      <div class="desc">Detach from node</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">8</div>
+      <div class="label">DeleteVolume</div>
+      <div class="desc">Backend deletes volume</div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Volume Snapshots
+       ============================================ -->
+  <h2>Volume Snapshots</h2>
+
+  <div class="panel">
+    <div class="panel-title">Snapshot Abstraction (mirrors PV/PVC pattern)</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">VolumeSnapshot</div>
+        <div class="desc">User's request (like PVC)</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="label">VolumeSnapshotContent</div>
+        <div class="desc">Actual snapshot resource (like PV)</div>
+      </div>
+    </div>
+  </div>
+
+  <p><strong>VolumeSnapshotClass</strong> defines the snapshot provider — analogous to StorageClass for provisioning.</p>
+
+  <h3>Creating a Snapshot</h3>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">snapshot.storage.k8s.io/v1</span>
+<span class="kw">kind:</span> <span class="type">VolumeSnapshot</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">my-snapshot</span>
+<span class="kw">spec:</span>
+  <span class="kw">volumeSnapshotClassName:</span> <span class="str">csi-snapclass</span>
+  <span class="kw">source:</span>
+    <span class="kw">persistentVolumeClaimName:</span> <span class="str">my-data</span>   <span class="cm"># PVC to snapshot</span></code></pre>
+
+  <h3>Restoring from a Snapshot</h3>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">v1</span>
+<span class="kw">kind:</span> <span class="type">PersistentVolumeClaim</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">restored-data</span>
+<span class="kw">spec:</span>
+  <span class="kw">storageClassName:</span> <span class="str">fast-ssd</span>
+  <span class="kw">dataSource:</span>                           <span class="cm"># restore from snapshot</span>
+    <span class="kw">kind:</span> <span class="str">VolumeSnapshot</span>
+    <span class="kw">name:</span> <span class="str">my-snapshot</span>
+    <span class="kw">apiGroup:</span> <span class="str">snapshot.storage.k8s.io</span>
+  <span class="kw">accessModes:</span>
+    - <span class="str">ReadWriteOnce</span>
+  <span class="kw">resources:</span>
+    <span class="kw">requests:</span>
+      <span class="kw">storage:</span> <span class="str">10Gi</span></code></pre>
+
+  <div class="note">
+    <strong>Cross-reference:</strong> For Proxmox storage and ZFS snapshots, see <a href="../virt-10-proxmox-kvm/storage-ha.html">Virt 10 — Storage & HA</a>.
+  </div>
+
+  <!-- ============================================
+       Ephemeral CSI Volumes
+       ============================================ -->
+  <h2>Ephemeral CSI Volumes</h2>
+
+  <p>Short-lived volumes created and deleted with the pod (like <code>emptyDir</code>, but via CSI). The pod spec includes the CSI volume definition inline — no PVC needed.</p>
+
+  <div class="panel">
+    <div class="panel-title">Use Cases</div>
+    <ul>
+      <li><strong>Secret injection:</strong> <code>secrets-store-csi-driver</code> mounts secrets from HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault directly into pods</li>
+      <li><strong>Node-local temp storage:</strong> CSI drivers that provide node-local SSDs as ephemeral storage with better performance than <code>emptyDir</code></li>
+      <li><strong>Identity injection:</strong> Workload identity tokens mounted as files</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="kw">apiVersion:</span> <span class="str">v1</span>
+<span class="kw">kind:</span> <span class="type">Pod</span>
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> <span class="str">my-app</span>
+<span class="kw">spec:</span>
+  <span class="kw">containers:</span>
+    - <span class="kw">name:</span> <span class="str">app</span>
+      <span class="kw">image:</span> <span class="str">my-app:latest</span>
+      <span class="kw">volumeMounts:</span>
+        - <span class="kw">name:</span> <span class="str">secrets</span>
+          <span class="kw">mountPath:</span> <span class="str">/mnt/secrets</span>
+          <span class="kw">readOnly:</span> <span class="num">true</span>
+  <span class="kw">volumes:</span>
+    - <span class="kw">name:</span> <span class="str">secrets</span>
+      <span class="kw">csi:</span>
+        <span class="kw">driver:</span> <span class="str">secrets-store.csi.k8s.io</span>
+        <span class="kw">readOnly:</span> <span class="num">true</span>
+        <span class="kw">volumeAttributes:</span>
+          <span class="kw">secretProviderClass:</span> <span class="str">vault-secrets</span></code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> Ephemeral CSI volumes don't create PV/PVC objects. They are defined inline in the pod spec, created when the pod starts, and destroyed when the pod is deleted. The lifecycle is managed entirely by the kubelet and the CSI node plugin.
+  </div>
+
+  <!-- ============================================
+       CSI Driver Examples
+       ============================================ -->
+  <h2>CSI Driver Examples</h2>
+
+  <table>
+    <tr>
+      <th>Driver</th>
+      <th>Storage</th>
+      <th>Typical Use</th>
+    </tr>
+    <tr>
+      <td><code>ebs.csi.aws.com</code></td>
+      <td>AWS EBS</td>
+      <td>Block storage (RWO)</td>
+    </tr>
+    <tr>
+      <td><code>efs.csi.aws.com</code></td>
+      <td>AWS EFS</td>
+      <td>File storage (RWX)</td>
+    </tr>
+    <tr>
+      <td><code>pd.csi.storage.gke.io</code></td>
+      <td>GCE Persistent Disk</td>
+      <td>Block storage (RWO)</td>
+    </tr>
+    <tr>
+      <td><code>disk.csi.azure.com</code></td>
+      <td>Azure Disk</td>
+      <td>Block storage (RWO)</td>
+    </tr>
+    <tr>
+      <td><code>cephfs.csi.ceph.com</code></td>
+      <td>CephFS</td>
+      <td>Distributed file storage (RWX)</td>
+    </tr>
+    <tr>
+      <td><code>rbd.csi.ceph.com</code></td>
+      <td>Ceph RBD</td>
+      <td>Block storage (RWO)</td>
+    </tr>
+    <tr>
+      <td><code>secrets-store.csi.k8s.io</code></td>
+      <td>Vault / cloud secrets</td>
+      <td>Secret injection (ephemeral)</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Finding CSI drivers:</strong> The official list is at <a href="https://kubernetes-csi.github.io/docs/drivers.html">kubernetes-csi.github.io/docs/drivers.html</a>. Most cloud providers maintain their own CSI drivers with Helm charts for easy installation.
+  </div>
+
+  <!-- ============================================
+       CSI vs In-tree Summary
+       ============================================ -->
+  <h2>CSI vs In-tree: Summary</h2>
+
+  <table>
+    <tr>
+      <th>Aspect</th>
+      <th>In-tree (legacy)</th>
+      <th>CSI (modern)</th>
+    </tr>
+    <tr>
+      <td>Code location</td>
+      <td>Inside <code>k8s.io/kubernetes</code></td>
+      <td>Separate repo, vendor-maintained</td>
+    </tr>
+    <tr>
+      <td>Release cycle</td>
+      <td>Tied to K8s releases</td>
+      <td>Independent</td>
+    </tr>
+    <tr>
+      <td>Crash impact</td>
+      <td>Can crash kubelet</td>
+      <td>Isolated to driver pod</td>
+    </tr>
+    <tr>
+      <td>Interface</td>
+      <td>Go interfaces compiled in</td>
+      <td>gRPC over Unix socket</td>
+    </tr>
+    <tr>
+      <td>Portability</td>
+      <td>K8s only</td>
+      <td>Any CSI-compliant orchestrator</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Deprecated, being migrated</td>
+      <td>Standard, GA since K8s 1.13</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Migration:</strong> All in-tree storage plugins are being migrated to CSI. The <code>CSIMigration</code> feature gate (GA since 1.25 for most drivers) transparently redirects in-tree volume API calls to the equivalent CSI driver. If you are using <code>kubernetes.io/aws-ebs</code> as a provisioner, it is already being handled by <code>ebs.csi.aws.com</code> behind the scenes.
+  </div>
+
+</body>
+</html>

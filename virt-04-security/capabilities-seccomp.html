@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 04 — Linux Capabilities & Seccomp</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 04 — Linux Capabilities & Seccomp</h1>
+  <p class="subtitle">Splitting root into pieces and filtering dangerous syscalls</p>
+
+  <!-- ============================== -->
+  <!-- Linux Capabilities             -->
+  <!-- ============================== -->
+  <h2>Linux Capabilities</h2>
+
+  <h3>The Traditional Unix Model</h3>
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Traditional Unix</div>
+      <div class="comp-body">
+        <p>Binary privilege model:</p>
+        <ul>
+          <li><strong>UID 0 (root)</strong> — can do <em>everything</em></li>
+          <li><strong>Non-root</strong> — heavily restricted</li>
+        </ul>
+        <p style="margin-top:10px; color:#888;">A process that needs to bind port 80 gets the same powers as one that manages kernel modules. All or nothing.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Capabilities Model</div>
+      <div class="comp-body">
+        <p>Root privilege split into <strong>~40 discrete units</strong>:</p>
+        <ul>
+          <li>A web server gets <code>CAP_NET_BIND_SERVICE</code> only</li>
+          <li>A network tool gets <code>CAP_NET_ADMIN</code> only</li>
+          <li>No process needs full root</li>
+        </ul>
+        <p style="margin-top:10px; color:#888;">Principle of least privilege — each process gets exactly the permissions it needs.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Capability Sets (per thread)</h3>
+  <p>Each thread in Linux carries <strong>five</strong> capability sets. The kernel checks these at every privileged operation:</p>
+
+  <table>
+    <tr>
+      <th>Set</th>
+      <th>Purpose</th>
+      <th>Analogy</th>
+    </tr>
+    <tr>
+      <td><strong>Effective</strong></td>
+      <td>Capabilities the kernel actually checks — the "active" set</td>
+      <td>Keys currently on your keyring</td>
+    </tr>
+    <tr>
+      <td><strong>Permitted</strong></td>
+      <td>Upper bound of what can be in Effective — can be added/dropped</td>
+      <td>Keys you <em>own</em> (some may be in your pocket)</td>
+    </tr>
+    <tr>
+      <td><strong>Inheritable</strong></td>
+      <td>Capabilities preserved across <code>execve()</code></td>
+      <td>Keys you can pass to a child process</td>
+    </tr>
+    <tr>
+      <td><strong>Bounding</strong></td>
+      <td>Hard ceiling — cannot be regained once dropped</td>
+      <td>Keys that <em>exist</em> — removed ones are gone forever</td>
+    </tr>
+    <tr>
+      <td><strong>Ambient</strong></td>
+      <td>Automatically inherited by non-SUID child processes (Linux 4.3+)</td>
+      <td>Keys that follow you into any room</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Note:</strong> The Effective set is what matters at runtime. A capability in Permitted but not in Effective has no power — it must be explicitly raised into Effective via <code>prctl()</code> or <code>cap_set_proc()</code>.
+  </div>
+
+  <h3>Key Capabilities Reference</h3>
+
+  <table>
+    <tr>
+      <th>Capability</th>
+      <th>What It Allows</th>
+      <th>Risk Level</th>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_ADMIN</code></td>
+      <td>Configure networking — iptables rules, routes, interfaces, bridge settings</td>
+      <td style="color:#fbbf24;">High</td>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_BIND_SERVICE</code></td>
+      <td>Bind to privileged ports (&lt; 1024) — needed for web servers on port 80/443</td>
+      <td style="color:#34d399;">Low</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_ADMIN</code></td>
+      <td>Mount filesystems, configure namespaces, many operations — the "new root"</td>
+      <td style="color:#ef4444;">Critical</td>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_RAW</code></td>
+      <td>Use raw/packet sockets — needed for <code>ping</code>, network sniffing</td>
+      <td style="color:#fbbf24;">Medium</td>
+    </tr>
+    <tr>
+      <td><code>CAP_CHOWN</code></td>
+      <td>Change file ownership arbitrarily</td>
+      <td style="color:#fbbf24;">Medium</td>
+    </tr>
+    <tr>
+      <td><code>CAP_DAC_OVERRIDE</code></td>
+      <td>Bypass read/write/execute permission checks on files</td>
+      <td style="color:#ef4444;">High</td>
+    </tr>
+    <tr>
+      <td><code>CAP_FOWNER</code></td>
+      <td>Bypass permission checks where file owner == process UID</td>
+      <td style="color:#fbbf24;">Medium</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SETUID</code> / <code>CAP_SETGID</code></td>
+      <td>Change process UID/GID — impersonate any user</td>
+      <td style="color:#ef4444;">High</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_PTRACE</code></td>
+      <td>Trace/debug any process — read memory, inject code</td>
+      <td style="color:#ef4444;">Critical</td>
+    </tr>
+    <tr>
+      <td><code>CAP_MKNOD</code></td>
+      <td>Create device files (block/character special files)</td>
+      <td style="color:#fbbf24;">Medium</td>
+    </tr>
+    <tr>
+      <td><code>CAP_KILL</code></td>
+      <td>Send signals to any process (bypass permission checks)</td>
+      <td style="color:#fbbf24;">Medium</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_MODULE</code></td>
+      <td>Load/unload kernel modules — arbitrary kernel code execution</td>
+      <td style="color:#ef4444;">Critical</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Warning:</strong> <code>CAP_SYS_ADMIN</code> is often called "the new root" because it gates so many operations (mount, BPF, namespaces, device-mapper, etc.). Granting it to a container effectively negates much of the isolation.
+  </div>
+
+  <!-- ============================== -->
+  <!-- What Docker Drops by Default   -->
+  <!-- ============================== -->
+  <h2>What Docker Drops by Default</h2>
+
+  <p>Docker starts containers with <strong>~14 capabilities</strong> out of the ~40 available. The rest are dropped. This is a critical part of container security.</p>
+
+  <table>
+    <tr>
+      <th>Capability</th>
+      <th>Status</th>
+      <th>What It Allows</th>
+    </tr>
+    <tr>
+      <td><code>CAP_CHOWN</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Change file ownership</td>
+    </tr>
+    <tr>
+      <td><code>CAP_DAC_OVERRIDE</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Bypass file read/write/execute checks</td>
+    </tr>
+    <tr>
+      <td><code>CAP_FSETID</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Don't clear set-user/group-ID bits on file modification</td>
+    </tr>
+    <tr>
+      <td><code>CAP_FOWNER</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Bypass ownership checks</td>
+    </tr>
+    <tr>
+      <td><code>CAP_MKNOD</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Create special files</td>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_RAW</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Use raw sockets</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SETGID</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Set group ID</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SETUID</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Set user ID</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SETFCAP</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Set file capabilities</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SETPCAP</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Modify process capabilities</td>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_BIND_SERVICE</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Bind to ports &lt; 1024</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_CHROOT</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Use chroot()</td>
+    </tr>
+    <tr>
+      <td><code>CAP_KILL</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Send signals</td>
+    </tr>
+    <tr>
+      <td><code>CAP_AUDIT_WRITE</code></td>
+      <td style="color:#34d399;">Kept</td>
+      <td>Write to kernel audit log</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_ADMIN</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Mount, namespaces, many things</td>
+    </tr>
+    <tr>
+      <td><code>CAP_NET_ADMIN</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Network configuration</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_MODULE</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Load kernel modules</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_PTRACE</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Trace/debug processes</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_RAWIO</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Raw I/O port access</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_TIME</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Set system clock</td>
+    </tr>
+    <tr>
+      <td><code>CAP_SYS_BOOT</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Reboot the system</td>
+    </tr>
+    <tr>
+      <td><code>CAP_LINUX_IMMUTABLE</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Set immutable file flags</td>
+    </tr>
+    <tr>
+      <td><code>CAP_MAC_ADMIN</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Override MAC (Smack)</td>
+    </tr>
+    <tr>
+      <td><code>CAP_MAC_OVERRIDE</code></td>
+      <td style="color:#ef4444;">Dropped</td>
+      <td>Override MAC policies</td>
+    </tr>
+  </table>
+
+  <h3>Managing Capabilities in Docker</h3>
+
+  <div class="panel">
+    <div class="panel-title">Adding a specific capability</div>
+<pre><code><span class="cm"># Add CAP_NET_ADMIN to allow iptables inside the container</span>
+<span class="fn">docker run</span> <span class="kw">--cap-add</span> <span class="str">NET_ADMIN</span> nginx</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Minimal approach — drop ALL, add only what you need</div>
+<pre><code><span class="cm"># Best practice: start with nothing, add back selectively</span>
+<span class="fn">docker run</span> <span class="kw">--cap-drop</span> <span class="str">ALL</span> <span class="kw">--cap-add</span> <span class="str">NET_BIND_SERVICE</span> nginx</code></pre>
+    <p style="color:#888; margin-top:8px;">This container can <em>only</em> bind to privileged ports. No file ownership changes, no raw sockets, no signal sending to other processes.</p>
+  </div>
+
+  <div class="warn">
+    <strong>DANGER: --privileged mode</strong>
+<pre><code><span class="cm"># NEVER do this in production</span>
+<span class="fn">docker run</span> <span class="kw">--privileged</span> nginx</code></pre>
+    <p style="margin-top:8px;"><code>--privileged</code> does ALL of the following:</p>
+    <ul>
+      <li>Grants <strong>ALL</strong> ~40 capabilities</li>
+      <li>Gives access to <strong>all host devices</strong> (<code>/dev/*</code>)</li>
+      <li><strong>Disables seccomp</strong> profile</li>
+      <li><strong>Disables AppArmor/SELinux</strong> confinement</li>
+      <li>Allows mounting filesystems</li>
+    </ul>
+    <p style="margin-top:8px;">A privileged container has essentially the same power as root on the host. Container escape is trivial.</p>
+  </div>
+
+  <!-- ============================== -->
+  <!-- Kubernetes securityContext      -->
+  <!-- ============================== -->
+  <h2>Kubernetes securityContext</h2>
+
+  <p>Kubernetes exposes capability management through the <code>securityContext</code> field at both the <strong>Pod level</strong> and <strong>container level</strong>:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">Container-level securityContext</div>
+      <div class="comp-body">
+<pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Pod
+<span class="kw">spec</span>:
+  <span class="kw">containers</span>:
+  - <span class="kw">name</span>: <span class="str">web</span>
+    <span class="kw">image</span>: <span class="str">nginx</span>
+    <span class="kw">securityContext</span>:
+      <span class="kw">capabilities</span>:
+        <span class="kw">drop</span>: [<span class="str">"ALL"</span>]
+        <span class="kw">add</span>: [<span class="str">"NET_BIND_SERVICE"</span>]
+      <span class="kw">readOnlyRootFilesystem</span>: <span class="num">true</span>
+      <span class="kw">allowPrivilegeEscalation</span>: <span class="num">false</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">Pod-level securityContext</div>
+      <div class="comp-body">
+<pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Pod
+<span class="kw">spec</span>:
+  <span class="kw">securityContext</span>:
+    <span class="kw">runAsNonRoot</span>: <span class="num">true</span>
+    <span class="kw">runAsUser</span>: <span class="num">1000</span>
+    <span class="kw">runAsGroup</span>: <span class="num">1000</span>
+    <span class="kw">fsGroup</span>: <span class="num">2000</span>
+    <span class="kw">seccompProfile</span>:
+      <span class="kw">type</span>: <span class="str">RuntimeDefault</span>
+  <span class="kw">containers</span>:
+  - <span class="kw">name</span>: <span class="str">web</span>
+    <span class="kw">image</span>: <span class="str">nginx</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best practice:</strong> Pod-level settings apply to all containers. Container-level settings override pod-level. Always set <code>runAsNonRoot: true</code> and <code>readOnlyRootFilesystem: true</code> as defaults, then grant exceptions per-container only where needed.
+  </div>
+
+  <table>
+    <tr>
+      <th>Field</th>
+      <th>Level</th>
+      <th>What It Does</th>
+    </tr>
+    <tr>
+      <td><code>capabilities.drop</code> / <code>add</code></td>
+      <td>Container</td>
+      <td>Linux capabilities to drop/add</td>
+    </tr>
+    <tr>
+      <td><code>runAsNonRoot</code></td>
+      <td>Pod or Container</td>
+      <td>Fail to start if process would run as UID 0</td>
+    </tr>
+    <tr>
+      <td><code>runAsUser</code> / <code>runAsGroup</code></td>
+      <td>Pod or Container</td>
+      <td>Force specific UID/GID</td>
+    </tr>
+    <tr>
+      <td><code>readOnlyRootFilesystem</code></td>
+      <td>Container</td>
+      <td>Mount root filesystem as read-only</td>
+    </tr>
+    <tr>
+      <td><code>allowPrivilegeEscalation</code></td>
+      <td>Container</td>
+      <td>Prevent gaining more privileges than parent (no SUID binaries)</td>
+    </tr>
+    <tr>
+      <td><code>seccompProfile</code></td>
+      <td>Pod or Container</td>
+      <td>Apply a seccomp profile (see below)</td>
+    </tr>
+  </table>
+
+  <!-- ============================== -->
+  <!-- Seccomp-BPF                    -->
+  <!-- ============================== -->
+  <h2>Seccomp-BPF</h2>
+
+  <p><strong>Seccomp</strong> (Secure Computing mode) limits which <strong>syscalls</strong> a process can make. It operates at a lower level than capabilities — even if you <em>have</em> the capability, seccomp can still block the syscall.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Original Seccomp (Mode 1)</div>
+      <div class="comp-body">
+        <p>Introduced in Linux 2.6.12 (2005)</p>
+        <p>Only <strong>4 syscalls</strong> allowed:</p>
+        <ul>
+          <li><code>read()</code></li>
+          <li><code>write()</code></li>
+          <li><code>exit()</code></li>
+          <li><code>sigreturn()</code></li>
+        </ul>
+        <p style="color:#888; margin-top:8px;">Way too restrictive for anything beyond pure computation. Used by cpushare sandboxing — basically nothing else.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Seccomp-BPF (Mode 2)</div>
+      <div class="comp-body">
+        <p>Introduced in Linux 3.5 (2012)</p>
+        <p>A <strong>BPF program</strong> filters each syscall:</p>
+        <ul>
+          <li><code>SCMP_ACT_ALLOW</code> — permit the syscall</li>
+          <li><code>SCMP_ACT_ERRNO</code> — deny with error code</li>
+          <li><code>SCMP_ACT_TRAP</code> — send SIGSYS signal</li>
+          <li><code>SCMP_ACT_LOG</code> — allow but log</li>
+          <li><code>SCMP_ACT_KILL</code> — kill the thread</li>
+        </ul>
+        <p style="color:#888; margin-top:8px;">Can filter on syscall number AND arguments. Flexible enough for real-world use.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>How Seccomp-BPF Works</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Process makes syscall</div>
+      <div class="desc">e.g., mount(), reboot()</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">BPF filter runs</div>
+      <div class="desc">Checks syscall number + args against rules</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Decision</div>
+      <div class="desc">ALLOW / ERRNO / TRAP / KILL</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Kernel action</div>
+      <div class="desc">Execute syscall or return error</div>
+    </div>
+  </div>
+
+  <h3>Docker's Default Seccomp Profile</h3>
+
+  <p>Docker applies a default seccomp profile that <strong>blocks ~60 syscalls</strong> out of 300+. This profile is carefully tuned to block dangerous operations while allowing normal application behavior.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color:#ef4444;">Blocked Syscalls (examples)</div>
+      <ul>
+        <li><code>reboot()</code> — reboot the host</li>
+        <li><code>mount()</code> / <code>umount2()</code> — mount filesystems</li>
+        <li><code>kexec_load()</code> — load a new kernel</li>
+        <li><code>clock_settime()</code> — change system time</li>
+        <li><code>swapon()</code> / <code>swapoff()</code> — manage swap</li>
+        <li><code>init_module()</code> — load kernel modules</li>
+        <li><code>create_module()</code> — create loadable module</li>
+        <li><code>acct()</code> — process accounting</li>
+        <li><code>settimeofday()</code> — set time of day</li>
+        <li><code>sethostname()</code> — change hostname</li>
+        <li><code>keyctl()</code> — kernel keyring operations</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#34d399;">Allowed Syscalls (categories)</div>
+      <ul>
+        <li><strong>File I/O:</strong> <code>read</code>, <code>write</code>, <code>open</code>, <code>close</code>, <code>stat</code>, <code>fstat</code></li>
+        <li><strong>Process:</strong> <code>fork</code>, <code>clone</code>, <code>execve</code>, <code>wait4</code>, <code>exit</code></li>
+        <li><strong>Memory:</strong> <code>mmap</code>, <code>mprotect</code>, <code>brk</code>, <code>munmap</code></li>
+        <li><strong>Network:</strong> <code>socket</code>, <code>connect</code>, <code>bind</code>, <code>listen</code>, <code>accept</code></li>
+        <li><strong>Signals:</strong> <code>kill</code>, <code>rt_sigaction</code>, <code>rt_sigprocmask</code></li>
+        <li><strong>Time:</strong> <code>clock_gettime</code>, <code>gettimeofday</code> (read, not set)</li>
+        <li><strong>IPC:</strong> <code>pipe</code>, <code>shmget</code>, <code>semget</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Capabilities vs. Seccomp — what's the difference?</strong> Capabilities control <em>who</em> can perform an operation (privilege checks). Seccomp controls <em>what syscalls</em> are available at all. Even root with <code>CAP_SYS_ADMIN</code> cannot call <code>mount()</code> if seccomp blocks it. They're complementary layers.
+  </div>
+
+  <!-- ============================== -->
+  <!-- Custom Seccomp Profiles         -->
+  <!-- ============================== -->
+  <h2>Custom Seccomp Profiles</h2>
+
+  <h3>Profile Structure (JSON)</h3>
+
+  <div class="panel">
+    <div class="panel-title">Seccomp Profile — whitelist approach</div>
+<pre><code>{
+  <span class="str">"defaultAction"</span>: <span class="str">"SCMP_ACT_ERRNO"</span>,      <span class="cm">// deny everything by default</span>
+  <span class="str">"architectures"</span>: [
+    <span class="str">"SCMP_ARCH_X86_64"</span>,
+    <span class="str">"SCMP_ARCH_X86"</span>,
+    <span class="str">"SCMP_ARCH_AARCH64"</span>
+  ],
+  <span class="str">"syscalls"</span>: [
+    {
+      <span class="str">"names"</span>: [<span class="str">"read"</span>, <span class="str">"write"</span>, <span class="str">"open"</span>, <span class="str">"close"</span>, <span class="str">"stat"</span>,
+               <span class="str">"fstat"</span>, <span class="str">"mmap"</span>, <span class="str">"mprotect"</span>, <span class="str">"brk"</span>,
+               <span class="str">"exit_group"</span>, <span class="str">"execve"</span>],
+      <span class="str">"action"</span>: <span class="str">"SCMP_ACT_ALLOW"</span>         <span class="cm">// whitelist these syscalls</span>
+    },
+    {
+      <span class="str">"names"</span>: [<span class="str">"clone"</span>],
+      <span class="str">"action"</span>: <span class="str">"SCMP_ACT_ALLOW"</span>,
+      <span class="str">"args"</span>: [                              <span class="cm">// filter on arguments too</span>
+        {
+          <span class="str">"index"</span>: <span class="num">0</span>,
+          <span class="str">"value"</span>: <span class="num">2114060288</span>,
+          <span class="str">"op"</span>: <span class="str">"SCMP_CMP_MASKED_EQ"</span>    <span class="cm">// only allow specific clone flags</span>
+        }
+      ]
+    }
+  ]
+}</code></pre>
+  </div>
+
+  <table>
+    <tr>
+      <th>Field</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>defaultAction</code></td>
+      <td>What to do for any syscall not explicitly listed (<code>SCMP_ACT_ERRNO</code> = deny, <code>SCMP_ACT_ALLOW</code> = allow)</td>
+    </tr>
+    <tr>
+      <td><code>architectures</code></td>
+      <td>CPU architectures this profile applies to (syscall numbers differ per arch)</td>
+    </tr>
+    <tr>
+      <td><code>syscalls[].names</code></td>
+      <td>List of syscall names to match</td>
+    </tr>
+    <tr>
+      <td><code>syscalls[].action</code></td>
+      <td>What to do when matched: ALLOW, ERRNO, TRAP, KILL, LOG</td>
+    </tr>
+    <tr>
+      <td><code>syscalls[].args</code></td>
+      <td>Optional — filter on specific argument values (argument index, value, comparison operator)</td>
+    </tr>
+  </table>
+
+  <h3>Applying Custom Profiles</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Docker</div>
+<pre><code><span class="cm"># Use a custom seccomp profile</span>
+<span class="fn">docker run</span> \
+  <span class="kw">--security-opt</span> <span class="str">seccomp=profile.json</span> \
+  nginx
+
+<span class="cm"># Disable seccomp entirely (dangerous!)</span>
+<span class="fn">docker run</span> \
+  <span class="kw">--security-opt</span> <span class="str">seccomp=unconfined</span> \
+  nginx</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Kubernetes</div>
+<pre><code><span class="kw">securityContext</span>:
+  <span class="kw">seccompProfile</span>:
+    <span class="cm"># Use the container runtime's default</span>
+    <span class="kw">type</span>: <span class="str">RuntimeDefault</span>
+
+<span class="cm"># OR use a custom profile from the node</span>
+<span class="kw">securityContext</span>:
+  <span class="kw">seccompProfile</span>:
+    <span class="kw">type</span>: <span class="str">Localhost</span>
+    <span class="kw">localhostProfile</span>: <span class="str">profiles/custom.json</span>
+    <span class="cm"># File lives at:</span>
+    <span class="cm"># /var/lib/kubelet/seccomp/profiles/custom.json</span></code></pre>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> Use <code>strace</code> or tools like <a href="https://github.com/containers/oci-seccomp-bpf-hook">oci-seccomp-bpf-hook</a> to profile which syscalls your application actually uses, then build a minimal whitelist profile from that.
+  </div>
+
+  <!-- ============================== -->
+  <!-- Terminal Examples               -->
+  <!-- ============================== -->
+  <h2>Terminal Examples</h2>
+
+  <h3>Inspecting capabilities on a host</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>capsh --print<br>
+    <span class="output">Current: cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap=ep<br>
+Bounding set: cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap<br>
+Ambient set:<br>
+Securebits: 00/0x0/1'b0 (no-hierarchical)<br>
+ secure-noroot: no (unlocked)<br>
+ secure-no-suid-fixup: no (unlocked)<br>
+ secure-keep-caps: no (unlocked)<br>
+ secure-no-ambient-raise: no (unlocked)<br>
+uid=0(root) euid=0(root)<br>
+gid=0(root)</span>
+  </div>
+
+  <h3>Checking capabilities of a running container</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker run --rm alpine sh -c 'cat /proc/1/status | grep Cap'<br>
+    <span class="output">CapInh: 0000000000000000<br>
+CapPrm: 00000000a80425fb<br>
+CapEff: 00000000a80425fb<br>
+CapBnd: 00000000a80425fb<br>
+CapAmb: 0000000000000000</span>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Decode the hex bitmask</span><br>
+    <span class="prompt">$ </span>capsh --decode=00000000a80425fb<br>
+    <span class="output">0x00000000a80425fb=cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap</span>
+  </div>
+
+  <h3>Minimal container vs. privileged container</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Minimal container — only NET_BIND_SERVICE</span><br>
+    <span class="prompt">$ </span>docker run --rm --cap-drop ALL --cap-add NET_BIND_SERVICE alpine sh -c 'cat /proc/1/status | grep CapEff'<br>
+    <span class="output">CapEff: 0000000000000400</span><br><br>
+    <span class="prompt">$ </span>capsh --decode=0000000000000400<br>
+    <span class="output">0x0000000000000400=cap_net_bind_service</span>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Privileged container — ALL capabilities</span><br>
+    <span class="prompt">$ </span>docker run --rm --privileged alpine sh -c 'cat /proc/1/status | grep CapEff'<br>
+    <span class="output">CapEff: 000001ffffffffff</span><br><br>
+    <span class="prompt">$ </span>capsh --decode=000001ffffffffff<br>
+    <span class="output">0x000001ffffffffff=cap_chown,cap_dac_override,...,cap_sys_admin,...(ALL 41 capabilities)</span>
+  </div>
+
+  <h3>Getting capabilities of a specific process</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Find the container's PID on the host</span><br>
+    <span class="prompt">$ </span>docker inspect --format '{{.State.Pid}}' my_container<br>
+    <span class="output">12345</span><br><br>
+    <span class="prompt">$ </span>getpcaps 12345<br>
+    <span class="output">12345: cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap=ep</span>
+  </div>
+
+  <h3>Testing seccomp — blocked syscall</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># mount() is blocked by default seccomp profile</span><br>
+    <span class="prompt">$ </span>docker run --rm alpine mount -t tmpfs tmpfs /mnt<br>
+    <span class="output">mount: permission denied (are you root?)</span><br><br>
+    <span class="prompt">$ </span><span class="cm"># With seccomp disabled, mount is allowed (if CAP_SYS_ADMIN is also added)</span><br>
+    <span class="prompt">$ </span>docker run --rm --security-opt seccomp=unconfined --cap-add SYS_ADMIN alpine mount -t tmpfs tmpfs /mnt<br>
+    <span class="output"><span class="cm">(succeeds — both seccomp AND capability gate removed)</span></span>
+  </div>
+
+</body>
+</html>

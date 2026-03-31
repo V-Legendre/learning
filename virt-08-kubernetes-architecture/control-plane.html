@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 08 — Kubernetes Control Plane</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 08 — Kubernetes Control Plane</h1>
+  <p class="subtitle">The brain of the cluster — API server, etcd, scheduler, and controllers</p>
+
+  <!-- ============================================
+       Architecture Overview
+       ============================================ -->
+  <h2>Architecture Overview</h2>
+  <p>A Kubernetes cluster is split into the <strong>control plane</strong> (the brain) and <strong>worker nodes</strong> (the muscle). The control plane makes global decisions — scheduling, detecting failures, responding to events — while worker nodes run your actual workloads.</p>
+
+  <div class="topology" style="flex-direction: column; gap: 25px;">
+    <!-- Control Plane -->
+    <div style="width: 100%;">
+      <div style="text-align: center; margin-bottom: 12px; font-weight: bold; color: #a78bfa; text-transform: uppercase; letter-spacing: 1px; font-size: 13px;">Control Plane Node</div>
+      <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+        <div class="topo-node server">
+          <span class="topo-icon">&#9881;</span>
+          <span class="topo-label">kube-apiserver</span>
+          <span class="topo-detail">REST API gateway</span>
+        </div>
+        <div class="topo-node server">
+          <span class="topo-icon">&#128451;</span>
+          <span class="topo-label">etcd</span>
+          <span class="topo-detail">Key-value store</span>
+        </div>
+        <div class="topo-node server">
+          <span class="topo-icon">&#128203;</span>
+          <span class="topo-label">kube-scheduler</span>
+          <span class="topo-detail">Pod placement</span>
+        </div>
+        <div class="topo-node server">
+          <span class="topo-icon">&#128260;</span>
+          <span class="topo-label">controller-manager</span>
+          <span class="topo-detail">Reconciliation loops</span>
+        </div>
+        <div class="topo-node server">
+          <span class="topo-icon">&#9729;</span>
+          <span class="topo-label">cloud-controller-mgr</span>
+          <span class="topo-detail">Cloud integrations</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align: center; color: #555; font-size: 20px;">&#8597; gRPC / HTTPS &#8597;</div>
+
+    <!-- Worker Nodes -->
+    <div style="width: 100%;">
+      <div style="text-align: center; margin-bottom: 12px; font-weight: bold; color: #22d3ee; text-transform: uppercase; letter-spacing: 1px; font-size: 13px;">Worker Nodes</div>
+      <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
+        <!-- Worker 1 -->
+        <div style="border: 2px solid #2a2a4a; border-radius: 12px; padding: 16px; background: #0f0f1a;">
+          <div style="text-align: center; font-weight: bold; color: #60a5fa; margin-bottom: 10px; font-size: 13px;">Worker Node 1</div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+            <div class="topo-node host">
+              <span class="topo-label">kubelet</span>
+              <span class="topo-detail">Node agent</span>
+            </div>
+            <div class="topo-node host">
+              <span class="topo-label">kube-proxy</span>
+              <span class="topo-detail">Network rules</span>
+            </div>
+            <div class="topo-node container">
+              <span class="topo-label">Container Runtime</span>
+              <span class="topo-detail">containerd / CRI-O</span>
+            </div>
+          </div>
+        </div>
+        <!-- Worker 2 -->
+        <div style="border: 2px solid #2a2a4a; border-radius: 12px; padding: 16px; background: #0f0f1a;">
+          <div style="text-align: center; font-weight: bold; color: #60a5fa; margin-bottom: 10px; font-size: 13px;">Worker Node 2</div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+            <div class="topo-node host">
+              <span class="topo-label">kubelet</span>
+              <span class="topo-detail">Node agent</span>
+            </div>
+            <div class="topo-node host">
+              <span class="topo-label">kube-proxy</span>
+              <span class="topo-detail">Network rules</span>
+            </div>
+            <div class="topo-node container">
+              <span class="topo-label">Container Runtime</span>
+              <span class="topo-detail">containerd / CRI-O</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><strong>Key insight:</strong> All communication between components goes through the API server. The scheduler, controllers, and kubelets never talk to etcd directly — only the API server does.</div>
+
+  <!-- ============================================
+       API Server
+       ============================================ -->
+  <h2>API Server (kube-apiserver)</h2>
+  <p>The API server is the <strong>front door</strong> to the cluster. It's the only component that communicates with etcd directly. Every operation — whether from <code>kubectl</code>, a kubelet heartbeat, or a controller reconciliation loop — goes through the API server's RESTful interface.</p>
+
+  <ul>
+    <li>Exposes a RESTful API over HTTPS (port 6443 by default)</li>
+    <li>Stateless — can be horizontally scaled behind a load balancer for HA</li>
+    <li>Every <code>kubectl</code> command, every kubelet heartbeat, every controller loop goes through it</li>
+    <li>Acts as the single gateway to etcd — no other component reads/writes etcd directly</li>
+  </ul>
+
+  <h3>Admission Pipeline</h3>
+  <p>Every API request passes through a strict pipeline before anything is written to etcd. Understanding this pipeline is essential for debugging "why was my resource rejected?" or "how did my pod get a sidecar injected?"</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Authentication</div>
+      <div class="desc">Who are you?<br>certs, tokens, OIDC</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Authorization</div>
+      <div class="desc">Can you do this?<br>RBAC policies</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Mutating Webhooks</div>
+      <div class="desc">Modify the request<br>inject sidecars, add labels</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Schema Validation</div>
+      <div class="desc">Is the object valid?<br>field types, required fields</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Validating Webhooks</div>
+      <div class="desc">Accept or reject?<br>policy checks, OPA</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Write to etcd</div>
+      <div class="desc">Persisted<br>resource stored</div>
+    </div>
+  </div>
+
+  <div class="tip"><strong>Mutating vs. validating webhooks:</strong> Mutating webhooks run <em>before</em> validation — they can change the object (e.g., Istio injecting a sidecar container). Validating webhooks run <em>after</em> validation — they can only accept or reject (e.g., a policy engine blocking privileged containers). Order matters: mutate first, then validate the final result.</div>
+
+  <h3>Watch Mechanism</h3>
+  <p>The API server supports <strong>watch</strong> — clients open long-lived HTTP connections and receive chunked responses whenever a watched resource changes. This is the fundamental mechanism behind Kubernetes' reactive architecture.</p>
+
+  <ul>
+    <li>Controllers, kubelets, and other components use watches to react to changes in near-real-time</li>
+    <li>Backed by etcd's own watch feature</li>
+    <li>Each watch has a <code>resourceVersion</code> — enables resumable watches after disconnection</li>
+    <li>API server maintains a <strong>watch cache</strong> to avoid hammering etcd with redundant watches</li>
+    <li>Informers (client-go) combine watch + in-memory cache + index for efficient access</li>
+  </ul>
+
+  <div class="panel">
+    <div class="panel-title">How a Controller Uses Watch</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Controller starts an <strong>informer</strong> that lists all resources of interest (initial sync)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Informer opens a <strong>watch</strong> connection to the API server</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>API server pushes events (ADDED, MODIFIED, DELETED) as they happen</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>Informer updates its local cache and enqueues the object key onto a <strong>work queue</strong></div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>Worker goroutines dequeue keys and run the <strong>reconcile</strong> function</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       etcd
+       ============================================ -->
+  <h2>etcd</h2>
+  <p>etcd is a distributed, consistent key-value store that serves as the <strong>single source of truth</strong> for all cluster state. If etcd is lost and unrecoverable, the cluster is gone.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Core Properties</div>
+      <ul>
+        <li>Strongly consistent (linearizable reads/writes)</li>
+        <li>Uses <strong>Raft consensus</strong> — requires a quorum (majority) for writes</li>
+        <li>All data is protobuf-encoded for efficiency</li>
+        <li>Supports watches natively — the API server leverages this</li>
+        <li>Typical cluster sizes: <strong>3 nodes</strong> (tolerates 1 failure) or <strong>5 nodes</strong> (tolerates 2 failures)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Operational Concerns</div>
+      <ul>
+        <li>etcd is the cluster's <strong>bottleneck</strong> — keep write latency under 10ms</li>
+        <li>Use fast SSDs for etcd storage (avoid network-attached storage)</li>
+        <li>Regular <strong>compaction</strong> to reclaim space from old revisions</li>
+        <li>Regular <strong>defragmentation</strong> to reclaim freed disk space</li>
+        <li>Back up etcd regularly — <code>etcdctl snapshot save</code></li>
+        <li>Default DB size limit: 2 GB (configurable up to 8 GB)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Key Organization</h3>
+  <p>etcd stores Kubernetes objects under a hierarchical key structure:</p>
+
+  <pre><code><span class="cm">// Key format</span>
+<span class="str">/registry/&lt;resource-type&gt;/&lt;namespace&gt;/&lt;name&gt;</span>
+
+<span class="cm">// Examples</span>
+<span class="str">/registry/pods/default/nginx-deployment-abc123</span>
+<span class="str">/registry/services/kube-system/kube-dns</span>
+<span class="str">/registry/deployments/production/web-app</span>
+<span class="str">/registry/nodes/worker-node-01</span>         <span class="cm">// cluster-scoped (no namespace)</span>
+<span class="str">/registry/secrets/default/db-credentials</span></code></pre>
+
+  <h3>Raft Consensus</h3>
+  <div class="topology">
+    <div class="topo-node server">
+      <span class="topo-icon">&#9733;</span>
+      <span class="topo-label">etcd Leader</span>
+      <span class="topo-detail">Handles all writes</span>
+    </div>
+    <span class="topo-link">&#8596; replicate</span>
+    <div class="topo-node server">
+      <span class="topo-icon">&#9675;</span>
+      <span class="topo-label">etcd Follower</span>
+      <span class="topo-detail">Receives log entries</span>
+    </div>
+    <span class="topo-link">&#8596; replicate</span>
+    <div class="topo-node server">
+      <span class="topo-icon">&#9675;</span>
+      <span class="topo-label">etcd Follower</span>
+      <span class="topo-detail">Receives log entries</span>
+    </div>
+  </div>
+
+  <div class="note"><strong>Quorum:</strong> With 3 nodes, quorum = 2. The leader must replicate a write to at least 1 follower before acknowledging. If the leader dies, the remaining 2 nodes elect a new leader. With 5 nodes, quorum = 3 — tolerates 2 simultaneous failures.</div>
+
+  <!-- ============================================
+       Scheduler
+       ============================================ -->
+  <h2>Scheduler (kube-scheduler)</h2>
+  <p>The scheduler watches for newly created pods that have no node assigned (<code>.spec.nodeName</code> is empty). It selects the optimal node for each pod through a two-phase process.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Watch</div>
+      <div class="desc">Detect unscheduled pods<br>(.spec.nodeName is empty)</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #ef4444;">
+      <div class="num">2</div>
+      <div class="label">Filter</div>
+      <div class="desc">Eliminate unsuitable nodes<br>resources, taints, affinity</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="num">3</div>
+      <div class="label">Score</div>
+      <div class="desc">Rank remaining nodes<br>0-100 per plugin</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="num">4</div>
+      <div class="label">Bind</div>
+      <div class="desc">Set .spec.nodeName<br>kubelet picks it up</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Filtering Phase (Predicates)</div>
+      <p>Nodes that <em>cannot</em> run the pod are eliminated:</p>
+      <ul>
+        <li><strong>PodFitsResources</strong> — enough CPU/memory available?</li>
+        <li><strong>PodFitsHostPorts</strong> — requested host ports free?</li>
+        <li><strong>NodeSelector</strong> — node labels match?</li>
+        <li><strong>NodeAffinity</strong> — required affinity rules satisfied?</li>
+        <li><strong>TaintToleration</strong> — pod tolerates node taints?</li>
+        <li><strong>PodTopologySpread</strong> — would placing here violate spread constraints?</li>
+        <li><strong>VolumeZone</strong> — PV in same zone as node?</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Scoring Phase (Priorities)</div>
+      <p>Remaining nodes are <em>ranked</em> by weighted scores:</p>
+      <ul>
+        <li><strong>LeastRequestedPriority</strong> — prefer nodes with most free resources</li>
+        <li><strong>BalancedResourceAllocation</strong> — prefer balanced CPU/memory usage</li>
+        <li><strong>NodeAffinityPriority</strong> — prefer nodes matching preferred affinity</li>
+        <li><strong>PodTopologySpread</strong> — prefer nodes that improve distribution</li>
+        <li><strong>ImageLocality</strong> — prefer nodes that already have the container image</li>
+        <li><strong>InterPodAffinity</strong> — prefer nodes near preferred co-located pods</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tip"><strong>Extensibility:</strong> The scheduler is plugin-based. You can write custom scheduler plugins, create multiple scheduler profiles, or run multiple schedulers. Pods can specify <code>.spec.schedulerName</code> to target a specific scheduler.</div>
+
+  <!-- ============================================
+       Controller Manager
+       ============================================ -->
+  <h2>Controller Manager (kube-controller-manager)</h2>
+  <p>The controller manager runs approximately <strong>30 controllers</strong> as goroutines within a single process. Each controller implements the same fundamental pattern: <strong>watch resources, compare desired state vs. actual state, and reconcile the difference.</strong></p>
+
+  <div class="panel" style="border-color: #e94560;">
+    <div class="panel-title" style="color: #e94560;">The Reconciliation Loop — Kubernetes' Core Pattern</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Observe</div>
+        <div class="desc">Watch API server for<br>resource changes</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="label">Diff</div>
+        <div class="desc">Compare desired state<br>vs. actual state</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="label">Act</div>
+        <div class="desc">Take action to converge<br>actual towards desired</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="label">Repeat</div>
+        <div class="desc">Continuously loop<br>forever</div>
+      </div>
+    </div>
+    <p style="margin-top: 12px; color: #999; font-size: 13px;">This is the <strong>declarative model</strong>: you declare what you want (desired state), and controllers work to make reality match. You never say "start 3 pods" — you say "I want 3 replicas" and the controller makes it happen.</p>
+  </div>
+
+  <h3>Key Controllers</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Controller</th>
+        <th>Watches</th>
+        <th>Reconciles</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Deployment</strong></td>
+        <td>Deployment objects</td>
+        <td>Creates/updates ReplicaSets to match the deployment spec. Manages rolling updates by scaling new RS up and old RS down.</td>
+      </tr>
+      <tr>
+        <td><strong>ReplicaSet</strong></td>
+        <td>ReplicaSet objects, Pods</td>
+        <td>Ensures exactly N pod replicas exist. Creates or deletes pods as needed.</td>
+      </tr>
+      <tr>
+        <td><strong>Node</strong></td>
+        <td>Node objects</td>
+        <td>Monitors node health via heartbeats. Taints unresponsive nodes, evicts pods from unreachable nodes after a grace period.</td>
+      </tr>
+      <tr>
+        <td><strong>Service Account</strong></td>
+        <td>Namespace objects</td>
+        <td>Creates a <code>default</code> service account in every new namespace.</td>
+      </tr>
+      <tr>
+        <td><strong>Endpoint / EndpointSlice</strong></td>
+        <td>Services, Pods</td>
+        <td>Populates Endpoints/EndpointSlice objects with the IPs of pods matching a service's selector.</td>
+      </tr>
+      <tr>
+        <td><strong>Job</strong></td>
+        <td>Job objects, Pods</td>
+        <td>Creates pods for jobs, tracks completions, handles failures and retries.</td>
+      </tr>
+      <tr>
+        <td><strong>Namespace</strong></td>
+        <td>Namespace objects</td>
+        <td>When a namespace is deleted, cleans up all resources within it.</td>
+      </tr>
+      <tr>
+        <td><strong>PersistentVolume</strong></td>
+        <td>PVs, PVCs</td>
+        <td>Binds PVCs to matching PVs. Handles reclaim policies on release.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>Leader election:</strong> In HA setups, multiple controller-manager instances may run, but only the <strong>leader</strong> actively reconciles. Others are standby. Leader election uses a Lease object in the API server. Same applies to the scheduler.</div>
+
+  <!-- ============================================
+       Cloud Controller Manager
+       ============================================ -->
+  <h2>Cloud Controller Manager</h2>
+  <p>Separated from the main controller manager since Kubernetes 1.6, the cloud controller manager runs controllers that integrate with cloud provider APIs. Each cloud provider (AWS, GCP, Azure) ships their own implementation.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Cloud-Specific Controllers</div>
+      <ul>
+        <li><strong>Node controller</strong> — detects when a cloud VM is terminated and removes the corresponding K8s node object</li>
+        <li><strong>Route controller</strong> — configures cloud network routes so pods on different nodes can communicate</li>
+        <li><strong>Service controller</strong> — creates cloud load balancers for services of <code>type: LoadBalancer</code> (e.g., AWS ELB, GCP LB)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Why Separate?</div>
+      <ul>
+        <li>Kubernetes core remains <strong>cloud-agnostic</strong></li>
+        <li>Cloud providers can release on their own schedule, independent of K8s releases</li>
+        <li>Cleaner separation of concerns — cloud APIs evolve independently</li>
+        <li>Different clouds have different capabilities (zones, LB features, network models)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note"><strong>Managed Kubernetes:</strong> In managed services (EKS, GKE, AKS), the control plane is fully managed by the cloud provider. You never see the API server, etcd, or controllers — the provider runs and maintains them. You only manage worker nodes (or use managed node pools / Fargate / Autopilot).</div>
+
+</body>
+</html>

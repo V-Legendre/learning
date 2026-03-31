@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 08 — Kubelet & Container Runtime</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 08 — Kubelet &amp; Container Runtime</h1>
+  <p class="subtitle">The node agent — from scheduled pod to running containers</p>
+
+  <!-- ============================================
+       Kubelet Overview
+       ============================================ -->
+  <h2>Kubelet Overview</h2>
+  <p>The kubelet is the <strong>node-level agent</strong> that runs on every node in the cluster. It takes pod specs from the API server and ensures the described containers are running and healthy.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">What It Does</div>
+      <ul>
+        <li>Watches for pods assigned to its node (via API server watch on <code>.spec.nodeName</code>)</li>
+        <li>Manages the container runtime via <strong>CRI</strong> (Container Runtime Interface) over gRPC</li>
+        <li>Reports node status (capacity, conditions, addresses) back to the API server</li>
+        <li>Reports pod status and container states</li>
+        <li>Runs probes (liveness, readiness, startup)</li>
+        <li>Manages volumes — mounts them before containers start</li>
+        <li>Manages container logs</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">What It Is Not</div>
+      <ul>
+        <li><strong>Not a controller</strong> — it doesn't make global decisions, it executes locally</li>
+        <li>Does NOT manage containers that were not created by Kubernetes</li>
+        <li>Does NOT talk to etcd — only to the API server</li>
+        <li>Does NOT handle networking rules — that's kube-proxy / CNI plugin</li>
+        <li>Runs as a <strong>systemd service</strong> on the node (not in a container)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Pod Lifecycle: End-to-End
+       ============================================ -->
+  <h2>Pod Lifecycle: End-to-End</h2>
+  <p>Follow a Deployment from <code>kubectl apply</code> all the way to a running container on a node. This shows how all control plane components collaborate.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">kubectl apply</div>
+      <div class="desc">User submits Deployment<br>to API server</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">API Server</div>
+      <div class="desc">Validates, stores<br>Deployment in etcd</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Deployment Ctrl</div>
+      <div class="desc">Creates ReplicaSet<br>stored in etcd</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">ReplicaSet Ctrl</div>
+      <div class="desc">Creates Pod (unscheduled)<br>stored in etcd</div>
+    </div>
+  </div>
+
+  <div class="flow" style="margin-top: 0;">
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Scheduler</div>
+      <div class="desc">Assigns node to Pod<br>sets .spec.nodeName</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Kubelet</div>
+      <div class="desc">Picks up Pod via watch<br>calls CRI</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">7</div>
+      <div class="label">Container Runtime</div>
+      <div class="desc">Pulls image, creates<br>and starts container</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="num">8</div>
+      <div class="label">Running</div>
+      <div class="desc">Kubelet reports status<br>back to API server</div>
+    </div>
+  </div>
+
+  <div class="note"><strong>Key observation:</strong> No component in this chain "calls" the next step directly. Each writes to etcd (via the API server), and the next component picks it up via its own watch. This is the decoupled, event-driven architecture of Kubernetes.</div>
+
+  <!-- ============================================
+       CRI in Action
+       ============================================ -->
+  <h2>CRI in Action</h2>
+  <p>When the kubelet needs to start a pod, it makes a sequence of <strong>CRI (Container Runtime Interface)</strong> gRPC calls to the container runtime (containerd, CRI-O). Here is the exact sequence:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>RunPodSandbox</strong> — Creates the pod sandbox, which is the <strong>"pause" container</strong>. This tiny container (runs <code>/pause</code>, an infinite sleep) exists solely to hold the pod's Linux namespaces (network, IPC, PID). All other containers in the pod join these namespaces.<br>
+        <span style="color: #888; font-size: 13px;">The <strong>CNI plugin</strong> is invoked here to set up pod networking — assigns IP, creates veth pair, configures routes.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>PullImage</strong> — Downloads the container image from the registry (if not already cached locally). Image pull policy: <code>Always</code>, <code>IfNotPresent</code>, or <code>Never</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>CreateContainer</strong> — Creates the container within the sandbox. The container shares the network namespace (and optionally PID namespace) with the pause container. OCI runtime spec is generated here.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>StartContainer</strong> — Starts the container process. The OCI runtime (runc, crun, kata) is invoked to actually launch the process with the appropriate namespaces, cgroups, and seccomp profiles.
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Pause Container — Why It Exists</div>
+    <div class="nest-box namespace">
+      <span class="nest-label">Pod Network Namespace (held by pause container)</span>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px;">
+        <div class="nest-box container" style="flex: 1; min-width: 120px;">
+          <span class="nest-label">Pause</span>
+          <p style="font-size: 12px; color: #888; text-align: center; margin-top: 8px;">PID 1 in pod<br>holds namespaces<br>runs /pause (sleep)</p>
+        </div>
+        <div class="nest-box container" style="flex: 1; min-width: 120px;">
+          <span class="nest-label">App Container</span>
+          <p style="font-size: 12px; color: #888; text-align: center; margin-top: 8px;">Your application<br>joins pod NS<br>shares network with pause</p>
+        </div>
+        <div class="nest-box container" style="flex: 1; min-width: 120px;">
+          <span class="nest-label">Sidecar</span>
+          <p style="font-size: 12px; color: #888; text-align: center; margin-top: 8px;">e.g., Envoy proxy<br>joins pod NS<br>localhost comms with app</p>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top: 12px; color: #999; font-size: 13px;">All containers in a pod share the same IP address and can communicate via <code>localhost</code>. If the app container crashes and restarts, the network namespace (and its IP) persists because the pause container is still running.</p>
+  </div>
+
+  <!-- ============================================
+       Init Containers
+       ============================================ -->
+  <h2>Init Containers</h2>
+  <p>Init containers run <strong>before</strong> application containers, one at a time, in order. Each must complete successfully before the next starts. If an init container fails, the kubelet restarts it (subject to the pod's restart policy).</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Init 1</div>
+      <div class="desc">e.g., wait for DB<br>to be reachable</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">Init 2</div>
+      <div class="desc">e.g., clone config<br>from git repo</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">Init 3</div>
+      <div class="desc">e.g., run DB<br>migrations</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label">App Containers</div>
+      <div class="desc">All start together<br>after inits complete</div>
+    </div>
+  </div>
+
+  <p>Common use cases:</p>
+  <ul>
+    <li><strong>Wait for dependencies</strong> — poll until a database or service is ready</li>
+    <li><strong>Set up configuration</strong> — clone config from a repo, generate certs</li>
+    <li><strong>Run migrations</strong> — apply schema changes before the app starts</li>
+    <li><strong>Download artifacts</strong> — fetch data files, ML models</li>
+  </ul>
+
+  <pre><code><span class="cm"># Init container example in pod spec</span>
+<span class="kw">spec</span>:
+  <span class="kw">initContainers</span>:
+    - <span class="kw">name</span>: <span class="str">wait-for-db</span>
+      <span class="kw">image</span>: <span class="str">busybox:1.36</span>
+      <span class="kw">command</span>: [<span class="str">'sh'</span>, <span class="str">'-c'</span>, <span class="str">'until nc -z postgres 5432; do sleep 2; done'</span>]
+    - <span class="kw">name</span>: <span class="str">run-migrations</span>
+      <span class="kw">image</span>: <span class="str">myapp:latest</span>
+      <span class="kw">command</span>: [<span class="str">'python'</span>, <span class="str">'manage.py'</span>, <span class="str">'migrate'</span>]
+  <span class="kw">containers</span>:
+    - <span class="kw">name</span>: <span class="str">web</span>
+      <span class="kw">image</span>: <span class="str">myapp:latest</span></code></pre>
+
+  <!-- ============================================
+       Sidecar Containers
+       ============================================ -->
+  <h2>Sidecar Containers (K8s 1.28+)</h2>
+  <p>Before K8s 1.28, sidecars were just regular containers in the pod — no guaranteed startup order, no graceful shutdown order. The native sidecar feature fixes this by using <code>restartPolicy: Always</code> on init containers.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">How It Works</div>
+      <ul>
+        <li>Defined in <code>.spec.initContainers[]</code> with <code>restartPolicy: Always</code></li>
+        <li>Starts <strong>before</strong> app containers (as part of init sequence)</li>
+        <li>Runs for the <strong>entire lifetime</strong> of the pod</li>
+        <li>Shuts down <strong>after</strong> all app containers have terminated</li>
+        <li>Guaranteed startup order: sidecars first, then app containers</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Use Cases</div>
+      <ul>
+        <li><strong>Service mesh proxies</strong> — Istio/Envoy sidecar must be running before the app sends traffic</li>
+        <li><strong>Log collectors</strong> — Fluentd/Fluent Bit shipping logs from shared volumes</li>
+        <li><strong>Config watchers</strong> — detect config changes and signal the app</li>
+        <li><strong>Auth proxies</strong> — handle TLS termination or token refresh</li>
+      </ul>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># Native sidecar container (K8s 1.28+)</span>
+<span class="kw">spec</span>:
+  <span class="kw">initContainers</span>:
+    - <span class="kw">name</span>: <span class="str">envoy-proxy</span>
+      <span class="kw">image</span>: <span class="str">envoyproxy/envoy:v1.28</span>
+      <span class="kw">restartPolicy</span>: <span class="str">Always</span>    <span class="cm"># ← this makes it a sidecar</span>
+      <span class="kw">ports</span>:
+        - <span class="kw">containerPort</span>: <span class="num">15001</span>
+  <span class="kw">containers</span>:
+    - <span class="kw">name</span>: <span class="str">app</span>
+      <span class="kw">image</span>: <span class="str">myapp:latest</span>
+      <span class="cm"># envoy-proxy is guaranteed running before app starts</span></code></pre>
+
+  <!-- ============================================
+       Probes
+       ============================================ -->
+  <h2>Probes</h2>
+  <p>Probes let the kubelet monitor container health and readiness. They determine whether a container should be restarted, receive traffic, or keep starting up.</p>
+
+  <div class="grid-3">
+    <div class="panel" style="border-color: #60a5fa;">
+      <div class="panel-title" style="color: #60a5fa;">Startup Probe</div>
+      <ul>
+        <li>Runs <strong>once</strong> during startup</li>
+        <li>Delays liveness &amp; readiness probes until it succeeds</li>
+        <li>For <strong>slow-starting</strong> apps (Java, large datasets, ML model loading)</li>
+        <li>Failure: kubelet <strong>kills and restarts</strong> the container</li>
+        <li>Max startup time = <code>failureThreshold &times; periodSeconds</code></li>
+      </ul>
+      <pre><code><span class="kw">startupProbe</span>:
+  <span class="kw">httpGet</span>:
+    <span class="kw">path</span>: <span class="str">/healthz</span>
+    <span class="kw">port</span>: <span class="num">8080</span>
+  <span class="kw">failureThreshold</span>: <span class="num">30</span>
+  <span class="kw">periodSeconds</span>: <span class="num">10</span>
+  <span class="cm"># 30 × 10 = 300s max startup</span></code></pre>
+    </div>
+
+    <div class="panel" style="border-color: #ef4444;">
+      <div class="panel-title" style="color: #f87171;">Liveness Probe</div>
+      <ul>
+        <li>Runs <strong>continuously</strong> after startup</li>
+        <li>Detects <strong>deadlocks</strong>, hung processes, broken state</li>
+        <li>Failure: kubelet <strong>kills and restarts</strong> the container</li>
+        <li>Types: HTTP GET, TCP socket, gRPC, exec command</li>
+        <li>Be careful: overly aggressive liveness probes cause restart storms</li>
+      </ul>
+      <pre><code><span class="kw">livenessProbe</span>:
+  <span class="kw">httpGet</span>:
+    <span class="kw">path</span>: <span class="str">/healthz</span>
+    <span class="kw">port</span>: <span class="num">8080</span>
+  <span class="kw">initialDelaySeconds</span>: <span class="num">15</span>
+  <span class="kw">periodSeconds</span>: <span class="num">20</span>
+  <span class="kw">failureThreshold</span>: <span class="num">3</span></code></pre>
+    </div>
+
+    <div class="panel" style="border-color: #34d399;">
+      <div class="panel-title" style="color: #34d399;">Readiness Probe</div>
+      <ul>
+        <li>Runs <strong>continuously</strong> after startup</li>
+        <li>Controls <strong>traffic routing</strong> — failing removes pod from Service endpoints</li>
+        <li>Failure: pod stays running but gets <strong>no traffic</strong></li>
+        <li>Use for: warmup periods, dependency checks, backpressure</li>
+        <li>Pod is not killed — just temporarily removed from load balancer</li>
+      </ul>
+      <pre><code><span class="kw">readinessProbe</span>:
+  <span class="kw">httpGet</span>:
+    <span class="kw">path</span>: <span class="str">/ready</span>
+    <span class="kw">port</span>: <span class="num">8080</span>
+  <span class="kw">periodSeconds</span>: <span class="num">5</span>
+  <span class="kw">failureThreshold</span>: <span class="num">3</span></code></pre>
+    </div>
+  </div>
+
+  <div class="warn"><strong>Common mistake:</strong> Using the same endpoint for liveness and readiness probes. If a pod is temporarily overloaded, you want it to stop receiving traffic (readiness) but NOT get killed (liveness). Use separate endpoints: <code>/healthz</code> for liveness (is the process alive?) and <code>/ready</code> for readiness (can it handle requests?).</div>
+
+  <!-- ============================================
+       Termination Sequence
+       ============================================ -->
+  <h2>Termination Sequence</h2>
+  <p>Graceful shutdown is critical for zero-downtime deployments. Understanding this exact sequence prevents dropped connections and data loss.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Pod deletion requested</strong> — API server sets <code>deletionTimestamp</code> on the pod. The pod enters <code>Terminating</code> state.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Pod removed from Service endpoints</strong> — the Endpoint controller removes the pod's IP from all Services. No new traffic is routed to it. <span style="color: #fbbf24;">(This happens in parallel with step 3 — race condition risk!)</span></div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>preStop hook runs</strong> (if defined) — e.g., drain connections, deregister from service discovery, flush buffers. This is your chance for graceful cleanup.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>SIGTERM sent</strong> — the container's main process (PID 1) receives <code>SIGTERM</code>. Your application should handle this signal: stop accepting new requests, finish in-flight work, close connections.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Grace period</strong> — default <strong>30 seconds</strong> (configurable via <code>terminationGracePeriodSeconds</code>). The kubelet waits for the process to exit cleanly.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div><strong>SIGKILL sent</strong> — if the process is still running after the grace period, the kubelet sends <code>SIGKILL</code> (forceful, uncatchable kill).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div><strong>Cleanup</strong> — container is removed, pod status is updated to <code>Succeeded</code> or <code>Failed</code>, API server is notified.</div>
+    </div>
+  </div>
+
+  <div class="tip"><strong>Best practice:</strong> Add a <code>preStop</code> hook with a small sleep (e.g., 5s) to give the Endpoint controller time to propagate the removal before the app starts shutting down. This avoids the race condition where traffic is still being sent to a pod that has already started terminating.</div>
+
+  <pre><code><span class="cm"># Graceful shutdown configuration</span>
+<span class="kw">spec</span>:
+  <span class="kw">terminationGracePeriodSeconds</span>: <span class="num">60</span>
+  <span class="kw">containers</span>:
+    - <span class="kw">name</span>: <span class="str">web</span>
+      <span class="kw">lifecycle</span>:
+        <span class="kw">preStop</span>:
+          <span class="kw">exec</span>:
+            <span class="kw">command</span>: [<span class="str">"/bin/sh"</span>, <span class="str">"-c"</span>, <span class="str">"sleep 5 && /app/graceful-shutdown.sh"</span>]</code></pre>
+
+  <!-- ============================================
+       Device Plugins
+       ============================================ -->
+  <h2>Device Plugins</h2>
+  <p>Device plugins extend the kubelet to advertise and manage custom hardware resources — GPUs, FPGAs, InfiniBand NICs, and other accelerators.</p>
+
+  <div class="panel">
+    <div class="panel-title">How Device Plugins Work</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">Register</div>
+        <div class="desc">Plugin registers with<br>kubelet via gRPC<br>(Unix socket)</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Discover</div>
+        <div class="desc">Plugin reports available<br>devices to kubelet<br>(e.g., 4 GPUs)</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Advertise</div>
+        <div class="desc">Kubelet reports to<br>API server as node<br>allocatable resources</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">Allocate</div>
+        <div class="desc">When pod is scheduled,<br>plugin allocates specific<br>device(s) to container</div>
+      </div>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># Requesting a GPU in a pod spec</span>
+<span class="kw">spec</span>:
+  <span class="kw">containers</span>:
+    - <span class="kw">name</span>: <span class="str">training</span>
+      <span class="kw">image</span>: <span class="str">pytorch/pytorch:2.1</span>
+      <span class="kw">resources</span>:
+        <span class="kw">limits</span>:
+          <span class="type">nvidia.com/gpu</span>: <span class="str">"1"</span>   <span class="cm"># request 1 NVIDIA GPU</span></code></pre>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Device Plugin</th>
+        <th>Resource Name</th>
+        <th>Hardware</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>NVIDIA GPU</td>
+        <td><code>nvidia.com/gpu</code></td>
+        <td>NVIDIA GPUs (Tesla, A100, H100)</td>
+      </tr>
+      <tr>
+        <td>AMD GPU</td>
+        <td><code>amd.com/gpu</code></td>
+        <td>AMD Instinct GPUs</td>
+      </tr>
+      <tr>
+        <td>Intel FPGA</td>
+        <td><code>fpga.intel.com/af-*</code></td>
+        <td>Intel FPGA accelerators</td>
+      </tr>
+      <tr>
+        <td>SR-IOV</td>
+        <td><code>intel.com/sriov-nic</code></td>
+        <td>SR-IOV virtual functions</td>
+      </tr>
+      <tr>
+        <td>RDMA/InfiniBand</td>
+        <td><code>rdma/hca</code></td>
+        <td>RDMA-capable NICs</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ============================================
+       Cross-References
+       ============================================ -->
+  <h2>Cross-References</h2>
+  <div class="panel">
+    <ul>
+      <li>For CNI invocation during RunPodSandbox, see <a href="../net-12-container-networking/cni.html">Net 12 — CNI</a></li>
+      <li>For CRI implementation details (containerd, CRI-O), see <a href="../virt-06-container-runtimes/containerd-cri.html">Virt 06 — containerd &amp; CRI</a></li>
+      <li>For workload types (Deployments, StatefulSets, DaemonSets) and scheduling details, see <a href="workloads-scheduling.html">Virt 08 — Workloads &amp; Scheduling</a></li>
+      <li>For control plane architecture, see <a href="control-plane.html">Virt 08 — Control Plane</a></li>
+    </ul>
+  </div>
+
+</body>
+</html>

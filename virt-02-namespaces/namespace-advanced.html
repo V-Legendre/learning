@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 02 — Linux Namespaces: Advanced Types & Container Birth</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 02 — Linux Namespaces: Advanced Types & Container Birth</h1>
+  <p class="subtitle">IPC, User, Cgroup, Time namespaces — and how they combine to create a container</p>
+
+  <!-- ===== IPC NAMESPACE ===== -->
+  <h2>IPC Namespace — <code>CLONE_NEWIPC</code></h2>
+
+  <p>IPC namespaces isolate <strong>inter-process communication</strong> resources. Processes in different IPC namespaces cannot see or interact with each other's IPC objects.</p>
+
+  <div class="panel">
+    <div class="panel-title">What It Isolates</div>
+    <ul>
+      <li><strong>System V IPC objects:</strong>
+        <ul>
+          <li>Shared memory segments (<code>shmget</code>, <code>shmat</code>)</li>
+          <li>Semaphore sets (<code>semget</code>, <code>semop</code>)</li>
+          <li>Message queues (<code>msgget</code>, <code>msgsnd</code>, <code>msgrcv</code>)</li>
+        </ul>
+      </li>
+      <li><strong>POSIX message queues</strong> (<code>/dev/mqueue</code>)</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header host">Host IPC Namespace</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="output">$ ipcs</span><br>
+          <span class="output">------ Shared Memory Segments ------</span><br>
+          <span class="output">key        shmid  owner  perms  bytes</span><br>
+          <span class="output">0x00000000 0      root   644    80</span><br>
+          <span class="output">0x00000000 1      root   644    16384</span><br>
+          <span class="output">0x00000000 2      www    600    65536</span><br><br>
+          <span class="output">------ Semaphore Arrays ------</span><br>
+          <span class="output">key        semid  owner  perms  nsems</span><br>
+          <span class="output">0x0052e2c1 0      postgres 600  17</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">Container IPC Namespace</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="output">$ ipcs</span><br>
+          <span class="output">------ Shared Memory Segments ------</span><br>
+          <span class="output">key        shmid  owner  perms  bytes</span><br><br>
+          <span class="output">------ Semaphore Arrays ------</span><br>
+          <span class="output">key        semid  owner  perms  nsems</span><br><br>
+          <span class="prompt"># Empty! Container can't see</span><br>
+          <span class="prompt"># host IPC objects</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Kubernetes pod-level IPC:</strong> By default, containers in the same pod share an IPC namespace. This allows PostgreSQL shared memory, semaphores between sidecars, etc. You can disable this with <code>shareProcessNamespace: false</code> in the pod spec.
+  </div>
+
+  <!-- ===== USER NAMESPACE ===== -->
+  <h2>User Namespace — <code>CLONE_NEWUSER</code> (the game-changer)</h2>
+
+  <p>User namespaces are the most security-critical namespace type. They enable <strong>UID/GID remapping</strong>: a process can appear to be <code>root</code> (UID 0) inside the namespace while actually running as an unprivileged user (e.g., UID 100000) on the host.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Core Idea: UID Mapping</div>
+    <div class="nest-box os" style="margin-top: 10px;">
+      <span class="nest-label">Host</span>
+      <p style="font-size: 13px; margin-top: 8px;">UIDs: 0 (real root), 1000 (your user), 100000-165535 (mapped range)</p>
+      <div class="nest-box namespace" style="margin-top: 10px;">
+        <span class="nest-label">User Namespace</span>
+        <p style="font-size: 13px; margin-top: 8px;">UID 0 (root inside) &rarr; maps to UID 100000 (nobody outside)<br>
+        UID 1 (inside) &rarr; maps to UID 100001 (outside)<br>
+        ...<br>
+        UID 65535 (inside) &rarr; maps to UID 165535 (outside)</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>The Mapping Files</h3>
+
+  <p>UID and GID mappings are defined in <code>/proc/[pid]/uid_map</code> and <code>/proc/[pid]/gid_map</code>. The format is:</p>
+
+  <pre><code><span class="cm"># Format: &lt;inside-start&gt;  &lt;outside-start&gt;  &lt;count&gt;</span>
+
+<span class="cm"># /proc/[pid]/uid_map</span>
+<span class="num">0</span>    <span class="num">100000</span>    <span class="num">65536</span>
+<span class="cm"># UID 0 inside    = UID 100000 outside</span>
+<span class="cm"># UID 1 inside    = UID 100001 outside</span>
+<span class="cm"># ...up to 65536 UIDs mapped</span>
+
+<span class="cm"># /proc/[pid]/gid_map — same format for GIDs</span>
+<span class="num">0</span>    <span class="num">100000</span>    <span class="num">65536</span></code></pre>
+
+  <div class="terminal">
+    <span class="prompt"># Check a container's UID mapping</span><br>
+    <span class="output">$ cat /proc/12345/uid_map</span><br>
+    <span class="output">         0     100000      65536</span><br><br>
+    <span class="prompt"># Inside the container</span><br>
+    <span class="output">$ id</span><br>
+    <span class="output">uid=0(root) gid=0(root) groups=0(root)</span><br><br>
+    <span class="prompt"># But on the host, this process runs as UID 100000</span><br>
+    <span class="output">$ ps -o user,pid,comm -p 12345</span><br>
+    <span class="output">USER       PID COMMAND</span><br>
+    <span class="output">100000   12345 bash</span>
+  </div>
+
+  <h3>Why This Is a Game-Changer: Rootless Containers</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Without User Namespaces (traditional Docker)</div>
+      <ul>
+        <li>Docker daemon runs as <strong>real root</strong> on the host</li>
+        <li>Container processes run as <strong>real root</strong> (UID 0)</li>
+        <li>A container escape = <strong>full root access</strong> to the host</li>
+        <li>Must trust the container image completely</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">With User Namespaces (Podman, rootless Docker)</div>
+      <ul>
+        <li>Container runtime runs as <strong>your regular user</strong></li>
+        <li>Container root (UID 0) maps to <strong>unprivileged UID</strong> (e.g., 100000)</li>
+        <li>A container escape = <strong>unprivileged user access</strong></li>
+        <li>No SUID binaries, no real root &mdash; much smaller attack surface</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Podman:</strong> Runs containers <strong>rootless by default</strong> using user namespaces. No daemon, no root required. The <code>podman unshare</code> command lets you enter the user namespace to debug UID mapping issues. <code>/etc/subuid</code> and <code>/etc/subgid</code> define the allocated UID/GID ranges per user.
+  </div>
+
+  <h3>Security Properties</h3>
+
+  <div class="panel">
+    <div class="panel-title">Namespace Ownership & Capabilities</div>
+    <ul>
+      <li>User namespaces <strong>must be created first</strong> &mdash; other namespaces are then <strong>owned by</strong> the user namespace</li>
+      <li>A process with <code>CAP_SYS_ADMIN</code> inside a user NS has that capability <strong>only within the namespace</strong></li>
+      <li>Root inside the user NS <strong>cannot</strong>:
+        <ul>
+          <li>Load kernel modules</li>
+          <li>Access host devices (unless explicitly mapped)</li>
+          <li>Modify host files owned by other UIDs</li>
+          <li>Change host network configuration</li>
+        </ul>
+      </li>
+      <li>Capabilities are <strong>relative to the namespace</strong> &mdash; not absolute on the host</li>
+    </ul>
+  </div>
+
+  <!-- ===== CGROUP NAMESPACE ===== -->
+  <h2>Cgroup Namespace — <code>CLONE_NEWCGROUP</code> (Linux 4.6, 2016)</h2>
+
+  <p>Cgroup namespaces give a process a <strong>relative view</strong> of its cgroup hierarchy, hiding the host's cgroup tree structure.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header host">Without Cgroup NS (host view leaked)</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt"># Inside container, full path visible</span><br>
+          <span class="output">$ cat /proc/self/cgroup</span><br>
+          <span class="output">0::/system.slice/docker-abc123def456.scope</span><br><br>
+          <span class="prompt"># Container can see:</span><br>
+          <span class="prompt">#  - It's running under Docker</span><br>
+          <span class="prompt">#  - Its container ID</span><br>
+          <span class="prompt">#  - The host's cgroup hierarchy</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">With Cgroup NS (isolated view)</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt"># Inside container, relative path</span><br>
+          <span class="output">$ cat /proc/self/cgroup</span><br>
+          <span class="output">0::/</span><br><br>
+          <span class="prompt"># Container sees / as its cgroup root</span><br>
+          <span class="prompt"># Can't navigate up to host cgroups</span><br>
+          <span class="prompt"># Can't discover other containers</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Points</div>
+    <ul>
+      <li>Prevents the container from <strong>seeing or navigating</strong> the host's cgroup tree</li>
+      <li>The container's cgroup root appears as <code>/</code> rather than its real path</li>
+      <li>Created <strong>automatically</strong> by Docker and containerd for all containers</li>
+      <li>Important for multi-tenant environments &mdash; one container can't enumerate other containers via cgroup paths</li>
+      <li>Works with both cgroups v1 and cgroups v2</li>
+    </ul>
+  </div>
+
+  <!-- ===== TIME NAMESPACE ===== -->
+  <h2>Time Namespace — <code>CLONE_NEWTIME</code> (Linux 5.6, 2020)</h2>
+
+  <p>The newest namespace type. It allows a container to have a <strong>different system uptime</strong> than the host by adding offsets to monotonic and boot-time clocks.</p>
+
+  <div class="panel">
+    <div class="panel-title">What It Isolates</div>
+    <ul>
+      <li><code>CLOCK_MONOTONIC</code> &mdash; time since some arbitrary point (used for measuring intervals)</li>
+      <li><code>CLOCK_BOOTTIME</code> &mdash; time since boot (including time spent suspended)</li>
+      <li>Does <strong>NOT</strong> affect <code>CLOCK_REALTIME</code> (wall clock / date &mdash; that's too dangerous to namespace)</li>
+    </ul>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Use Case: Live Migration</div>
+      <p style="font-size: 14px;">When a container is live-migrated from Host A (up 30 days) to Host B (up 2 days), without time namespace the container would see uptime jump from 30 days to 2 days. With time NS, the offset preserves the container's perceived uptime.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Offset Configuration</div>
+      <div class="terminal" style="margin-top: 6px;">
+        <span class="prompt"># Offsets file for a process</span><br>
+        <span class="output">$ cat /proc/[pid]/timens_offsets</span><br>
+        <span class="output">monotonic  86400  0</span><br>
+        <span class="output">boottime   86400  0</span><br>
+        <span class="prompt"># 86400 seconds = 1 day offset</span><br>
+        <span class="prompt"># Container sees 1 day more uptime</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SUMMARY TABLE ===== -->
+  <h2>All 8 Linux Namespace Types</h2>
+
+  <table>
+    <tr>
+      <th>Namespace</th>
+      <th>Flag</th>
+      <th>Isolates</th>
+      <th>Since</th>
+    </tr>
+    <tr>
+      <td><strong>Mount</strong></td>
+      <td><code>CLONE_NEWNS</code></td>
+      <td>Mount points, filesystem tree</td>
+      <td>2.4.19 (2002)</td>
+    </tr>
+    <tr>
+      <td><strong>UTS</strong></td>
+      <td><code>CLONE_NEWUTS</code></td>
+      <td>Hostname, NIS domain name</td>
+      <td>2.6.19 (2006)</td>
+    </tr>
+    <tr>
+      <td><strong>IPC</strong></td>
+      <td><code>CLONE_NEWIPC</code></td>
+      <td>SysV IPC, POSIX message queues</td>
+      <td>2.6.19 (2006)</td>
+    </tr>
+    <tr>
+      <td><strong>PID</strong></td>
+      <td><code>CLONE_NEWPID</code></td>
+      <td>Process IDs</td>
+      <td>2.6.24 (2008)</td>
+    </tr>
+    <tr>
+      <td><strong>Network</strong></td>
+      <td><code>CLONE_NEWNET</code></td>
+      <td>Network stack (interfaces, routes, iptables, sockets)</td>
+      <td>2.6.29 (2009)</td>
+    </tr>
+    <tr>
+      <td><strong>User</strong></td>
+      <td><code>CLONE_NEWUSER</code></td>
+      <td>UIDs, GIDs, capabilities</td>
+      <td>3.8 (2013)</td>
+    </tr>
+    <tr>
+      <td><strong>Cgroup</strong></td>
+      <td><code>CLONE_NEWCGROUP</code></td>
+      <td>Cgroup root directory view</td>
+      <td>4.6 (2016)</td>
+    </tr>
+    <tr>
+      <td><strong>Time</strong></td>
+      <td><code>CLONE_NEWTIME</code></td>
+      <td>CLOCK_MONOTONIC, CLOCK_BOOTTIME offsets</td>
+      <td>5.6 (2020)</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Timeline observation:</strong> It took <strong>18 years</strong> (2002-2020) to complete all 8 namespace types. Mount came first as part of early Linux isolation experiments. User namespaces took the longest to stabilize (first patches in 2.6.23, but not considered safe until 3.8). Time was the last addition, primarily motivated by container live migration.
+  </div>
+
+  <!-- ===== HOW A CONTAINER IS BORN ===== -->
+  <h2>How a Container Is Born — Putting It All Together</h2>
+
+  <p>A container is <strong>not a kernel primitive</strong> &mdash; it's a <strong>combination of namespaces, cgroups, filesystem isolation, and security policies</strong>. Here's the exact sequence that a container runtime (like <code>runc</code>) follows:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>clone() with ALL namespace flags</strong>
+        <p style="font-size: 14px; color: #999;">Runtime calls <code>clone()</code> with <code>CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWUTS | CLONE_NEWUSER | CLONE_NEWCGROUP</code>. The child process is now in fresh namespaces but still has the host's filesystem.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Child process is in new namespaces</strong>
+        <p style="font-size: 14px; color: #999;">At this point the child can see its own PID as 1, has an empty network stack, a fresh IPC space, its own hostname &mdash; but the filesystem is still the host's.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Set up cgroups for resource limits</strong>
+        <p style="font-size: 14px; color: #999;">The parent process places the child into a cgroup with configured limits: CPU shares/quota, memory limit, PIDs limit, block I/O weight. This happens via writing the child's PID to <code>/sys/fs/cgroup/.../cgroup.procs</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>pivot_root to the container's rootfs</strong>
+        <p style="font-size: 14px; color: #999;">The container image (pulled from a registry) is unpacked to a directory. The child calls <code>pivot_root()</code> to make this directory the new root, then unmounts the old root. The host filesystem is no longer accessible.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Mount /proc, /sys, /dev inside the container</strong>
+        <p style="font-size: 14px; color: #999;">Essential pseudo-filesystems are mounted: <code>/proc</code> (process info, respects PID NS), <code>/sys</code> (kernel/device info, read-only), <code>/dev</code> (device nodes, minimal set: null, zero, random, urandom, tty).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>Set hostname (UTS NS)</strong>
+        <p style="font-size: 14px; color: #999;">The container's hostname is set via <code>sethostname()</code>. This only affects the container's UTS namespace &mdash; the host hostname is untouched.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong>Configure networking (Net NS)</strong>
+        <p style="font-size: 14px; color: #999;">A veth pair is created: one end goes into the container's network namespace, the other stays in the host (usually attached to a bridge like <code>docker0</code> or <code>cni0</code>). IP addresses are assigned, routes are set up. In Kubernetes, this is where <strong>CNI plugins</strong> run (Calico, Cilium, Flannel).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div>
+        <strong>Apply seccomp filters and drop capabilities</strong>
+        <p style="font-size: 14px; color: #999;">A seccomp BPF profile is loaded to restrict which syscalls the process can make (e.g., block <code>mount</code>, <code>reboot</code>, <code>kexec_load</code>). Most Linux capabilities are dropped &mdash; only a minimal set like <code>CAP_NET_BIND_SERVICE</code> is retained.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">9</div>
+      <div>
+        <strong>exec() the container's entrypoint</strong>
+        <p style="font-size: 14px; color: #999;">Finally, the child process calls <code>execve()</code> to replace itself with the container's entrypoint (e.g., <code>/bin/sh</code>, <code>nginx</code>, <code>python app.py</code>). This process becomes PID 1 in the container's PID namespace. The container is now running.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== VISUAL: CONTAINER BIRTH FLOW ===== -->
+  <h3>Visual: Container Lifecycle Flow</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">clone()</div>
+      <div class="desc">New namespaces created</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Cgroups</div>
+      <div class="desc">Resource limits applied</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">pivot_root</div>
+      <div class="desc">Rootfs from image</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Mount /proc /sys</div>
+      <div class="desc">Essential pseudo-fs</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Network + Security</div>
+      <div class="desc">veth, seccomp, caps</div>
+    </div>
+    <span class="arrow">&rarr;</span>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">exec(entrypoint)</div>
+      <div class="desc">Container is running</div>
+    </div>
+  </div>
+
+  <!-- ===== NEST DIAGRAM: WHAT A CONTAINER REALLY IS ===== -->
+  <h3>What a "Container" Actually Is</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Hardware (CPU, RAM, Disk, NIC)</span>
+    <div class="nest-box os" style="margin-top: 10px;">
+      <span class="nest-label">Linux Kernel (shared by all containers)</span>
+      <div style="display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap;">
+
+        <div class="nest-box container" style="flex: 1; min-width: 280px;">
+          <span class="nest-label">Container = Namespace Bundle</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+            <div class="nest-box namespace" style="flex: 1; min-width: 120px; padding: 10px;">
+              <span class="nest-label">PID NS</span>
+              <p style="font-size: 11px; margin-top: 4px;">PID 1: app</p>
+            </div>
+            <div class="nest-box namespace" style="flex: 1; min-width: 120px; padding: 10px;">
+              <span class="nest-label">NET NS</span>
+              <p style="font-size: 11px; margin-top: 4px;">eth0: 10.0.0.2</p>
+            </div>
+            <div class="nest-box namespace" style="flex: 1; min-width: 120px; padding: 10px;">
+              <span class="nest-label">MNT NS</span>
+              <p style="font-size: 11px; margin-top: 4px;">/ from image</p>
+            </div>
+            <div class="nest-box namespace" style="flex: 1; min-width: 120px; padding: 10px;">
+              <span class="nest-label">UTS NS</span>
+              <p style="font-size: 11px; margin-top: 4px;">hostname: app-1</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
+            <div class="nest-box cgroup" style="flex: 1; min-width: 120px; padding: 10px;">
+              <span class="nest-label">Cgroup</span>
+              <p style="font-size: 11px; margin-top: 4px;">512Mi mem, 0.5 CPU</p>
+            </div>
+            <div style="flex: 1; min-width: 120px; padding: 10px; border: 2px solid #e94560; border-radius: 12px; position: relative;">
+              <span style="position: absolute; top: -10px; left: 16px; background: #0f0f1a; padding: 0 8px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #e94560;">Seccomp + Caps</span>
+              <p style="font-size: 11px; margin-top: 4px;">Restricted syscalls, minimal caps</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top: 30px;">
+    <strong>This is essentially what <code>runc create</code> + <code>runc start</code> does.</strong> runc reads an OCI runtime spec (<code>config.json</code>) that declares all namespaces, cgroup limits, mounts, and security settings, then executes the steps above. We'll see the OCI spec in detail in <a href="../virt-06-container-runtimes/oci-runtime-spec.html">Virt 06 &mdash; OCI Runtime Spec</a>.
+  </div>
+
+  <!-- ===== PRACTICAL: ALL NAMESPACES AT ONCE ===== -->
+  <h2>Practical: Creating a "Container" by Hand</h2>
+
+  <p>To solidify the concept, here's how you'd manually create something container-like using just <code>unshare</code> and standard Linux tools:</p>
+
+  <div class="terminal">
+    <span class="prompt"># Step 1: Create all namespaces (except network, which needs extra setup)</span><br>
+    <span class="output">$ sudo unshare --pid --mount --uts --ipc --fork bash</span><br><br>
+
+    <span class="prompt"># Step 2: Set a hostname (UTS namespace)</span><br>
+    <span class="output">$ hostname my-container</span><br>
+    <span class="output">$ hostname</span><br>
+    <span class="output">my-container</span><br><br>
+
+    <span class="prompt"># Step 3: Remount /proc for the new PID namespace</span><br>
+    <span class="output">$ mount -t proc proc /proc</span><br><br>
+
+    <span class="prompt"># Step 4: Verify isolation</span><br>
+    <span class="output">$ ps aux</span><br>
+    <span class="output">USER  PID %CPU %MEM   VSZ  RSS TTY STAT START TIME COMMAND</span><br>
+    <span class="output">root    1  0.0  0.0  7236 3968 pts/0 S 12:00 0:00 bash</span><br>
+    <span class="output">root    3  0.0  0.0 10072 3312 pts/0 R+ 12:00 0:00 ps aux</span><br><br>
+
+    <span class="output">$ ipcs</span><br>
+    <span class="output">------ Shared Memory Segments ------</span><br>
+    <span class="output">(empty)</span><br><br>
+
+    <span class="prompt"># This is ~80% of what Docker does. Missing: rootfs,</span><br>
+    <span class="prompt"># network namespace + veth, cgroups, seccomp, user NS</span>
+  </div>
+
+  <div class="tip">
+    <strong>Key takeaway:</strong> A container is not a single kernel feature. It's a <strong>bundle of kernel features</strong> (8 namespace types + cgroups + seccomp + capabilities + filesystem isolation) orchestrated by a runtime. Understanding each piece individually makes debugging containers dramatically easier &mdash; you can <code>nsenter</code> into specific namespaces, inspect cgroup limits, check seccomp profiles, etc.
+  </div>
+
+</body>
+</html>

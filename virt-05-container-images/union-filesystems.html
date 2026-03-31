@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 05 — Union Filesystems & OverlayFS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Union Filesystems &amp; OverlayFS</h1>
+  <p class="subtitle">How multiple read-only layers merge into a single writable filesystem view</p>
+
+  <!-- ========================================== -->
+  <h2>The Union FS Concept</h2>
+  <!-- ========================================== -->
+
+  <div class="panel">
+    <div class="panel-title">Core Idea</div>
+    <p>A union filesystem <strong>merges multiple directories</strong> into a single unified view.
+       Lower directories are read-only; an upper directory captures all writes.
+       To the process inside the container, it looks like one normal filesystem.</p>
+  </div>
+
+  <div class="nest-box os" style="padding: 20px;">
+    <span class="nest-label">Union Mount — Merged View</span>
+
+    <div style="display: flex; gap: 15px; align-items: stretch; margin-top: 15px; flex-wrap: wrap;">
+      <div class="panel" style="flex: 1; min-width: 200px; border-color: #34d399;">
+        <div class="panel-title" style="color: #34d399;">upperdir (read-write)</div>
+        <div class="file-tree">
+          <span class="file">new-file.txt</span><br>
+          <span class="highlight">.wh.deleted-file.txt</span>
+        </div>
+        <p style="font-size: 12px; color: #888; margin-top: 8px;">Container's writes go here</p>
+      </div>
+      <div class="panel" style="flex: 1; min-width: 200px; border-color: #60a5fa;">
+        <div class="panel-title" style="color: #60a5fa;">lowerdir 2 (read-only)</div>
+        <div class="file-tree">
+          <span class="dir">app/</span><br>
+          &nbsp;&nbsp;<span class="file">server.py</span><br>
+          &nbsp;&nbsp;<span class="file">config.yml</span>
+        </div>
+      </div>
+      <div class="panel" style="flex: 1; min-width: 200px; border-color: #a78bfa;">
+        <div class="panel-title" style="color: #a78bfa;">lowerdir 1 (read-only)</div>
+        <div class="file-tree">
+          <span class="dir">bin/</span> <span class="dir">lib/</span> <span class="dir">usr/</span><br>
+          <span class="file">deleted-file.txt</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align: center; color: #555; font-size: 22px; margin: 10px 0;">&darr; merges into &darr;</div>
+
+    <div class="panel" style="border-color: #fbbf24;">
+      <div class="panel-title" style="color: #fbbf24;">merged/ (what the container sees)</div>
+      <div class="file-tree">
+        <span class="dir">bin/</span> <span class="dir">lib/</span> <span class="dir">usr/</span><br>
+        <span class="dir">app/</span><br>
+        &nbsp;&nbsp;<span class="file">server.py</span><br>
+        &nbsp;&nbsp;<span class="file">config.yml</span><br>
+        <span class="file">new-file.txt</span><br>
+        <span style="color: #555; text-decoration: line-through;">deleted-file.txt</span> <span style="color: #888; font-size: 12px;">&larr; hidden by whiteout</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>OverlayFS / overlay2</h2>
+  <!-- ========================================== -->
+
+  <p>OverlayFS is a kernel-level union filesystem that has been the <strong>default storage driver</strong>
+     for Docker and containerd since Docker 18.x. It is mature, performant, and works on all major Linux
+     filesystems (ext4, xfs).</p>
+
+  <h3>Four Directories</h3>
+
+  <table>
+    <tr>
+      <th>Directory</th>
+      <th>Mode</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>lowerdir</code></td>
+      <td>Read-only</td>
+      <td>One or more image layers, colon-separated, rightmost = bottom-most layer</td>
+    </tr>
+    <tr>
+      <td><code>upperdir</code></td>
+      <td>Read-write</td>
+      <td>Captures all modifications (new files, changes, whiteouts for deletions)</td>
+    </tr>
+    <tr>
+      <td><code>workdir</code></td>
+      <td>Internal</td>
+      <td>Used by the kernel for atomic copy-up operations; must be on the same filesystem as upperdir</td>
+    </tr>
+    <tr>
+      <td><code>merged</code></td>
+      <td>Mount point</td>
+      <td>The unified view — this is what the container process sees as its root filesystem</td>
+    </tr>
+  </table>
+
+  <h3>Manual Overlay Mount</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>mount -t overlay overlay \<br>
+    &nbsp;&nbsp;-o lowerdir=/layer3:/layer2:/layer1,upperdir=/upper,workdir=/work \<br>
+    &nbsp;&nbsp;/merged<br><br>
+    <span class="cm"># lowerdir order: /layer3 is on top, /layer1 is on bottom</span><br>
+    <span class="cm"># Files in /layer3 shadow same-named files in /layer2 and /layer1</span><br><br>
+    <span class="prompt">$ </span>ls /merged<br>
+    <span class="output">bin  etc  lib  app  usr  var</span>  <span class="cm"># unified view of all layers</span><br><br>
+    <span class="prompt">$ </span>echo "hello" > /merged/new-file.txt<br>
+    <span class="prompt">$ </span>ls /upper<br>
+    <span class="output">new-file.txt</span>  <span class="cm"># write landed in upperdir, not in any lowerdir</span>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Read Path</h2>
+  <!-- ========================================== -->
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Check upperdir</div>
+      <div class="desc">Look for the file in the read-write upper layer first</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Search lowerdirs</div>
+      <div class="desc">If not in upper, search lowerdirs top-to-bottom (left-to-right in mount options)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">First match wins</div>
+      <div class="desc">Upper layers shadow (hide) files with the same path in lower layers</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Read performance:</strong> Reading a file from any layer is the same speed — there is no decompression
+    or reconstruction. OverlayFS layers are already extracted on disk. The kernel simply resolves which file to serve.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Write Path (Copy-Up)</h2>
+  <!-- ========================================== -->
+
+  <p>When a process modifies a file that exists in a <strong>lower (read-only)</strong> layer, OverlayFS performs a
+     <strong>copy-up</strong> operation:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>The <strong>entire file</strong> is copied from the lowerdir to the upperdir (not just the changed bytes)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>The modification is applied to the upperdir copy</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Subsequent reads of this file now come from upperdir (it shadows the lowerdir version)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>The original lowerdir file remains <strong>unchanged</strong> — it is never modified</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Performance implication:</strong> Copy-up is a one-time cost per file, but it copies the
+    <strong>entire file</strong> — not just the changed region. Modifying a 1 GB database file from
+    a lower layer triggers a full 1 GB copy to upperdir. This is why databases should use volumes,
+    not the container filesystem.
+  </div>
+
+  <div class="note">
+    <strong>Only the file is copied, not the layer.</strong> Copy-up operates at file granularity.
+    Modifying one file does not copy the entire image layer — just that single file.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Delete Path (Whiteout)</h2>
+  <!-- ========================================== -->
+
+  <p>Since lowerdir files cannot be modified or removed, OverlayFS uses <strong>whiteout files</strong>
+     to represent deletions.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">File Whiteout</div>
+      <p>Deleting a file <code>/app/config.yml</code> from a lower layer creates a <strong>character device</strong>
+         with major/minor <code>0/0</code> named <code>/upper/app/.wh.config.yml</code>.</p>
+      <div class="terminal" style="margin-top: 10px;">
+        <span class="prompt">$ </span>rm /merged/app/config.yml<br><br>
+        <span class="cm"># What actually happened in upperdir:</span><br>
+        <span class="prompt">$ </span>ls -la /upper/app/<br>
+        <span class="output">c--------- 1 root root 0, 0 ... .wh.config.yml</span><br><br>
+        <span class="cm"># The lowerdir file is untouched:</span><br>
+        <span class="prompt">$ </span>ls /layer3/app/config.yml<br>
+        <span class="output">/layer3/app/config.yml</span>  <span class="cm"># still there</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Opaque Directory Whiteout</div>
+      <p>To hide an entire directory's contents from lower layers, a special file
+         <code>.wh..wh..opq</code> is placed inside the directory in upperdir.</p>
+      <div class="terminal" style="margin-top: 10px;">
+        <span class="cm"># Lower layer has /var/log/ with many files</span><br>
+        <span class="cm"># Upper layer recreates /var/log/ as empty:</span><br><br>
+        <span class="prompt">$ </span>ls -la /upper/var/log/<br>
+        <span class="output">c--------- 1 root root 0, 0 ... .wh..wh..opq</span><br><br>
+        <span class="cm"># Merged view: /var/log/ appears empty</span><br>
+        <span class="cm"># (all lower layer contents are hidden)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Docker's overlay2 Structure</h2>
+  <!-- ========================================== -->
+
+  <p>Docker's <code>overlay2</code> storage driver maps image layers and container writable layers
+     onto the OverlayFS directories:</p>
+
+  <div class="file-tree" style="line-height: 2;">
+    <span class="dir">/var/lib/docker/overlay2/</span><br>
+    <span class="dir">&boxvr;&boxh;&boxh; abc123def456.../</span> &larr; image layer 1<br>
+    &boxv;&nbsp;&nbsp; <span class="dir">&boxvr;&boxh;&boxh; diff/</span> &larr; <span class="highlight">actual filesystem content for this layer</span><br>
+    &boxv;&nbsp;&nbsp; <span class="file">&boxvr;&boxh;&boxh; link</span> &larr; shortened symlink name (used in mount options to avoid arg length limits)<br>
+    &boxv;&nbsp;&nbsp; <span class="file">&boxur;&boxh;&boxh; lower</span> &larr; pointer to layers below (colon-separated link names)<br>
+    <span class="dir">&boxvr;&boxh;&boxh; 789ghi012jkl.../</span> &larr; image layer 2<br>
+    &boxv;&nbsp;&nbsp; <span class="dir">&boxvr;&boxh;&boxh; diff/</span><br>
+    &boxv;&nbsp;&nbsp; <span class="file">&boxvr;&boxh;&boxh; link</span><br>
+    &boxv;&nbsp;&nbsp; <span class="file">&boxur;&boxh;&boxh; lower</span><br>
+    <span class="dir">&boxvr;&boxh;&boxh; mno345pqr678.../</span> &larr; <span style="color: #34d399; font-weight: bold;">container read-write layer</span><br>
+    &boxv;&nbsp;&nbsp; <span class="dir">&boxvr;&boxh;&boxh; diff/</span> &larr; container's modifications (the upperdir)<br>
+    &boxv;&nbsp;&nbsp; <span class="dir">&boxvr;&boxh;&boxh; work/</span> &larr; OverlayFS workdir for atomic ops<br>
+    &boxv;&nbsp;&nbsp; <span class="dir">&boxvr;&boxh;&boxh; merged/</span> &larr; <span class="highlight">unified view = container's rootfs</span><br>
+    &boxv;&nbsp;&nbsp; <span class="file">&boxur;&boxh;&boxh; lower</span> &larr; points to all image layers below<br>
+    <span class="dir">&boxur;&boxh;&boxh; l/</span> &larr; directory of shortened symlinks to layer diff/ dirs<br>
+    &nbsp;&nbsp;&nbsp;&nbsp; <span class="file">&boxvr;&boxh;&boxh; ABCD &rarr; ../abc123def456/diff</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp; <span class="file">&boxvr;&boxh;&boxh; EFGH &rarr; ../789ghi012jkl/diff</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp; <span class="file">&boxur;&boxh;&boxh; IJKL &rarr; ../mno345pqr678/diff</span>
+  </div>
+
+  <div class="terminal" style="margin-top: 15px;">
+    <span class="cm"># Inspect a running container's mount:</span><br>
+    <span class="prompt">$ </span>docker inspect --format='{{.GraphDriver.Data.MergedDir}}' my-container<br>
+    <span class="output">/var/lib/docker/overlay2/mno345pqr678/merged</span><br><br>
+    <span class="prompt">$ </span>mount | grep overlay<br>
+    <span class="output">overlay on /var/lib/docker/overlay2/mno345pqr678/merged type overlay
+(rw,lowerdir=/var/lib/docker/overlay2/l/EFGH:/var/lib/docker/overlay2/l/ABCD,
+upperdir=/var/lib/docker/overlay2/mno345pqr678/diff,
+workdir=/var/lib/docker/overlay2/mno345pqr678/work)</span>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Container Read-Write Layer</h2>
+  <!-- ========================================== -->
+
+  <div class="grid-2">
+    <div class="panel" style="border-color: #e94560;">
+      <div class="panel-title" style="color: #e94560;">Ephemeral by Design</div>
+      <ul>
+        <li>The container's upperdir is <strong>destroyed</strong> when <code>docker rm</code> is called</li>
+        <li>All writes — logs, temp files, database changes — are lost</li>
+        <li>This is intentional: containers are disposable</li>
+        <li><code>docker commit</code> can snapshot the upperdir into a new image layer (but don't do this in production)</li>
+      </ul>
+    </div>
+    <div class="panel" style="border-color: #34d399;">
+      <div class="panel-title" style="color: #34d399;">Why Volumes Exist</div>
+      <ul>
+        <li>Volumes bypass the overlay filesystem entirely</li>
+        <li>They are bind-mounted or managed directories on the host</li>
+        <li>Data persists independently of the container lifecycle</li>
+        <li>No copy-up overhead — direct read/write to the underlying filesystem</li>
+        <li>Can be shared between multiple containers</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Copy-on-write overhead in practice:</strong> If a container writes to a 500 MB file from the image
+    (e.g., a bundled SQLite database), the entire 500 MB is first copied to upperdir. This doubles the storage usage
+    for that file and introduces latency on the first write. For any significant I/O, use a volume.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Storage Driver Comparison</h2>
+  <!-- ========================================== -->
+
+  <table>
+    <tr>
+      <th>Driver</th>
+      <th>Mechanism</th>
+      <th>Pros</th>
+      <th>Cons</th>
+      <th>Status</th>
+    </tr>
+    <tr>
+      <td><strong>overlay2</strong></td>
+      <td>OverlayFS (kernel)</td>
+      <td>Fast, efficient, native kernel support, simple setup</td>
+      <td>Copy-up overhead on first write to lower-layer files</td>
+      <td style="color: #34d399; font-weight: bold;">Default, recommended</td>
+    </tr>
+    <tr>
+      <td><strong>devicemapper</strong></td>
+      <td>LVM thin provisioning</td>
+      <td>Block-level CoW (no file-level copy-up), good for large files</td>
+      <td>Complex setup (requires direct-lvm for production), slower image builds</td>
+      <td style="color: #f87171;">Deprecated</td>
+    </tr>
+    <tr>
+      <td><strong>btrfs</strong></td>
+      <td>Btrfs snapshots</td>
+      <td>Native snapshots, built-in compression, checksumming</td>
+      <td>Requires btrfs filesystem, less mature on some distros</td>
+      <td style="color: #fbbf24;">Niche</td>
+    </tr>
+    <tr>
+      <td><strong>zfs</strong></td>
+      <td>ZFS clones</td>
+      <td>Excellent snapshotting, handles many layers well, data integrity</td>
+      <td>Requires ZFS, memory-heavy (ARC cache), not in mainline kernel</td>
+      <td style="color: #fbbf24;">Niche</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>How to check your storage driver:</strong>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker info --format '{{.Driver}}'<br>
+    <span class="output">overlay2</span><br><br>
+    <span class="prompt">$ </span>docker info --format '{{.DriverStatus}}'<br>
+    <span class="output">[[Backing Filesystem extfs] [Supports d_type true] [Using metacopy false] [Native Overlay Diff true]]</span>
+  </div>
+
+  <div class="warn">
+    <strong>d_type support is required.</strong> OverlayFS needs <code>d_type</code> (directory entry type)
+    support in the backing filesystem. All modern ext4 and xfs filesystems have this enabled by default.
+    Running on an old xfs without <code>ftype=1</code> will cause silent data corruption.
+  </div>
+
+</body>
+</html>

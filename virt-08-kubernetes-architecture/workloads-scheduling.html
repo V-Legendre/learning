@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 08 — Workloads & Scheduling</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 08 — Workloads &amp; Scheduling</h1>
+  <p class="subtitle">Deployments, StatefulSets, DaemonSets — and how pods land on nodes</p>
+
+  <!-- ============================================
+       Deployment
+       ============================================ -->
+  <h2>Deployment</h2>
+  <p>A Deployment manages <strong>ReplicaSets</strong>, which manage <strong>Pods</strong>. It's the standard way to run stateless applications. The key value is automated rolling updates with rollback capability.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Deployment</div>
+      <div class="desc">Desired state<br>image, replicas, strategy</div>
+    </div>
+    <div class="arrow">&#8594; manages</div>
+    <div class="flow-step">
+      <div class="label">ReplicaSet</div>
+      <div class="desc">Ensures N replicas<br>one per revision</div>
+    </div>
+    <div class="arrow">&#8594; owns</div>
+    <div class="flow-step">
+      <div class="label">Pod</div>
+      <div class="desc">Actual running<br>container(s)</div>
+    </div>
+  </div>
+
+  <h3>Rolling Update Strategy</h3>
+  <p>When you update a Deployment (e.g., change the image tag), it creates a <strong>new ReplicaSet</strong>, scales it up gradually while scaling the old one down.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">RollingUpdate Parameters</div>
+      <ul>
+        <li><strong><code>maxSurge</code></strong> — how many extra pods can exist during the update (above desired count). Can be absolute number or percentage. Default: 25%.</li>
+        <li><strong><code>maxUnavailable</code></strong> — how many pods can be down during the update. Default: 25%.</li>
+        <li>With 10 replicas, <code>maxSurge=3, maxUnavailable=2</code>: at any point there are 8-13 pods total, at least 8 available.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Recreate Strategy</div>
+      <ul>
+        <li><code>strategy.type: Recreate</code></li>
+        <li>Kills <strong>all</strong> old pods first, then creates new ones</li>
+        <li>Brief downtime — use for workloads that <strong>cannot run two versions simultaneously</strong></li>
+        <li>Use cases: schema-incompatible DB migrations, exclusive file locks, license servers</li>
+      </ul>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># Deployment YAML with key fields highlighted</span>
+<span class="kw">apiVersion</span>: <span class="str">apps/v1</span>
+<span class="kw">kind</span>: <span class="str">Deployment</span>
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">web-app</span>
+  <span class="kw">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="kw">replicas</span>: <span class="num">3</span>                           <span class="cm"># desired pod count</span>
+  <span class="kw">revisionHistoryLimit</span>: <span class="num">10</span>                <span class="cm"># old ReplicaSets to keep (for rollback)</span>
+  <span class="kw">strategy</span>:
+    <span class="kw">type</span>: <span class="str">RollingUpdate</span>
+    <span class="kw">rollingUpdate</span>:
+      <span class="kw">maxSurge</span>: <span class="num">1</span>                        <span class="cm"># 1 extra pod during update</span>
+      <span class="kw">maxUnavailable</span>: <span class="num">0</span>                  <span class="cm"># no downtime — always 3 available</span>
+  <span class="kw">selector</span>:
+    <span class="kw">matchLabels</span>:
+      <span class="kw">app</span>: <span class="str">web-app</span>
+  <span class="kw">template</span>:                               <span class="cm"># pod template</span>
+    <span class="kw">metadata</span>:
+      <span class="kw">labels</span>:
+        <span class="kw">app</span>: <span class="str">web-app</span>
+    <span class="kw">spec</span>:
+      <span class="kw">containers</span>:
+        - <span class="kw">name</span>: <span class="str">web</span>
+          <span class="kw">image</span>: <span class="str">myapp:v2.1.0</span>             <span class="cm"># change this to trigger rollout</span>
+          <span class="kw">ports</span>:
+            - <span class="kw">containerPort</span>: <span class="num">8080</span>
+          <span class="kw">resources</span>:
+            <span class="kw">requests</span>:
+              <span class="kw">cpu</span>: <span class="str">"250m"</span>
+              <span class="kw">memory</span>: <span class="str">"256Mi"</span>
+            <span class="kw">limits</span>:
+              <span class="kw">cpu</span>: <span class="str">"500m"</span>
+              <span class="kw">memory</span>: <span class="str">"512Mi"</span></code></pre>
+
+  <div class="tip"><strong>Rollback:</strong> Kubernetes keeps old ReplicaSets (controlled by <code>revisionHistoryLimit</code>) so you can roll back instantly. <code>kubectl rollout undo deployment/web-app --to-revision=3</code> switches to the ReplicaSet from revision 3. Check history with <code>kubectl rollout history deployment/web-app</code>.</div>
+
+  <!-- ============================================
+       StatefulSet
+       ============================================ -->
+  <h2>StatefulSet</h2>
+  <p>StatefulSets are for <strong>stateful applications</strong> that need stable identities and persistent storage — databases, message queues, distributed systems like etcd itself.</p>
+
+  <div class="panel" style="border-color: #a78bfa;">
+    <div class="panel-title" style="color: #a78bfa;">What StatefulSet Guarantees</div>
+    <div class="grid-2" style="margin: 0;">
+      <div>
+        <h3 style="margin-top: 0;">Stable Network Identity</h3>
+        <ul>
+          <li>Pods are named deterministically: <code>&lt;statefulset&gt;-0</code>, <code>&lt;statefulset&gt;-1</code>, <code>&lt;statefulset&gt;-2</code></li>
+          <li>Requires a <strong>Headless Service</strong> (<code>clusterIP: None</code>)</li>
+          <li>Each pod gets a DNS record: <code>pod-0.svc-name.namespace.svc.cluster.local</code></li>
+          <li>Identity persists across rescheduling — <code>postgres-0</code> is always <code>postgres-0</code>, even if it moves to a different node</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="margin-top: 0;">Stable Persistent Storage</h3>
+        <ul>
+          <li><code>volumeClaimTemplates</code> create a unique <strong>PVC per pod</strong></li>
+          <li>PVC name: <code>&lt;volume-name&gt;-&lt;statefulset&gt;-&lt;ordinal&gt;</code></li>
+          <li>PVCs persist even if the pod is deleted and rescheduled</li>
+          <li>When <code>postgres-0</code> is rescheduled to a new node, it reattaches to the same PVC</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Ordered Operations</h3>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">0</div>
+      <div class="label">pod-0</div>
+      <div class="desc">Created first<br>Deleted last</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">pod-1</div>
+      <div class="desc">Created second<br>After pod-0 is Ready</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">pod-2</div>
+      <div class="desc">Created third<br>After pod-1 is Ready</div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Scale up</strong>: pods created in order 0 &#8594; 1 &#8594; 2, each waiting for the previous to be Running and Ready</li>
+    <li><strong>Scale down</strong>: pods deleted in reverse order 2 &#8594; 1 &#8594; 0</li>
+    <li><strong>Opt out</strong>: set <code>podManagementPolicy: Parallel</code> to create/delete all at once</li>
+  </ul>
+
+  <p><strong>Use cases:</strong> PostgreSQL (primary/replica topology), Kafka (broker IDs), etcd (peer discovery), ZooKeeper (ensemble membership), Redis Sentinel, Elasticsearch</p>
+
+  <pre><code><span class="cm"># StatefulSet YAML</span>
+<span class="kw">apiVersion</span>: <span class="str">apps/v1</span>
+<span class="kw">kind</span>: <span class="str">StatefulSet</span>
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">postgres</span>
+<span class="kw">spec</span>:
+  <span class="kw">serviceName</span>: <span class="str">postgres-headless</span>        <span class="cm"># required headless service</span>
+  <span class="kw">replicas</span>: <span class="num">3</span>
+  <span class="kw">selector</span>:
+    <span class="kw">matchLabels</span>:
+      <span class="kw">app</span>: <span class="str">postgres</span>
+  <span class="kw">template</span>:
+    <span class="kw">metadata</span>:
+      <span class="kw">labels</span>:
+        <span class="kw">app</span>: <span class="str">postgres</span>
+    <span class="kw">spec</span>:
+      <span class="kw">containers</span>:
+        - <span class="kw">name</span>: <span class="str">postgres</span>
+          <span class="kw">image</span>: <span class="str">postgres:16</span>
+          <span class="kw">volumeMounts</span>:
+            - <span class="kw">name</span>: <span class="str">data</span>
+              <span class="kw">mountPath</span>: <span class="str">/var/lib/postgresql/data</span>
+  <span class="kw">volumeClaimTemplates</span>:                  <span class="cm"># one PVC per pod</span>
+    - <span class="kw">metadata</span>:
+        <span class="kw">name</span>: <span class="str">data</span>
+      <span class="kw">spec</span>:
+        <span class="kw">accessModes</span>: [<span class="str">"ReadWriteOnce"</span>]
+        <span class="kw">resources</span>:
+          <span class="kw">requests</span>:
+            <span class="kw">storage</span>: <span class="str">"50Gi"</span>
+<span class="cm"># Creates PVCs: data-postgres-0, data-postgres-1, data-postgres-2</span></code></pre>
+
+  <!-- ============================================
+       DaemonSet
+       ============================================ -->
+  <h2>DaemonSet</h2>
+  <p>A DaemonSet ensures that <strong>exactly one pod</strong> runs on every node (or every node matching a selector). When nodes are added, the DaemonSet automatically creates pods on them. When nodes are removed, those pods are garbage collected.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Characteristics</div>
+      <ul>
+        <li>One pod per node (or per matching node via <code>nodeSelector</code> / affinity)</li>
+        <li>Pods automatically created on new nodes</li>
+        <li>Pods automatically deleted when nodes are removed</li>
+        <li>DaemonSet controller sets <code>.spec.nodeName</code> directly (bypasses scheduler by default)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Common Use Cases</div>
+      <ul>
+        <li><strong>Log collectors</strong> — Fluentd, Fluent Bit, Filebeat</li>
+        <li><strong>Monitoring agents</strong> — Prometheus node-exporter, Datadog agent</li>
+        <li><strong>Network plugins</strong> — Calico, Cilium, Weave (CNI agents)</li>
+        <li><strong>Storage daemons</strong> — Ceph, GlusterFS, Longhorn agents</li>
+        <li><strong>Security agents</strong> — Falco, Sysdig</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="topology">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+      <div style="font-weight: bold; color: #fbbf24; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">DaemonSet: fluentd</div>
+      <div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+        <div class="topo-node host">
+          <span class="topo-label">Node 1</span>
+          <span class="topo-detail">fluentd pod</span>
+        </div>
+        <div class="topo-node host">
+          <span class="topo-label">Node 2</span>
+          <span class="topo-detail">fluentd pod</span>
+        </div>
+        <div class="topo-node host">
+          <span class="topo-label">Node 3</span>
+          <span class="topo-detail">fluentd pod</span>
+        </div>
+        <div class="topo-node host" style="border-style: dashed;">
+          <span class="topo-label">New Node</span>
+          <span class="topo-detail">auto-scheduled</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Job & CronJob
+       ============================================ -->
+  <h2>Job &amp; CronJob</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Job — Run to Completion</div>
+      <p>Jobs create pods that run a task and then stop. Unlike Deployments, completed pods are not restarted.</p>
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>completions</code></td>
+          <td>How many successful completions needed (default: 1)</td>
+        </tr>
+        <tr>
+          <td><code>parallelism</code></td>
+          <td>How many pods run concurrently (default: 1)</td>
+        </tr>
+        <tr>
+          <td><code>backoffLimit</code></td>
+          <td>Max retries on failure (default: 6)</td>
+        </tr>
+        <tr>
+          <td><code>activeDeadlineSeconds</code></td>
+          <td>Max total runtime before forced termination</td>
+        </tr>
+        <tr>
+          <td><code>ttlSecondsAfterFinished</code></td>
+          <td>Auto-cleanup completed Job after N seconds</td>
+        </tr>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel-title">CronJob — Scheduled Jobs</div>
+      <p>CronJobs create Jobs on a cron schedule. Each CronJob invocation creates a new Job object.</p>
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>schedule</code></td>
+          <td>Cron expression (<code>"0 2 * * *"</code> = 2 AM daily)</td>
+        </tr>
+        <tr>
+          <td><code>concurrencyPolicy</code></td>
+          <td><code>Allow</code> (concurrent), <code>Forbid</code> (skip if running), <code>Replace</code> (kill old, start new)</td>
+        </tr>
+        <tr>
+          <td><code>successfulJobsHistoryLimit</code></td>
+          <td>How many completed Jobs to keep (default: 3)</td>
+        </tr>
+        <tr>
+          <td><code>failedJobsHistoryLimit</code></td>
+          <td>How many failed Jobs to keep (default: 1)</td>
+        </tr>
+        <tr>
+          <td><code>startingDeadlineSeconds</code></td>
+          <td>Max delay before a missed schedule is considered failed</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Scheduling Mechanisms
+       ============================================ -->
+  <h2>Scheduling Mechanisms</h2>
+  <p>Kubernetes provides multiple mechanisms to control where pods are placed. They range from simple label matching to complex topology-aware distribution.</p>
+
+  <!-- nodeSelector -->
+  <h3>nodeSelector (Simple)</h3>
+  <p>The simplest scheduling constraint — pod runs only on nodes with matching labels.</p>
+
+  <pre><code><span class="cm"># Simple node selector — pod only runs on SSD nodes</span>
+<span class="kw">spec</span>:
+  <span class="kw">nodeSelector</span>:
+    <span class="kw">disk</span>: <span class="str">ssd</span>
+    <span class="kw">region</span>: <span class="str">us-east-1</span></code></pre>
+
+  <!-- Node Affinity -->
+  <h3>Node Affinity (Expressive)</h3>
+  <p>More powerful than <code>nodeSelector</code> — supports operators (In, NotIn, Exists, DoesNotExist, Gt, Lt) and soft/hard rules.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Hard Requirement (required)</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">affinity</span>:
+  <span class="kw">nodeAffinity</span>:
+    <span class="kw">requiredDuringScheduling</span>
+    <span class="kw">IgnoredDuringExecution</span>:
+      <span class="kw">nodeSelectorTerms</span>:
+        - <span class="kw">matchExpressions</span>:
+            - <span class="kw">key</span>: <span class="str">zone</span>
+              <span class="kw">operator</span>: <span class="str">In</span>
+              <span class="kw">values</span>:
+                - <span class="str">us-east-1a</span>
+                - <span class="str">us-east-1b</span></code></pre>
+        <p style="font-size: 13px; color: #888; margin-top: 8px;">Pod MUST land on nodes in us-east-1a or us-east-1b. If no matching node exists, the pod stays Pending.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Soft Preference (preferred)</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">affinity</span>:
+  <span class="kw">nodeAffinity</span>:
+    <span class="kw">preferredDuringScheduling</span>
+    <span class="kw">IgnoredDuringExecution</span>:
+      - <span class="kw">weight</span>: <span class="num">80</span>
+        <span class="kw">preference</span>:
+          <span class="kw">matchExpressions</span>:
+            - <span class="kw">key</span>: <span class="str">gpu-type</span>
+              <span class="kw">operator</span>: <span class="str">In</span>
+              <span class="kw">values</span>:
+                - <span class="str">a100</span></code></pre>
+        <p style="font-size: 13px; color: #888; margin-top: 8px;">Scheduler PREFERS A100 GPU nodes (weight 80/100) but will schedule elsewhere if needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pod Affinity / Anti-Affinity -->
+  <h3>Pod Affinity / Anti-Affinity</h3>
+  <p>Schedule pods relative to <em>other pods</em>, not just node labels. <code>topologyKey</code> defines what "near" means.</p>
+
+  <div class="grid-2">
+    <div class="panel" style="border-color: #34d399;">
+      <div class="panel-title" style="color: #34d399;">Pod Affinity — Co-locate</div>
+      <p>"Schedule me near pods with label X"</p>
+      <ul>
+        <li>Web pods near cache pods on the <strong>same node</strong> (<code>topologyKey: kubernetes.io/hostname</code>)</li>
+        <li>App pods in the <strong>same zone</strong> as the database (<code>topologyKey: topology.kubernetes.io/zone</code>)</li>
+      </ul>
+      <pre><code><span class="kw">podAffinity</span>:
+  <span class="kw">requiredDuringScheduling</span>
+  <span class="kw">IgnoredDuringExecution</span>:
+    - <span class="kw">labelSelector</span>:
+        <span class="kw">matchLabels</span>:
+          <span class="kw">app</span>: <span class="str">redis-cache</span>
+      <span class="kw">topologyKey</span>: <span class="str">kubernetes.io/hostname</span></code></pre>
+    </div>
+    <div class="panel" style="border-color: #ef4444;">
+      <div class="panel-title" style="color: #f87171;">Pod Anti-Affinity — Spread</div>
+      <p>"Don't schedule me near pods with label X"</p>
+      <ul>
+        <li>Spread replicas across <strong>different nodes</strong> (HA within a zone)</li>
+        <li>Spread replicas across <strong>different zones</strong> (HA across zones)</li>
+      </ul>
+      <pre><code><span class="kw">podAntiAffinity</span>:
+  <span class="kw">requiredDuringScheduling</span>
+  <span class="kw">IgnoredDuringExecution</span>:
+    - <span class="kw">labelSelector</span>:
+        <span class="kw">matchLabels</span>:
+          <span class="kw">app</span>: <span class="str">web-app</span>
+      <span class="kw">topologyKey</span>: <span class="str">topology.kubernetes.io/zone</span></code></pre>
+    </div>
+  </div>
+
+  <!-- Taints and Tolerations -->
+  <h3>Taints and Tolerations</h3>
+  <p>Taints are applied to <strong>nodes</strong> to repel pods. Tolerations are applied to <strong>pods</strong> to allow scheduling on tainted nodes. This is the inverse of affinity — instead of attracting pods, taints repel them.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Effect</th>
+        <th>Behavior</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>NoSchedule</code></td>
+        <td>New pods without toleration will NOT be scheduled here. Existing pods are unaffected.</td>
+        <td>Dedicated GPU nodes, control plane nodes</td>
+      </tr>
+      <tr>
+        <td><code>PreferNoSchedule</code></td>
+        <td>Scheduler tries to avoid, but will place if no other option.</td>
+        <td>Soft reservation for specific workloads</td>
+      </tr>
+      <tr>
+        <td><code>NoExecute</code></td>
+        <td>Existing pods without toleration are <strong>evicted</strong>. New pods won't schedule.</td>
+        <td>Node draining, marking nodes as unhealthy</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">Taint (on Node)</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt">$ </span>kubectl taint nodes gpu-node-1 \<br>
+          &nbsp;&nbsp;nvidia.com/gpu=true:NoSchedule
+        </div>
+        <p style="font-size: 13px; color: #888; margin-top: 8px;">Repels all pods that don't explicitly tolerate this taint.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header docker">Toleration (on Pod)</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">tolerations</span>:
+  - <span class="kw">key</span>: <span class="str">"nvidia.com/gpu"</span>
+    <span class="kw">operator</span>: <span class="str">"Equal"</span>
+    <span class="kw">value</span>: <span class="str">"true"</span>
+    <span class="kw">effect</span>: <span class="str">"NoSchedule"</span></code></pre>
+        <p style="font-size: 13px; color: #888; margin-top: 8px;">This pod CAN be scheduled on the tainted GPU node.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><strong>Built-in taints:</strong> Kubernetes automatically taints control plane nodes with <code>node-role.kubernetes.io/control-plane:NoSchedule</code> so user workloads don't run there. The node controller adds <code>node.kubernetes.io/not-ready:NoExecute</code> to unresponsive nodes to evict pods.</div>
+
+  <!-- Topology Spread Constraints -->
+  <h3>Topology Spread Constraints</h3>
+  <p>Distribute pods <strong>evenly</strong> across failure domains (zones, nodes, racks). More granular than pod anti-affinity.</p>
+
+  <pre><code><span class="kw">topologySpreadConstraints</span>:
+  - <span class="kw">maxSkew</span>: <span class="num">1</span>                            <span class="cm"># max difference between domains</span>
+    <span class="kw">topologyKey</span>: <span class="str">topology.kubernetes.io/zone</span>
+    <span class="kw">whenUnsatisfiable</span>: <span class="str">DoNotSchedule</span>       <span class="cm"># or ScheduleAnyway</span>
+    <span class="kw">labelSelector</span>:
+      <span class="kw">matchLabels</span>:
+        <span class="kw">app</span>: <span class="str">web-app</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Example: 6 replicas across 3 zones with maxSkew=1</div>
+    <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 10px;">
+      <div style="text-align: center; padding: 12px 20px; border: 2px solid #34d399; border-radius: 8px; background: #34d39910;">
+        <div style="font-weight: bold; color: #34d399; margin-bottom: 6px;">Zone A</div>
+        <div style="color: #e0e0e0;">2 pods</div>
+      </div>
+      <div style="text-align: center; padding: 12px 20px; border: 2px solid #34d399; border-radius: 8px; background: #34d39910;">
+        <div style="font-weight: bold; color: #34d399; margin-bottom: 6px;">Zone B</div>
+        <div style="color: #e0e0e0;">2 pods</div>
+      </div>
+      <div style="text-align: center; padding: 12px 20px; border: 2px solid #34d399; border-radius: 8px; background: #34d39910;">
+        <div style="font-weight: bold; color: #34d399; margin-bottom: 6px;">Zone C</div>
+        <div style="color: #e0e0e0;">2 pods</div>
+      </div>
+    </div>
+    <p style="font-size: 13px; color: #888; margin-top: 10px; text-align: center;">maxSkew=1 means the difference between the most-populated and least-populated zone is at most 1. A distribution of 3/2/1 would be allowed; 4/1/1 would not.</p>
+  </div>
+
+  <!-- PriorityClass and Preemption -->
+  <h3>PriorityClass and Preemption</h3>
+  <p>Assign priority values to pods. Higher-priority pods can <strong>preempt</strong> (evict) lower-priority pods when cluster resources are scarce.</p>
+
+  <pre><code><span class="cm"># Define a PriorityClass</span>
+<span class="kw">apiVersion</span>: <span class="str">scheduling.k8s.io/v1</span>
+<span class="kw">kind</span>: <span class="str">PriorityClass</span>
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">high-priority</span>
+<span class="kw">value</span>: <span class="num">1000000</span>                           <span class="cm"># higher number = higher priority</span>
+<span class="kw">preemptionPolicy</span>: <span class="str">PreemptLowerPriority</span>    <span class="cm"># or Never</span>
+<span class="kw">globalDefault</span>: <span class="str">false</span>
+<span class="kw">description</span>: <span class="str">"For critical production workloads"</span>
+---
+<span class="cm"># Use in a pod spec</span>
+<span class="kw">spec</span>:
+  <span class="kw">priorityClassName</span>: <span class="str">high-priority</span></code></pre>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Built-in PriorityClass</th>
+        <th>Value</th>
+        <th>Use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>system-node-critical</code></td>
+        <td>2000001000</td>
+        <td>Node-essential pods (kubelet addons, kube-proxy)</td>
+      </tr>
+      <tr>
+        <td><code>system-cluster-critical</code></td>
+        <td>2000000000</td>
+        <td>Cluster-essential pods (CoreDNS, metrics-server)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>Preemption risk:</strong> When a high-priority pod cannot be scheduled, the scheduler will evict lower-priority pods to make room. This can cascade — be careful with priority values. Set <code>preemptionPolicy: Never</code> if you want priority for queue ordering only (no eviction).</div>
+
+  <!-- ============================================
+       Scheduling Decision Flow
+       ============================================ -->
+  <h2>Scheduling Decision Flow</h2>
+  <p>Putting it all together — here is the complete flow the scheduler follows for every unscheduled pod.</p>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="num">1</div>
+      <div class="label">Unscheduled Pod</div>
+      <div class="desc">Scheduler detects pod<br>with no nodeName</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #ef4444;">
+      <div class="num">2</div>
+      <div class="label">Filter</div>
+      <div class="desc">Eliminate nodes:<br>resources, selectors,<br>taints, affinity</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="num">3</div>
+      <div class="label">Score</div>
+      <div class="desc">Rank nodes 0-100:<br>least requested,<br>balanced, topology</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="num">4</div>
+      <div class="label">Bind</div>
+      <div class="desc">Assign pod to<br>highest-scoring node</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="num">5</div>
+      <div class="label">Kubelet</div>
+      <div class="desc">Picks up pod,<br>calls CRI, starts<br>containers</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Filtering Plugins Applied (in order)</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Plugin</th>
+          <th>What It Checks</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>NodeUnschedulable</code></td>
+          <td>Is the node cordoned (<code>spec.unschedulable: true</code>)?</td>
+        </tr>
+        <tr>
+          <td><code>NodeResourcesFit</code></td>
+          <td>Does the node have enough CPU, memory, ephemeral storage?</td>
+        </tr>
+        <tr>
+          <td><code>NodeName</code></td>
+          <td>Does the pod request a specific node?</td>
+        </tr>
+        <tr>
+          <td><code>NodePorts</code></td>
+          <td>Are the requested host ports available?</td>
+        </tr>
+        <tr>
+          <td><code>NodeAffinity</code></td>
+          <td>Required node affinity rules satisfied?</td>
+        </tr>
+        <tr>
+          <td><code>TaintToleration</code></td>
+          <td>Does the pod tolerate all node taints?</td>
+        </tr>
+        <tr>
+          <td><code>PodTopologySpread</code></td>
+          <td>Would placing here violate topology spread constraints?</td>
+        </tr>
+        <tr>
+          <td><code>InterPodAffinity</code></td>
+          <td>Required pod affinity/anti-affinity rules satisfied?</td>
+        </tr>
+        <tr>
+          <td><code>VolumeBinding</code></td>
+          <td>Can required PVs be bound on this node?</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip"><strong>Debugging scheduling:</strong> If a pod is stuck in <code>Pending</code>, check <code>kubectl describe pod &lt;name&gt;</code> — the Events section shows exactly which filter eliminated all nodes. Common reasons: insufficient resources, unsatisfied node affinity, no nodes tolerating required taints.</div>
+
+</body>
+</html>

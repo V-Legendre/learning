@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 05 — OCI Image Specification</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>OCI Image Specification</h1>
+  <p class="subtitle">What a container image actually is — not a VM disk, but a stack of tarballs with metadata</p>
+
+  <!-- ========================================== -->
+  <h2>What Is a Container Image?</h2>
+  <!-- ========================================== -->
+
+  <div class="panel">
+    <div class="panel-title">Key Mental Model</div>
+    <p>A container image is <strong>not</strong> a VM disk image. There is no bootloader, no kernel, no init system.
+       It is a <strong>stack of read-only filesystem layers</strong> plus metadata describing how to run them.</p>
+  </div>
+
+  <ul>
+    <li>Each layer is a <strong>tar archive</strong> of filesystem changes (files added, modified, or deleted)</li>
+    <li>Layers are <strong>immutable</strong> and <strong>content-addressable</strong> — identified by their <code>sha256</code> digest</li>
+    <li>Layers are stacked bottom-up: base layer first, each subsequent layer applied on top</li>
+    <li>The image also carries a <strong>config JSON</strong> with runtime instructions (entrypoint, env vars, etc.)</li>
+  </ul>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header vm">VM Disk Image</div>
+      <div class="comp-body">
+        <ul>
+          <li>Full disk: bootloader + kernel + OS + app</li>
+          <li>Single monolithic file (qcow2, vmdk)</li>
+          <li>Typically gigabytes</li>
+          <li>Must boot an entire OS to use</li>
+          <li>Contains its own kernel</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header container">Container Image</div>
+      <div class="comp-body">
+        <ul>
+          <li>Userspace only: libraries + app + config</li>
+          <li>Stack of tar layers + JSON config</li>
+          <li>Typically megabytes</li>
+          <li>Runs as a process on the host kernel</li>
+          <li>Shares the host kernel</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>OCI Image Spec Components</h2>
+  <!-- ========================================== -->
+
+  <p>The <a href="https://github.com/opencontainers/image-spec">OCI Image Specification</a> defines four components
+     that together describe a container image:</p>
+
+  <div class="layer-diagram">
+    <div class="layer l7">
+      <div class="layer-name">Image Index</div>
+      <div class="layer-protocols">Optional "fat manifest" — points to manifests for different architectures (amd64, arm64, etc.)</div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-name">Manifest</div>
+      <div class="layer-protocols">Lists the config digest and layer digests for one specific platform</div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-name">Config</div>
+      <div class="layer-protocols">JSON blob: entrypoint, cmd, env, workdir, exposed ports, labels, layer diff IDs, history</div>
+    </div>
+    <div class="layer l1">
+      <div class="layer-name">Layers</div>
+      <div class="layer-protocols">Ordered list of tar.gz archives — each is a set of filesystem changes</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Image Index (fat manifest)</div>
+      <pre><code>{
+  <span class="kw">"schemaVersion"</span>: <span class="num">2</span>,
+  <span class="kw">"manifests"</span>: [
+    {
+      <span class="str">"mediaType"</span>: <span class="str">"application/vnd.oci.image.manifest.v1+json"</span>,
+      <span class="str">"digest"</span>: <span class="str">"sha256:abc123..."</span>,
+      <span class="str">"platform"</span>: { <span class="str">"architecture"</span>: <span class="str">"amd64"</span>, <span class="str">"os"</span>: <span class="str">"linux"</span> }
+    },
+    {
+      <span class="str">"mediaType"</span>: <span class="str">"application/vnd.oci.image.manifest.v1+json"</span>,
+      <span class="str">"digest"</span>: <span class="str">"sha256:def456..."</span>,
+      <span class="str">"platform"</span>: { <span class="str">"architecture"</span>: <span class="str">"arm64"</span>, <span class="str">"os"</span>: <span class="str">"linux"</span> }
+    }
+  ]
+}</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Manifest (single platform)</div>
+      <pre><code>{
+  <span class="kw">"schemaVersion"</span>: <span class="num">2</span>,
+  <span class="kw">"config"</span>: {
+    <span class="str">"mediaType"</span>: <span class="str">"application/vnd.oci.image.config.v1+json"</span>,
+    <span class="str">"digest"</span>: <span class="str">"sha256:cfg789..."</span>,
+    <span class="str">"size"</span>: <span class="num">1470</span>
+  },
+  <span class="kw">"layers"</span>: [
+    { <span class="str">"digest"</span>: <span class="str">"sha256:layer1..."</span>, <span class="str">"size"</span>: <span class="num">27098756</span> },
+    { <span class="str">"digest"</span>: <span class="str">"sha256:layer2..."</span>, <span class="str">"size"</span>: <span class="num">1024</span> },
+    { <span class="str">"digest"</span>: <span class="str">"sha256:layer3..."</span>, <span class="str">"size"</span>: <span class="num">5432100</span> }
+  ]
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Config JSON (simplified)</div>
+    <pre><code>{
+  <span class="kw">"architecture"</span>: <span class="str">"amd64"</span>,
+  <span class="kw">"os"</span>: <span class="str">"linux"</span>,
+  <span class="kw">"config"</span>: {
+    <span class="str">"Env"</span>:        [<span class="str">"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"</span>],
+    <span class="str">"Entrypoint"</span>: [<span class="str">"/app/server"</span>],
+    <span class="str">"Cmd"</span>:        [<span class="str">"--port=8080"</span>],
+    <span class="str">"WorkingDir"</span>: <span class="str">"/app"</span>,
+    <span class="str">"ExposedPorts"</span>: { <span class="str">"8080/tcp"</span>: {} },
+    <span class="str">"User"</span>:       <span class="str">"1000:1000"</span>,
+    <span class="str">"Labels"</span>:     { <span class="str">"maintainer"</span>: <span class="str">"team@example.com"</span> }
+  },
+  <span class="kw">"rootfs"</span>: {
+    <span class="str">"type"</span>: <span class="str">"layers"</span>,
+    <span class="str">"diff_ids"</span>: [
+      <span class="str">"sha256:aaa..."</span>,
+      <span class="str">"sha256:bbb..."</span>,
+      <span class="str">"sha256:ccc..."</span>
+    ]
+  },
+  <span class="kw">"history"</span>: [
+    { <span class="str">"created"</span>: <span class="str">"2024-01-15T10:00:00Z"</span>, <span class="str">"created_by"</span>: <span class="str">"/bin/sh -c #(nop) ADD file:abc... in /"</span> },
+    { <span class="str">"created"</span>: <span class="str">"2024-01-15T10:01:00Z"</span>, <span class="str">"created_by"</span>: <span class="str">"RUN apt-get update"</span> },
+    { <span class="str">"created"</span>: <span class="str">"2024-01-15T10:02:00Z"</span>, <span class="str">"created_by"</span>: <span class="str">"COPY . /app"</span> }
+  ]
+}</code></pre>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Content-Addressable Storage</h2>
+  <!-- ========================================== -->
+
+  <div class="panel">
+    <div class="panel-title">The Hash IS the Address</div>
+    <p>Every blob in OCI (configs, layers) is stored and retrieved by its <strong>sha256 digest</strong>.
+       The content hash is the identifier — there is no separate naming scheme.</p>
+  </div>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Immutability</div>
+      <p>If the content changes, the hash changes. You cannot modify a blob in place — you can only create a new one with a new digest.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #60a5fa;">Deduplication</div>
+      <p>If two images share the same layer (same content = same hash), it is stored <strong>exactly once</strong> on disk and in the registry.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #fbbf24;">Integrity</div>
+      <p>After downloading a blob, you hash it and compare to the expected digest. If they don't match, the blob is corrupt or tampered with.</p>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker inspect --format='{{.Id}}' nginx:latest<br>
+    <span class="output">sha256:a8758716bb6aa4d90071160d27028fe4eaee7ce8166221a97d30440c8eac2be6</span><br><br>
+    <span class="prompt">$ </span>docker inspect --format='{{json .RootFS.Layers}}' nginx:latest | python3 -m json.tool<br>
+    <span class="output">[</span><br>
+    <span class="output">    "sha256:5d4427c15c33..."</span>,<br>
+    <span class="output">    "sha256:7e87a0e6d47c..."</span>,<br>
+    <span class="output">    "sha256:3c86b8f2e0a2..."</span><br>
+    <span class="output">]</span>
+  </div>
+
+  <div class="note">
+    <strong>Tags are mutable pointers.</strong> <code>nginx:latest</code> is a tag that points to a manifest digest.
+    The tag can be reassigned to point to a different digest at any time. This is why pinning by digest
+    (<code>nginx@sha256:abc123...</code>) is safer for reproducible deployments.
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Layer Mechanics</h2>
+  <!-- ========================================== -->
+
+  <p>Each layer is a tar archive representing filesystem <strong>changes</strong> relative to the layers below it.
+     Layers are applied bottom-up: the base layer goes down first, then each subsequent layer is overlaid on top.</p>
+
+  <h3>Layer Operations</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Add / Modify</div>
+      <p>New or changed files are simply included in the tar archive. When extracted on top of previous layers,
+         they appear as new files or overwrite existing ones.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #f87171;">Delete (Whiteout)</div>
+      <p>A special <strong>whiteout file</strong> named <code>.wh.&lt;filename&gt;</code> marks a file as deleted.
+         The union filesystem knows to hide the original file.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #fbbf24;">Delete Dir (Opaque)</div>
+      <p>A special file <code>.wh..wh..opq</code> inside a directory marks the <strong>entire directory</strong>
+         as opaque — all contents from lower layers are hidden.</p>
+    </div>
+  </div>
+
+  <h3>Whiteout Example</h3>
+
+  <div class="nest-box os" style="padding: 20px;">
+    <span class="nest-label">Layer Stack (bottom-up)</span>
+
+    <div class="nest-box container" style="margin-top: 15px;">
+      <span class="nest-label">Layer 3 (top) — app update</span>
+      <div class="file-tree">
+        <span class="dir">app/</span><br>
+        &nbsp;&nbsp;<span class="highlight">.wh.config.yml</span> &larr; whiteout: deletes config.yml from Layer 1<br>
+        &nbsp;&nbsp;<span class="file">server</span> &larr; new binary replaces Layer 2's version
+      </div>
+    </div>
+
+    <div class="nest-box runtime" style="margin-top: 10px;">
+      <span class="nest-label">Layer 2 — install app</span>
+      <div class="file-tree">
+        <span class="dir">app/</span><br>
+        &nbsp;&nbsp;<span class="file">server</span><br>
+        &nbsp;&nbsp;<span class="file">static/</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">index.html</span>
+      </div>
+    </div>
+
+    <div class="nest-box hardware" style="margin-top: 10px;">
+      <span class="nest-label">Layer 1 (base) — ubuntu:22.04</span>
+      <div class="file-tree">
+        <span class="dir">bin/</span> <span class="dir">lib/</span> <span class="dir">usr/</span> <span class="dir">etc/</span><br>
+        <span class="dir">app/</span><br>
+        &nbsp;&nbsp;<span class="file">config.yml</span> &larr; this file gets deleted by Layer 3's whiteout
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top: 15px;"><strong>Final merged view:</strong> The container sees <code>/app/server</code> (from Layer 3),
+     <code>/app/static/index.html</code> (from Layer 2), all of <code>/bin /lib /usr /etc</code> (from Layer 1),
+     but <strong>not</strong> <code>/app/config.yml</code> (deleted by Layer 3's whiteout).</p>
+
+  <!-- ========================================== -->
+  <h2>Layer Sharing</h2>
+  <!-- ========================================== -->
+
+  <p>Because layers are content-addressable, multiple images can <strong>share common layers</strong>.
+     This is the primary mechanism for storage and transfer efficiency.</p>
+
+  <div class="nest-box os" style="padding: 20px;">
+    <span class="nest-label">Local Image Store</span>
+
+    <div class="grid-2" style="margin-top: 15px;">
+      <div class="panel" style="border-color: #60a5fa;">
+        <div class="panel-title" style="color: #60a5fa;">myapp:v1</div>
+        <div style="padding: 4px 0;">
+          <div style="background: #e9456030; border: 1px solid #e94560; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px;">
+            Layer 5: <code>COPY app code</code> <span style="color: #888;">(unique to myapp:v1)</span>
+          </div>
+          <div style="background: #a78bfa20; border: 1px solid #a78bfa; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px;">
+            Layer 4: <code>RUN pip install</code> <span style="color: #888;">(unique to myapp:v1)</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 3: <code>RUN apt-get install python3</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 2: <code>RUN apt-get update</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 1: <code>ubuntu:22.04 base</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="border-color: #fbbf24;">
+        <div class="panel-title" style="color: #fbbf24;">otherapp:v2</div>
+        <div style="padding: 4px 0;">
+          <div style="background: #e9456030; border: 1px solid #e94560; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px;">
+            Layer 6: <code>COPY different code</code> <span style="color: #888;">(unique to otherapp:v2)</span>
+          </div>
+          <div style="background: #a78bfa20; border: 1px solid #a78bfa; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px;">
+            Layer 5: <code>RUN npm install</code> <span style="color: #888;">(unique to otherapp:v2)</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 3: <code>RUN apt-get install python3</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 2: <code>RUN apt-get update</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+          <div style="background: #34d39920; border: 1px solid #34d399; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px; font-weight: bold;">
+            Layer 1: <code>ubuntu:22.04 base</code> <span style="color: #34d399;">SHARED</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tip">
+      <strong>Storage savings:</strong> Layers 1, 2, and 3 are stored only once on disk. When pulling <code>otherapp:v2</code>
+      after <code>myapp:v1</code>, Docker skips downloading the 3 shared layers entirely — only the unique top layers are fetched.
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <h2>Registries: OCI Distribution Spec</h2>
+  <!-- ========================================== -->
+
+  <p>A registry is an HTTP API for storing and retrieving OCI images. The
+     <a href="https://github.com/opencontainers/distribution-spec">OCI Distribution Spec</a>
+     defines the protocol.</p>
+
+  <h3>Pull Sequence</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Resolve Tag</div>
+      <div class="desc">GET /v2/&lt;name&gt;/manifests/&lt;tag&gt;<br>Registry returns manifest digest</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Download Manifest</div>
+      <div class="desc">Parse manifest JSON to get config digest + layer digests</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Check Local Cache</div>
+      <div class="desc">Compare layer digests against locally stored blobs — skip layers already present</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Download Blobs</div>
+      <div class="desc">GET /v2/&lt;name&gt;/blobs/&lt;digest&gt;<br>Fetch only missing layers + config</div>
+    </div>
+  </div>
+
+  <h3>Authentication Flow</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Client sends <code>GET /v2/library/nginx/manifests/latest</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>Registry responds <code>401 Unauthorized</code> with header:
+        <code>Www-Authenticate: Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/nginx:pull"</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Client requests token from auth service with the specified scope</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>Client retries original request with <code>Authorization: Bearer &lt;token&gt;</code> header</div>
+    </div>
+  </div>
+
+  <h3>Common Registries</h3>
+
+  <table>
+    <tr>
+      <th>Registry</th>
+      <th>URL</th>
+      <th>Auth</th>
+      <th>Notes</th>
+    </tr>
+    <tr>
+      <td><strong>Docker Hub</strong></td>
+      <td><code>registry-1.docker.io</code></td>
+      <td>Docker ID / token</td>
+      <td>Default for <code>docker pull</code>; rate-limited for anonymous pulls</td>
+    </tr>
+    <tr>
+      <td><strong>GHCR</strong></td>
+      <td><code>ghcr.io</code></td>
+      <td>GitHub PAT / GITHUB_TOKEN</td>
+      <td>Tied to GitHub repos/orgs; free for public images</td>
+    </tr>
+    <tr>
+      <td><strong>AWS ECR</strong></td>
+      <td><code>&lt;acct&gt;.dkr.ecr.&lt;region&gt;.amazonaws.com</code></td>
+      <td>IAM / <code>aws ecr get-login-password</code></td>
+      <td>Per-region, private by default; token expires in 12h</td>
+    </tr>
+    <tr>
+      <td><strong>GCR / Artifact Registry</strong></td>
+      <td><code>gcr.io</code> / <code>&lt;region&gt;-docker.pkg.dev</code></td>
+      <td>GCP service account</td>
+      <td>GCR is legacy; Artifact Registry is the replacement</td>
+    </tr>
+    <tr>
+      <td><strong>Harbor</strong></td>
+      <td>Self-hosted</td>
+      <td>LDAP / OIDC / local</td>
+      <td>OSS registry with RBAC, vulnerability scanning, replication</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Docker Hub rate limits (anonymous):</strong> 100 pulls per 6 hours per source IP.
+    Authenticated free accounts get 200 pulls. CI pipelines should use authenticated pulls
+    or mirror images to a private registry.
+  </div>
+
+</body>
+</html>

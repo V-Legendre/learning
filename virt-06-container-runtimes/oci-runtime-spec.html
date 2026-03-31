@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 06 — OCI Runtime Specification</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 06 — OCI Runtime Specification</h1>
+  <p class="subtitle">Given a rootfs and a config.json — how a container actually starts</p>
+
+  <!-- ============================================
+       What the OCI Runtime Spec Defines
+       ============================================ -->
+  <h2>What the OCI Runtime Spec Defines</h2>
+
+  <div class="panel">
+    <div class="panel-title">A Standard Interface for Running Containers</div>
+    <ul>
+      <li>Given a <strong>rootfs</strong> (filesystem bundle) and a <strong>config.json</strong> (configuration), run a container</li>
+      <li>The runtime doesn't care about images, registries, or orchestration — it <em>just runs the bundle</em></li>
+      <li>This separation is what makes container runtimes <strong>interchangeable</strong>: runc, crun, gVisor, Kata — all speak the same spec</li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">rootfs/</div>
+      <div class="desc">Filesystem tree (bin, lib, etc, usr...)</div>
+    </div>
+    <div class="arrow">+</div>
+    <div class="flow-step">
+      <div class="label">config.json</div>
+      <div class="desc">Namespaces, cgroups, mounts, process, hooks</div>
+    </div>
+    <div class="arrow">=</div>
+    <div class="flow-step">
+      <div class="label">OCI Bundle</div>
+      <div class="desc">Everything a runtime needs to create a container</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> An OCI runtime never pulls images or talks to registries. The higher-level runtime (containerd, CRI-O) unpacks the image into a rootfs and generates config.json, then hands the bundle to the OCI runtime.
+  </div>
+
+  <!-- ============================================
+       config.json Contents
+       ============================================ -->
+  <h2>config.json — The Full Container Configuration</h2>
+
+  <p>Every aspect of the container's environment is declared in a single JSON file. Here's the structure with annotations:</p>
+
+  <pre><code>{
+  <span class="cm">// Spec version this config conforms to</span>
+  <span class="str">"ociVersion"</span>: <span class="str">"1.0.2"</span>,
+
+  <span class="cm">// ─── What to run ───</span>
+  <span class="str">"process"</span>: {
+    <span class="str">"terminal"</span>: <span class="kw">true</span>,
+    <span class="str">"user"</span>: { <span class="str">"uid"</span>: <span class="num">0</span>, <span class="str">"gid"</span>: <span class="num">0</span> },
+    <span class="str">"args"</span>: [<span class="str">"/bin/sh"</span>],
+    <span class="str">"env"</span>: [<span class="str">"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"</span>],
+    <span class="str">"cwd"</span>: <span class="str">"/"</span>,
+    <span class="str">"capabilities"</span>: {
+      <span class="str">"bounding"</span>:  [<span class="str">"CAP_AUDIT_WRITE"</span>, <span class="str">"CAP_KILL"</span>, <span class="str">"CAP_NET_BIND_SERVICE"</span>],
+      <span class="str">"effective"</span>: [<span class="str">"CAP_AUDIT_WRITE"</span>, <span class="str">"CAP_KILL"</span>, <span class="str">"CAP_NET_BIND_SERVICE"</span>],
+      <span class="str">"permitted"</span>: [<span class="str">"CAP_AUDIT_WRITE"</span>, <span class="str">"CAP_KILL"</span>, <span class="str">"CAP_NET_BIND_SERVICE"</span>]
+    },
+    <span class="str">"rlimits"</span>: [
+      { <span class="str">"type"</span>: <span class="str">"RLIMIT_NOFILE"</span>, <span class="str">"hard"</span>: <span class="num">1024</span>, <span class="str">"soft"</span>: <span class="num">1024</span> }
+    ]
+  },
+
+  <span class="cm">// ─── Root filesystem ───</span>
+  <span class="str">"root"</span>: {
+    <span class="str">"path"</span>: <span class="str">"rootfs"</span>,
+    <span class="str">"readonly"</span>: <span class="kw">true</span>
+  },
+
+  <span class="cm">// ─── Mount points ───</span>
+  <span class="str">"mounts"</span>: [
+    { <span class="str">"destination"</span>: <span class="str">"/proc"</span>,    <span class="str">"type"</span>: <span class="str">"proc"</span>,   <span class="str">"source"</span>: <span class="str">"proc"</span> },
+    { <span class="str">"destination"</span>: <span class="str">"/dev"</span>,     <span class="str">"type"</span>: <span class="str">"tmpfs"</span>,  <span class="str">"source"</span>: <span class="str">"tmpfs"</span> },
+    { <span class="str">"destination"</span>: <span class="str">"/dev/pts"</span>, <span class="str">"type"</span>: <span class="str">"devpts"</span>, <span class="str">"source"</span>: <span class="str">"devpts"</span> },
+    { <span class="str">"destination"</span>: <span class="str">"/sys"</span>,     <span class="str">"type"</span>: <span class="str">"sysfs"</span>,  <span class="str">"source"</span>: <span class="str">"sysfs"</span>,
+      <span class="str">"options"</span>: [<span class="str">"nosuid"</span>, <span class="str">"noexec"</span>, <span class="str">"nodev"</span>, <span class="str">"ro"</span>] }
+  ],
+
+  <span class="cm">// ─── Linux-specific configuration ───</span>
+  <span class="str">"linux"</span>: {
+    <span class="str">"namespaces"</span>: [
+      { <span class="str">"type"</span>: <span class="str">"pid"</span> },
+      { <span class="str">"type"</span>: <span class="str">"network"</span> },
+      { <span class="str">"type"</span>: <span class="str">"ipc"</span> },
+      { <span class="str">"type"</span>: <span class="str">"uts"</span> },
+      { <span class="str">"type"</span>: <span class="str">"mount"</span> },
+      { <span class="str">"type"</span>: <span class="str">"cgroup"</span> }
+      <span class="cm">// optional: "path" to join existing NS instead of creating new</span>
+    ],
+    <span class="str">"resources"</span>: {
+      <span class="str">"memory"</span>: { <span class="str">"limit"</span>: <span class="num">536870912</span> },    <span class="cm">// 512 MiB</span>
+      <span class="str">"cpu"</span>:    { <span class="str">"shares"</span>: <span class="num">1024</span>, <span class="str">"quota"</span>: <span class="num">100000</span>, <span class="str">"period"</span>: <span class="num">100000</span> },
+      <span class="str">"pids"</span>:   { <span class="str">"limit"</span>: <span class="num">512</span> },
+      <span class="str">"blockIO"</span>: { <span class="str">"weight"</span>: <span class="num">500</span> }
+    },
+    <span class="str">"cgroupsPath"</span>: <span class="str">"/mycontainer"</span>,
+    <span class="str">"seccomp"</span>: {
+      <span class="str">"defaultAction"</span>: <span class="str">"SCMP_ACT_ERRNO"</span>,
+      <span class="str">"architectures"</span>: [<span class="str">"SCMP_ARCH_X86_64"</span>],
+      <span class="str">"syscalls"</span>: [
+        { <span class="str">"names"</span>: [<span class="str">"read"</span>, <span class="str">"write"</span>, <span class="str">"exit"</span>, <span class="str">"..."</span>], <span class="str">"action"</span>: <span class="str">"SCMP_ACT_ALLOW"</span> }
+      ]
+    },
+    <span class="str">"devices"</span>: [
+      { <span class="str">"allow"</span>: <span class="kw">false</span>, <span class="str">"access"</span>: <span class="str">"rwm"</span> }   <span class="cm">// deny all by default</span>
+    ],
+    <span class="str">"maskedPaths"</span>: [<span class="str">"/proc/kcore"</span>, <span class="str">"/proc/keys"</span>, <span class="str">"/sys/firmware"</span>],
+    <span class="str">"readonlyPaths"</span>: [<span class="str">"/proc/asound"</span>, <span class="str">"/proc/bus"</span>, <span class="str">"/proc/irq"</span>]
+  },
+
+  <span class="cm">// ─── Lifecycle hooks ───</span>
+  <span class="str">"hooks"</span>: {
+    <span class="str">"prestart"</span>:        [{ <span class="str">"path"</span>: <span class="str">"/usr/bin/fix-mounts"</span> }],
+    <span class="str">"createRuntime"</span>:   [{ <span class="str">"path"</span>: <span class="str">"/usr/bin/setup-network"</span> }],
+    <span class="str">"createContainer"</span>: [],
+    <span class="str">"startContainer"</span>:  [],
+    <span class="str">"poststart"</span>:       [{ <span class="str">"path"</span>: <span class="str">"/usr/bin/notify-started"</span> }],
+    <span class="str">"poststop"</span>:        [{ <span class="str">"path"</span>: <span class="str">"/usr/bin/cleanup"</span> }]
+  }
+}</code></pre>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">config.json Sections Summary</div>
+      <table>
+        <tr><th>Section</th><th>Controls</th></tr>
+        <tr><td><code>process</code></td><td>Command, user, env, capabilities, rlimits</td></tr>
+        <tr><td><code>root</code></td><td>Filesystem path, read-only flag</td></tr>
+        <tr><td><code>mounts</code></td><td>Bind mounts, tmpfs, procfs, sysfs, devpts</td></tr>
+        <tr><td><code>linux.namespaces</code></td><td>Which namespaces to create or join</td></tr>
+        <tr><td><code>linux.resources</code></td><td>cgroup limits (CPU, memory, PIDs, blockIO)</td></tr>
+        <tr><td><code>linux.seccomp</code></td><td>Syscall filter (allowlist/denylist)</td></tr>
+        <tr><td><code>linux.devices</code></td><td>Device access allowlist</td></tr>
+        <tr><td><code>linux.maskedPaths</code></td><td>Paths hidden from the container</td></tr>
+        <tr><td><code>hooks</code></td><td>Lifecycle callbacks at each stage</td></tr>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Hooks Execution Order</div>
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><div><code>prestart</code> — deprecated, runs in runtime namespace after <code>create</code></div></div>
+        <div class="step"><div class="step-num">2</div><div><code>createRuntime</code> — after runtime environment is created, before pivot_root</div></div>
+        <div class="step"><div class="step-num">3</div><div><code>createContainer</code> — after pivot_root but before <code>start</code></div></div>
+        <div class="step"><div class="step-num">4</div><div><code>startContainer</code> — after <code>start</code> called, before user process executes</div></div>
+        <div class="step"><div class="step-num">5</div><div><code>poststart</code> — after user process starts</div></div>
+        <div class="step"><div class="step-num">6</div><div><code>poststop</code> — after container process exits and is cleaned up</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Container Lifecycle (State Machine)
+       ============================================ -->
+  <h2>Container Lifecycle — State Machine</h2>
+
+  <div class="state-diagram">
+    <div class="state initial">creating</div>
+    <div class="state-arrow">--create--&gt;</div>
+    <div class="state waiting">created</div>
+    <div class="state-arrow">--start--&gt;</div>
+    <div class="state active">running</div>
+    <div class="state-arrow">--exit--&gt;</div>
+    <div class="state closed">stopped</div>
+  </div>
+
+  <table>
+    <tr><th>State</th><th>Description</th><th>Transition</th></tr>
+    <tr>
+      <td><strong>creating</strong></td>
+      <td>Runtime is setting up namespaces, cgroups, mounts, filesystem</td>
+      <td><code>runc create</code> initiates</td>
+    </tr>
+    <tr>
+      <td><strong>created</strong></td>
+      <td>Container environment exists but the user process hasn't started. Hooks run here (prestart, createRuntime, createContainer).</td>
+      <td>Setup completes, container waits for <code>start</code></td>
+    </tr>
+    <tr>
+      <td><strong>running</strong></td>
+      <td>User process is executing (<code>exec()</code> has been called)</td>
+      <td><code>runc start</code> signals the waiting process</td>
+    </tr>
+    <tr>
+      <td><strong>stopped</strong></td>
+      <td>User process has exited. Exit code available via <code>runc state</code>. Poststop hooks run.</td>
+      <td>Process exits (normally or killed)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Why two phases (create + start)?</strong> The separation allows hooks to run between environment setup and process execution. This is critical for networking — the CNI plugin sets up the network in the gap between <code>create</code> and <code>start</code>.
+  </div>
+
+  <!-- ============================================
+       runc: The Reference Implementation
+       ============================================ -->
+  <h2>runc — The Reference Implementation</h2>
+
+  <div class="panel">
+    <div class="panel-title">About runc</div>
+    <ul>
+      <li>Written in <strong>Go</strong>, maintained by the OCI</li>
+      <li>Based on Docker's original <code>libcontainer</code></li>
+      <li>The reference implementation — other runtimes (crun, youki) are alternatives with the same interface</li>
+    </ul>
+  </div>
+
+  <h3>What <code>runc create</code> Does</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Host Kernel</span>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div>Parse <code>config.json</code> — validate spec version, extract all settings</div></div>
+      <div class="step"><div class="step-num">2</div><div>Set up <strong>cgroup</strong> — create cgroup directory under <code>cgroupsPath</code>, write resource limits (memory.max, cpu.max, pids.max)</div></div>
+      <div class="step"><div class="step-num">3</div><div>Call <code>clone()</code> with namespace flags (<code>CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | ...</code>) — spawns child process in new namespaces</div></div>
+      <div class="step"><div class="step-num">4</div><div>In child: join cgroup namespace, apply cgroup membership</div></div>
+      <div class="step"><div class="step-num">5</div><div><code>pivot_root()</code> to rootfs — the container now sees only its own filesystem tree</div></div>
+      <div class="step"><div class="step-num">6</div><div>Mount <code>/proc</code>, <code>/dev</code>, <code>/sys</code> inside the new root</div></div>
+      <div class="step"><div class="step-num">7</div><div>Set hostname (UTS namespace)</div></div>
+      <div class="step"><div class="step-num">8</div><div>Apply <strong>seccomp</strong> BPF filter — restricts available syscalls</div></div>
+      <div class="step"><div class="step-num">9</div><div>Drop <strong>capabilities</strong> — reduce privileges to configured set</div></div>
+      <div class="step"><div class="step-num">10</div><div><strong>Wait</strong> — the container process blocks, waiting for the <code>start</code> signal. Container is now in <em>"created"</em> state.</div></div>
+    </div>
+  </div>
+
+  <h3>What <code>runc start</code> Does</h3>
+
+  <div class="steps">
+    <div class="step"><div class="step-num">1</div><div>Signal the waiting container process to proceed (via a Unix socket pipe)</div></div>
+    <div class="step"><div class="step-num">2</div><div>Container process calls <code>exec()</code> with the configured command (e.g., <code>/bin/sh</code>)</div></div>
+    <div class="step"><div class="step-num">3</div><div>Container is now in <em>"running"</em> state — the original process is replaced by the user command</div></div>
+  </div>
+
+  <div class="warn">
+    <strong>runc exits after starting the container.</strong> Once the container process is running, runc's job is done. It is NOT the parent process of the container. In production, the <code>containerd-shim</code> is the actual parent. See <a href="containerd-cri.html">containerd & CRI</a>.
+  </div>
+
+  <!-- ============================================
+       Detailed Visualization: runc create internals
+       ============================================ -->
+  <h3>runc create — Visualized</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Parse config.json</div>
+      <div class="desc">Validate OCI spec, extract settings</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Create cgroup</div>
+      <div class="desc">mkdir cgroup dir, write limits</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">clone()</div>
+      <div class="desc">New PID, NET, MNT, UTS, IPC, cgroup NS</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">pivot_root</div>
+      <div class="desc">Switch to rootfs</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Harden</div>
+      <div class="desc">seccomp + drop caps</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">WAIT</div>
+      <div class="desc">State = "created"</div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Prestart Hooks = CNI
+       ============================================ -->
+  <h2>prestart Hooks = CNI</h2>
+
+  <div class="panel">
+    <div class="panel-title">Networking Happens Between create and start</div>
+    <p>The <code>prestart</code> / <code>createRuntime</code> hook is where <strong>CNI plugins</strong> are invoked to set up container networking:</p>
+    <ul>
+      <li>Create a <strong>veth pair</strong> — one end in the container's network namespace, one on the host bridge</li>
+      <li>Assign an <strong>IP address</strong> from the CNI IPAM plugin</li>
+      <li>Configure <strong>routes</strong> and DNS inside the container</li>
+      <li>Set up <strong>iptables</strong> / nftables rules for NAT or policy</li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">runc create</div>
+      <div class="desc">Container in "created" state, net NS exists but empty</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">prestart hook</div>
+      <div class="desc">CNI plugin runs: creates veth, assigns IP, sets routes</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">runc start</div>
+      <div class="desc">Process starts with networking ready</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Cross-reference:</strong> The prestart hook is where CNI plugins are invoked to set up container networking. See <a href="../net-12-container-networking/cni.html">Net 12 — CNI</a> for details on how veth pairs, bridge networks, and IP allocation work.
+  </div>
+
+  <!-- ============================================
+       Terminal Example
+       ============================================ -->
+  <h2>Terminal Example — Full Lifecycle</h2>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>mkdir -p mycontainer/rootfs<br>
+    <span class="prompt">$ </span>cd mycontainer<br><br>
+
+    <span class="cm"># Export an image as a rootfs (or use debootstrap, busybox, etc.)</span><br>
+    <span class="prompt">$ </span>docker export $(docker create busybox) | tar -C rootfs -xf -<br><br>
+
+    <span class="cm"># Generate a default config.json</span><br>
+    <span class="prompt">$ </span>runc spec<br>
+    <span class="output">  # creates config.json with default settings</span><br><br>
+
+    <span class="cm"># Create the container (state: creating -> created)</span><br>
+    <span class="prompt">$ </span>sudo runc create mycontainer<br><br>
+
+    <span class="cm"># Check state</span><br>
+    <span class="prompt">$ </span>sudo runc state mycontainer<br>
+    <span class="output">{</span><br>
+    <span class="output">  "ociVersion": "1.0.2",</span><br>
+    <span class="output">  "id": "mycontainer",</span><br>
+    <span class="output">  "status": "created",</span><br>
+    <span class="output">  "pid": 12345,</span><br>
+    <span class="output">  "bundle": "/home/user/mycontainer"</span><br>
+    <span class="output">}</span><br><br>
+
+    <span class="cm"># Start the container (state: created -> running)</span><br>
+    <span class="prompt">$ </span>sudo runc start mycontainer<br><br>
+
+    <span class="cm"># List running containers</span><br>
+    <span class="prompt">$ </span>sudo runc list<br>
+    <span class="output">ID             PID    STATUS    BUNDLE                        CREATED</span><br>
+    <span class="output">mycontainer    12345  running   /home/user/mycontainer        2026-03-31T...</span><br><br>
+
+    <span class="cm"># After the process exits (state: running -> stopped)</span><br>
+    <span class="prompt">$ </span>sudo runc state mycontainer<br>
+    <span class="output">  "status": "stopped"</span><br><br>
+
+    <span class="cm"># Clean up</span><br>
+    <span class="prompt">$ </span>sudo runc delete mycontainer<br>
+  </div>
+
+  <!-- ============================================
+       Alternative OCI Runtimes
+       ============================================ -->
+  <h2>Alternative OCI Runtimes</h2>
+
+  <table>
+    <tr><th>Runtime</th><th>Language</th><th>Key Difference</th></tr>
+    <tr><td><code>runc</code></td><td>Go</td><td>Reference implementation, most widely used</td></tr>
+    <tr><td><code>crun</code></td><td>C</td><td>Faster startup, lower memory footprint (~50% less than runc)</td></tr>
+    <tr><td><code>youki</code></td><td>Rust</td><td>Memory-safe alternative, Rust ecosystem</td></tr>
+    <tr><td><code>runsc</code> (gVisor)</td><td>Go</td><td>User-space kernel sandbox — see <a href="sandboxed-runtimes.html">Sandboxed Runtimes</a></td></tr>
+    <tr><td><code>kata-runtime</code></td><td>Go/Rust</td><td>Per-container lightweight VM — see <a href="sandboxed-runtimes.html">Sandboxed Runtimes</a></td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>All interchangeable:</strong> Because they all conform to the OCI runtime spec, you can swap any of these by changing a single runtime path in containerd's or CRI-O's configuration. The higher-level stack doesn't need to change.
+  </div>
+
+</body>
+</html>

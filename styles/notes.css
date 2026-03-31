@@ -693,3 +693,58 @@ a:hover { color: #c3e88d; }
 .comp-header.k8s     { background: #326ce533; color: #60a5fa; }
 .comp-header.docker  { background: #2496ed33; color: #60a5fa; }
 .comp-header.ebpf    { background: #a78bfa33; color: #a78bfa; }
+
+/* ============================================
+   Virtualization-specific styles
+   ============================================ */
+
+/* --- Comparison header variants for virtualization --- */
+.comp-header.vm         { background: #e9456033; color: #e94560; }
+.comp-header.container  { background: #06b6d433; color: #22d3ee; }
+.comp-header.kernel     { background: #f59e0b33; color: #fbbf24; }
+.comp-header.host       { background: #10b98133; color: #34d399; }
+.comp-header.type1      { background: #7c3aed33; color: #a78bfa; }
+.comp-header.type2      { background: #3b82f633; color: #60a5fa; }
+
+/* --- Topology node variants for virtualization --- */
+.topo-node.vm         { border-color: #e94560; }
+.topo-node.container  { border-color: #22d3ee; }
+.topo-node.hypervisor { border-color: #a78bfa; }
+
+/* --- Nesting / containment diagram --- */
+.nest-box {
+  border: 2px solid #2a2a4a;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 10px 0;
+  position: relative;
+}
+
+.nest-box .nest-label {
+  position: absolute;
+  top: -10px;
+  left: 16px;
+  background: #0f0f1a;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.nest-box.hardware  { border-color: #ef4444; }
+.nest-box.hardware .nest-label { color: #f87171; }
+.nest-box.hypervisor { border-color: #a78bfa; }
+.nest-box.hypervisor .nest-label { color: #a78bfa; }
+.nest-box.os        { border-color: #fbbf24; }
+.nest-box.os .nest-label { color: #fbbf24; }
+.nest-box.runtime   { border-color: #22d3ee; }
+.nest-box.runtime .nest-label { color: #22d3ee; }
+.nest-box.vm        { border-color: #e94560; }
+.nest-box.vm .nest-label { color: #e94560; }
+.nest-box.container { border-color: #34d399; }
+.nest-box.container .nest-label { color: #34d399; }
+.nest-box.namespace { border-color: #60a5fa; }
+.nest-box.namespace .nest-label { color: #60a5fa; }
+.nest-box.cgroup    { border-color: #f59e0b; }
+.nest-box.cgroup .nest-label { color: #f59e0b; }

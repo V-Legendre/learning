@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 03 — cgroups: Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 03 — cgroups: Fundamentals</h1>
+  <p class="subtitle">Resource control at the kernel level — not isolation, but limits and accounting</p>
+
+  <!-- ===== WHAT CGROUPS ARE ===== -->
+  <h2>What cgroups Are</h2>
+
+  <p><strong>Control Groups (cgroups)</strong> are a Linux kernel feature for <em>limiting</em>, <em>accounting</em>, and <em>isolating</em> the resource usage of process groups. They answer the question: "how much of the system can this group of processes consume?"</p>
+
+  <div class="panel">
+    <div class="panel-title">The Key Distinction: Namespaces vs cgroups</div>
+    <div class="comparison">
+      <div class="comp-side">
+        <div class="comp-header container">Namespaces</div>
+        <div class="comp-body">
+          <p>Isolate <strong>WHAT you can see</strong></p>
+          <ul>
+            <li>PID namespace: can only see your own processes</li>
+            <li>Net namespace: can only see your own interfaces</li>
+            <li>Mount namespace: can only see your own filesystems</li>
+          </ul>
+          <p style="color: #888; margin-top: 10px;">Visibility and identity isolation</p>
+        </div>
+      </div>
+      <div class="comp-side">
+        <div class="comp-header kernel">cgroups</div>
+        <div class="comp-body">
+          <p>Limit <strong>HOW MUCH you can use</strong></p>
+          <ul>
+            <li>CPU controller: limit CPU time</li>
+            <li>Memory controller: limit RAM usage</li>
+            <li>I/O controller: limit disk bandwidth</li>
+          </ul>
+          <p style="color: #888; margin-top: 10px;">Resource metering and enforcement</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>What cgroups Control</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">CPU</div>
+      <p>Proportional sharing, bandwidth throttling, core pinning</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Memory</div>
+      <p>Hard limits, soft throttles, OOM kill policy, swap control</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">I/O</div>
+      <p>Disk read/write bandwidth and IOPS limits per device</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">PIDs</div>
+      <p>Maximum process count — fork bomb protection</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Devices</div>
+      <p>Allowlist access to block/character devices</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">cpuset</div>
+      <p>Pin processes to specific CPU cores and NUMA nodes</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key rule:</strong> Every process belongs to exactly one cgroup in each hierarchy. When you run <code>cat /proc/self/cgroup</code>, you see which cgroup the current process belongs to. A new process inherits its parent's cgroup membership.
+  </div>
+
+  <h3>The cgroup Virtual Filesystem</h3>
+
+  <p>cgroups are managed through a virtual filesystem mounted at <code>/sys/fs/cgroup/</code>. You create cgroups by making directories, configure them by writing to files, and move processes by writing PIDs to <code>cgroup.procs</code>. No special system calls needed — it is all file I/O.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>ls /sys/fs/cgroup/<br>
+    <span class="output">cgroup.controllers    cgroup.procs          cpu.stat<br>
+cgroup.max.depth      cgroup.subtree_control  cpuset.cpus.effective<br>
+cgroup.max.descendants  cgroup.threads        io.stat<br>
+cgroup.stat           cpu.pressure           memory.stat<br>
+...</span>
+  </div>
+
+  <!-- ===== V1 VS V2 ===== -->
+  <h2>cgroups v1 vs v2</h2>
+
+  <p>The cgroup subsystem has gone through two major design iterations. Understanding the difference matters because you will encounter both in production systems, and the mental model is fundamentally different.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">cgroups v1 (2007)</div>
+      <div class="comp-body">
+        <p><strong>Multiple independent hierarchies</strong>, one per controller</p>
+        <ul>
+          <li>Each controller (cpu, memory, blkio, etc.) has its own directory tree</li>
+          <li>A process can be in different cgroups in different hierarchies</li>
+          <li>Complex to manage — race conditions between hierarchies</li>
+          <li>Inconsistent interfaces across controllers</li>
+          <li>Hard to coordinate limits (CPU + memory together)</li>
+        </ul>
+        <pre><code><span class="cm"># v1: separate trees per controller</span>
+/sys/fs/cgroup/cpu/
+    docker/
+        container-abc/
+            cpu.shares
+            cpu.cfs_quota_us
+
+/sys/fs/cgroup/memory/
+    docker/
+        container-abc/
+            memory.limit_in_bytes
+
+/sys/fs/cgroup/blkio/
+    docker/
+        container-abc/
+            blkio.throttle.read_bps_device</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">cgroups v2 (2016, default since kernel 5.x)</div>
+      <div class="comp-body">
+        <p><strong>Single unified hierarchy</strong> for all controllers</p>
+        <ul>
+          <li>One tree, all controllers attached to the same hierarchy</li>
+          <li>A process is in exactly one cgroup — consistent across all resources</li>
+          <li>Simpler, predictable, no cross-hierarchy coordination</li>
+          <li>Consistent interface naming (e.g., <code>cpu.max</code> not <code>cpu.cfs_quota_us</code>)</li>
+          <li>Better resource distribution model</li>
+        </ul>
+        <pre><code><span class="cm"># v2: unified tree, all controllers together</span>
+/sys/fs/cgroup/
+    docker/
+        container-abc/
+            cpu.max
+            cpu.weight
+            memory.max
+            memory.high
+            io.max
+            pids.max
+            cgroup.procs</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>How to check which version you are running:</strong> If <code>/sys/fs/cgroup/cgroup.controllers</code> exists, you are on v2. If you see directories like <code>/sys/fs/cgroup/cpu/</code>, <code>/sys/fs/cgroup/memory/</code>, you are on v1 (or hybrid mode).
+  </div>
+
+  <!-- ===== V2 MECHANICS ===== -->
+  <h2>v2 Mechanics</h2>
+
+  <p>cgroups v2 has a clean, consistent interface. All configuration happens through files in the cgroup directory. Here are the essential control files.</p>
+
+  <h3>Core Control Files</h3>
+
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Purpose</th>
+      <th>Read/Write</th>
+    </tr>
+    <tr>
+      <td><code>cgroup.controllers</code></td>
+      <td>Lists available controllers in this cgroup (inherited from parent)</td>
+      <td>Read-only</td>
+    </tr>
+    <tr>
+      <td><code>cgroup.subtree_control</code></td>
+      <td>Enables controllers for <em>children</em> of this cgroup</td>
+      <td>Read-write</td>
+    </tr>
+    <tr>
+      <td><code>cgroup.procs</code></td>
+      <td>Lists PIDs in this cgroup; write a PID here to move a process</td>
+      <td>Read-write</td>
+    </tr>
+    <tr>
+      <td><code>cgroup.threads</code></td>
+      <td>Like <code>cgroup.procs</code> but for individual threads (threaded mode)</td>
+      <td>Read-write</td>
+    </tr>
+    <tr>
+      <td><code>cgroup.type</code></td>
+      <td>Set to <code>threaded</code> for per-thread control</td>
+      <td>Read-write</td>
+    </tr>
+    <tr>
+      <td><code>cgroup.events</code></td>
+      <td>Reports state changes (populated, frozen)</td>
+      <td>Read-only</td>
+    </tr>
+  </table>
+
+  <h3>Enabling Controllers for Children</h3>
+
+  <p>Controllers are not automatically available to child cgroups. You must explicitly enable them by writing to <code>cgroup.subtree_control</code> in the parent.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Check available</div>
+      <div class="desc">cat cgroup.controllers</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Enable for children</div>
+      <div class="desc">echo "+cpu +memory" > cgroup.subtree_control</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Create child</div>
+      <div class="desc">mkdir child-cgroup/</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Configure child</div>
+      <div class="desc">echo "200000 100000" > child-cgroup/cpu.max</div>
+    </div>
+  </div>
+
+  <h3>The "No Internal Processes" Rule</h3>
+
+  <div class="warn">
+    <strong>Critical v2 rule:</strong> A cgroup that has children <em>cannot</em> have its own processes directly. Processes must live in <strong>leaf cgroups</strong> only. This prevents ambiguous resource competition between a parent cgroup's own processes and its children. If you try to write a PID to <code>cgroup.procs</code> on a cgroup that has children with controllers enabled, the kernel will return <code>EBUSY</code>.
+  </div>
+
+  <!-- No Internal Processes diagram -->
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Invalid: processes in non-leaf cgroup</div>
+      <div class="comp-body">
+        <div class="nest-box cgroup" style="margin-top: 15px;">
+          <span class="nest-label">parent cgroup</span>
+          <p style="color: #ef4444; margin-top: 8px;">PID 100, PID 200 (NOT ALLOWED)</p>
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <div class="nest-box cgroup" style="flex: 1;">
+              <span class="nest-label">child-a</span>
+              <p style="margin-top: 8px;">PID 300</p>
+            </div>
+            <div class="nest-box cgroup" style="flex: 1;">
+              <span class="nest-label">child-b</span>
+              <p style="margin-top: 8px;">PID 400</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Valid: all processes in leaf cgroups</div>
+      <div class="comp-body">
+        <div class="nest-box cgroup" style="margin-top: 15px;">
+          <span class="nest-label">parent cgroup</span>
+          <p style="color: #888; margin-top: 8px;">(no direct processes)</p>
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <div class="nest-box cgroup" style="flex: 1;">
+              <span class="nest-label">child-a</span>
+              <p style="margin-top: 8px;">PID 100, PID 200, PID 300</p>
+            </div>
+            <div class="nest-box cgroup" style="flex: 1;">
+              <span class="nest-label">child-b</span>
+              <p style="margin-top: 8px;">PID 400</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DELEGATION FOR ROOTLESS ===== -->
+  <h2>Delegation for Rootless Containers</h2>
+
+  <p>By default, only root can create and manage cgroups. But unprivileged users can manage cgroups if they <strong>own</strong> the cgroup directory. This is the mechanism that enables rootless containers (Podman, rootless Docker).</p>
+
+  <h3>How systemd Enables Delegation</h3>
+
+  <p>systemd creates per-user cgroup slices automatically. Each user gets their own subtree in the cgroup hierarchy:</p>
+
+  <div class="nest-box hardware" style="margin-top: 15px;">
+    <span class="nest-label">/sys/fs/cgroup/ (root cgroup)</span>
+    <div style="display: flex; gap: 15px; margin-top: 15px; flex-wrap: wrap;">
+      <div class="nest-box os" style="flex: 1; min-width: 200px;">
+        <span class="nest-label">system.slice</span>
+        <p style="margin-top: 8px; color: #888;">System services (sshd, docker, etc.)</p>
+      </div>
+      <div class="nest-box cgroup" style="flex: 2; min-width: 300px;">
+        <span class="nest-label">user.slice</span>
+        <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+          <div class="nest-box container" style="flex: 1; min-width: 180px;">
+            <span class="nest-label">user-1000.slice</span>
+            <p style="margin-top: 8px; color: #34d399;">Owned by UID 1000</p>
+            <p style="color: #888; font-size: 13px;">Podman rootless containers live here</p>
+          </div>
+          <div class="nest-box container" style="flex: 1; min-width: 180px;">
+            <span class="nest-label">user-1001.slice</span>
+            <p style="margin-top: 8px; color: #34d399;">Owned by UID 1001</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top: 20px;">
+    <div class="panel-title">Key Delegation Concepts</div>
+    <ul>
+      <li><strong>Ownership:</strong> When a user owns the cgroup directory, they can create child cgroups, move processes, and configure resource limits within their subtree</li>
+      <li><strong>Scope:</strong> <code>systemd-run --user --scope</code> creates a delegated scope inside the user's slice — this is how Podman gets a cgroup it can manage</li>
+      <li><strong>Limitation:</strong> Delegated users cannot raise limits above what the parent cgroup allows — they can only subdivide their own allocation</li>
+      <li><strong>No privilege escalation:</strong> cgroup delegation does not grant any extra capabilities or namespace access</li>
+    </ul>
+  </div>
+
+  <!-- ===== TERMINAL EXAMPLES ===== -->
+  <h2>Hands-On: Working with cgroups v2</h2>
+
+  <h3>Check Available Controllers</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cat /sys/fs/cgroup/cgroup.controllers<br>
+    <span class="output">cpuset cpu io memory hugetlb pids rdma misc</span>
+  </div>
+
+  <h3>Check What Is Enabled for Children</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cat /sys/fs/cgroup/cgroup.subtree_control<br>
+    <span class="output">cpuset cpu io memory hugetlb pids</span>
+  </div>
+
+  <h3>Create a Child cgroup and Enable Controllers</h3>
+
+  <div class="terminal">
+    <span class="prompt"># </span>mkdir /sys/fs/cgroup/my-app<br>
+    <br>
+    <span class="prompt"># </span>ls /sys/fs/cgroup/my-app/<br>
+    <span class="output">cgroup.controllers  cgroup.events  cgroup.procs  cgroup.stat<br>
+cgroup.subtree_control  cgroup.threads  cgroup.type<br>
+cpu.max  cpu.stat  cpu.weight  memory.current  memory.high<br>
+memory.low  memory.max  memory.stat  io.max  pids.max  ...</span><br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Enable cpu and memory controllers for children of my-app</span><br>
+    <span class="prompt"># </span>echo "+cpu +memory" > /sys/fs/cgroup/my-app/cgroup.subtree_control<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Create a leaf cgroup for the actual workload</span><br>
+    <span class="prompt"># </span>mkdir /sys/fs/cgroup/my-app/worker
+  </div>
+
+  <h3>Configure Limits and Move a Process</h3>
+
+  <div class="terminal">
+    <span class="prompt"># </span><span class="cm"># Set CPU limit: max 50% of one CPU (50ms per 100ms period)</span><br>
+    <span class="prompt"># </span>echo "50000 100000" > /sys/fs/cgroup/my-app/worker/cpu.max<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Set memory limit: 256 MB hard cap</span><br>
+    <span class="prompt"># </span>echo 268435456 > /sys/fs/cgroup/my-app/worker/memory.max<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Move process PID 12345 into this cgroup</span><br>
+    <span class="prompt"># </span>echo 12345 > /sys/fs/cgroup/my-app/worker/cgroup.procs<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Verify the process is in the cgroup</span><br>
+    <span class="prompt"># </span>cat /proc/12345/cgroup<br>
+    <span class="output">0::/my-app/worker</span>
+  </div>
+
+  <h3>Monitor Resource Usage</h3>
+
+  <div class="terminal">
+    <span class="prompt"># </span>cat /sys/fs/cgroup/my-app/worker/memory.current<br>
+    <span class="output">41943040</span><br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># That is 40 MB (41943040 / 1024 / 1024)</span><br>
+    <br>
+    <span class="prompt"># </span>cat /sys/fs/cgroup/my-app/worker/cpu.stat<br>
+    <span class="output">usage_usec 1523456<br>
+user_usec 1200000<br>
+system_usec 323456<br>
+nr_periods 1542<br>
+nr_throttled 23<br>
+throttled_usec 450000</span>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> <code>nr_throttled</code> tells you how many times the cgroup was throttled due to hitting its <code>cpu.max</code> limit, and <code>throttled_usec</code> tells you the total time spent throttled. These are the first metrics to check when debugging container CPU performance.
+  </div>
+
+  <h3>Clean Up</h3>
+
+  <div class="terminal">
+    <span class="prompt"># </span><span class="cm"># Move processes out first (to root cgroup or another cgroup)</span><br>
+    <span class="prompt"># </span>echo 12345 > /sys/fs/cgroup/cgroup.procs<br>
+    <br>
+    <span class="prompt"># </span><span class="cm"># Remove cgroups (must be empty — no processes, no children)</span><br>
+    <span class="prompt"># </span>rmdir /sys/fs/cgroup/my-app/worker<br>
+    <span class="prompt"># </span>rmdir /sys/fs/cgroup/my-app
+  </div>
+
+  <div class="warn">
+    <strong>You cannot <code>rm -rf</code> a cgroup directory.</strong> The cgroup virtual filesystem only supports <code>rmdir</code>, and the cgroup must be empty (no processes and no children) before removal. If a process is still running inside, you must move it out first.
+  </div>
+
+</body>
+</html>

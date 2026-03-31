@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 07 — Docker Architecture</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 07 — Docker Architecture</h1>
+  <p class="subtitle">From <code>docker run</code> to container process — every layer of the Docker stack</p>
+
+  <!-- ============================================
+       The Docker Stack
+       ============================================ -->
+  <h2>The Docker Stack</h2>
+  <p>Every <code>docker run</code> traverses this chain of processes before a container exists:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">docker CLI</div>
+      <div class="desc">Parses commands, sends REST API calls</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">dockerd</div>
+      <div class="desc">Docker daemon — images, volumes, networks, build</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">containerd</div>
+      <div class="desc">Container lifecycle, image storage, snapshots</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">containerd-shim</div>
+      <div class="desc">Parent of container process, survives restarts</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">runc</div>
+      <div class="desc">Sets up namespaces/cgroups, calls exec(), then exits</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Container</div>
+      <div class="desc">The isolated process running your workload</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">docker CLI</div>
+      <ul>
+        <li>Parses user commands (<code>run</code>, <code>build</code>, <code>ps</code>, etc.)</li>
+        <li>Translates them into REST API calls to dockerd</li>
+        <li>Connects over Unix socket: <code>/var/run/docker.sock</code></li>
+        <li>Stateless — just a client binary</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">dockerd (Docker daemon)</div>
+      <ul>
+        <li>The main long-running process</li>
+        <li>Handles: image management, volumes, networks, build system</li>
+        <li>Exposes REST API on Unix socket (<code>/var/run/docker.sock</code>)</li>
+        <li>Delegates actual container operations to containerd</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">containerd</div>
+      <ul>
+        <li>CNCF project — not Docker-specific</li>
+        <li>Manages complete container lifecycle: create, start, stop, delete</li>
+        <li>Handles image pull/push and storage (snapshots)</li>
+        <li>Provides gRPC API for higher-level tools</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">containerd-shim</div>
+      <ul>
+        <li>One shim per running container</li>
+        <li>Becomes the parent process of the container's PID 1</li>
+        <li>Allows containerd to restart without killing containers</li>
+        <li>Reports container exit status back to containerd</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">runc</div>
+      <ul>
+        <li>OCI-compliant low-level runtime</li>
+        <li>Sets up namespaces (mount, PID, net, user, UTS, IPC)</li>
+        <li>Configures cgroups (CPU, memory, I/O limits)</li>
+        <li>Applies seccomp profile, calls <code>pivot_root</code>, then <code>exec()</code></li>
+        <li><strong>Exits after setup</strong> — runc is not a long-running process</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================
+       docker run Decomposed — 7 Steps
+       ============================================ -->
+  <h2><code>docker run</code> Decomposed — 7 Steps</h2>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker run -d --name web -p 8080:80 nginx
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>CLI parses the command</strong><br>
+        <code>docker run -d --name web -p 8080:80 nginx</code> is translated into a REST API call:<br>
+        <code>POST /v1.43/containers/create</code> with JSON body containing image, port mappings, name, detach mode.
+        Sent to dockerd via <code>/var/run/docker.sock</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Image resolution</strong><br>
+        dockerd checks if <code>nginx:latest</code> exists in the local image store. If not, it initiates a pull
+        from the configured registry (default: Docker Hub). The pull goes through containerd, which downloads
+        manifest + layer blobs, verifies digests, and unpacks layers into snapshots (overlay2).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Create container</strong><br>
+        dockerd calls containerd API to create the container. containerd creates a snapshot: the overlay2 merged view
+        with image layers as <code>lowerdir</code> (read-only) and a new empty <code>upperdir</code> (read-write layer).
+        An OCI runtime spec (<code>config.json</code>) is generated with all namespace, cgroup, and mount configurations.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Network setup</strong><br>
+        dockerd creates a <strong>veth pair</strong>: one end in the container's network namespace, one end attached
+        to the <code>docker0</code> bridge on the host. An IP address is allocated from the bridge subnet
+        (default: <code>172.17.0.0/16</code>). For port mapping (<code>-p 8080:80</code>), dockerd inserts
+        iptables NAT rules (DNAT) to forward traffic from host port 8080 to the container's IP on port 80.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Start container</strong><br>
+        containerd spawns containerd-shim, which invokes runc. runc performs:<br>
+        <code>clone()</code> with namespace flags (CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWNET, ...)<br>
+        &#8594; <code>pivot_root</code> to the overlay2 merged directory<br>
+        &#8594; apply seccomp filter<br>
+        &#8594; <code>exec(nginx)</code> — the container's entrypoint
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>runc exits</strong><br>
+        After <code>exec()</code>, runc's job is done and it exits. The container process (nginx) is now
+        a child of containerd-shim. The shim keeps running, holding stdout/stderr file descriptors and
+        monitoring the container's exit status.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong>Port mapping active</strong><br>
+        The iptables DNAT rule is in place:<br>
+        <code>-A DOCKER -p tcp --dport 8080 -j DNAT --to-destination 172.17.0.2:80</code><br>
+        Traffic arriving at <code>host:8080</code> is forwarded to <code>container_ip:80</code>.
+        The container is running in detached mode (<code>-d</code>), so the CLI returns the container ID immediately.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       docker exec
+       ============================================ -->
+  <h2><code>docker exec</code></h2>
+  <p>Running a new process inside an already-running container:</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker exec -it web bash
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How docker exec Works</div>
+    <ul>
+      <li>dockerd finds the target container's PID on the host (e.g., PID 4523)</li>
+      <li>Uses <code>setns()</code> to join <strong>all existing namespaces</strong> of the target container:
+        mount, UTS, IPC, network, PID, cgroup</li>
+      <li>Then calls <code>exec()</code> to run the requested command (<code>bash</code>) inside those namespaces</li>
+      <li>The new process shares the container's filesystem, network, and PID space</li>
+    </ul>
+  </div>
+
+  <p>The underlying mechanism — you can do the same manually:</p>
+
+  <div class="terminal">
+    <span class="prompt"># </span>nsenter -t &lt;pid&gt; -m -u -i -n -p -- /bin/bash<br>
+    <span class="output">
+      -t &lt;pid&gt;  target process<br>
+      -m         mount namespace<br>
+      -u         UTS namespace (hostname)<br>
+      -i         IPC namespace<br>
+      -n         network namespace<br>
+      -p         PID namespace<br>
+      -- command to run after joining
+    </span>
+  </div>
+
+  <div class="note">
+    <strong>Key difference from <code>docker run</code>:</strong> <code>exec</code> does NOT create new namespaces.
+    It joins existing ones. The new process also does not get its own cgroup — it shares the container's resource limits.
+  </div>
+
+  <!-- ============================================
+       Restart Policies
+       ============================================ -->
+  <h2>Restart Policies</h2>
+  <p>Set with <code>docker run --restart=&lt;policy&gt;</code> — determines what happens when the container process exits:</p>
+
+  <table>
+    <tr>
+      <th>Policy</th>
+      <th>Behavior</th>
+    </tr>
+    <tr>
+      <td><code>no</code></td>
+      <td>Never restart (default). Container stays in "exited" state.</td>
+    </tr>
+    <tr>
+      <td><code>on-failure[:max]</code></td>
+      <td>Restart only on non-zero exit code. Optional max retry count: <code>--restart=on-failure:5</code></td>
+    </tr>
+    <tr>
+      <td><code>always</code></td>
+      <td>Always restart regardless of exit code. Also restarts when the Docker daemon itself restarts.</td>
+    </tr>
+    <tr>
+      <td><code>unless-stopped</code></td>
+      <td>Like <code>always</code>, but does NOT restart if the container was manually stopped (<code>docker stop</code>)
+        before the daemon restart.</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Tip:</strong> Use <code>on-failure:5</code> for most workloads — it prevents infinite restart loops
+    while still recovering from transient failures. Use <code>unless-stopped</code> for long-running services
+    that should survive daemon upgrades.
+  </div>
+
+  <!-- ============================================
+       Logging Drivers
+       ============================================ -->
+  <h2>Logging Drivers</h2>
+
+  <div class="panel">
+    <div class="panel-title">How Container Logging Works</div>
+    <p>Container stdout/stderr &#8594; captured by containerd-shim &#8594; passed to the configured logging driver</p>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Container Process</div>
+      <div class="desc">Writes to stdout / stderr</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">containerd-shim</div>
+      <div class="desc">Captures output via FDs</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="label">Logging Driver</div>
+      <div class="desc">json-file, journald, syslog, fluentd, ...</div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Driver</th>
+      <th>Destination</th>
+      <th><code>docker logs</code> Support</th>
+    </tr>
+    <tr>
+      <td><code>json-file</code> (default)</td>
+      <td><code>/var/lib/docker/containers/&lt;id&gt;/&lt;id&gt;-json.log</code></td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td><code>journald</code></td>
+      <td>systemd journal</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td><code>syslog</code></td>
+      <td>Syslog daemon</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td><code>fluentd</code></td>
+      <td>Fluentd collector</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td><code>gelf</code></td>
+      <td>Graylog Extended Log Format endpoint</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td><code>awslogs</code></td>
+      <td>Amazon CloudWatch Logs</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td><code>gcplogs</code></td>
+      <td>Google Cloud Logging</td>
+      <td>No</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Warning:</strong> <code>docker logs</code> only works with <code>json-file</code> and <code>journald</code>
+    drivers. If you switch to <code>fluentd</code> or <code>awslogs</code>, <code>docker logs</code> returns nothing.
+    Plan your log access strategy accordingly.
+  </div>
+
+  <!-- ============================================
+       The Socket File Security
+       ============================================ -->
+  <h2>The Socket File — Security</h2>
+
+  <div class="panel">
+    <div class="panel-title">/var/run/docker.sock</div>
+    <ul>
+      <li>Unix domain socket for the Docker REST API</li>
+      <li>Default permissions: owned by <code>root:docker</code></li>
+      <li>Any process with access to this socket can make <strong>any Docker API call</strong></li>
+      <li>Docker API = full control over host: mount filesystems, run privileged containers, access all data</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Critical Security Risk:</strong> Mounting the Docker socket into a container:
+    <pre><code>docker run -v /var/run/docker.sock:/var/run/docker.sock myapp</code></pre>
+    This gives the container <strong>full root access to the host</strong>. The container can:
+    <ul>
+      <li>Create privileged containers with host filesystem access</li>
+      <li>Read/write any file on the host</li>
+      <li>Kill any container or process</li>
+      <li>Modify iptables rules, network configuration</li>
+    </ul>
+    <strong>Never mount the Docker socket unless you fully trust the container image and understand the implications.</strong>
+    Consider alternatives like Docker-in-Docker (dind) with TLS or rootless Docker.
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>ls -la /var/run/docker.sock<br>
+    <span class="output">srw-rw---- 1 root docker 0 Mar 31 10:00 /var/run/docker.sock</span><br><br>
+    <span class="prompt"># </span>curl --unix-socket /var/run/docker.sock http://localhost/v1.43/containers/json<br>
+    <span class="output">[{"Id":"abc123...","Names":["/web"],"Image":"nginx","State":"running",...}]</span>
+  </div>
+
+  <!-- ============================================
+       Cross-Reference
+       ============================================ -->
+  <h2>Cross-Reference</h2>
+  <div class="note">
+    <strong>Related:</strong> For Docker networking (bridge, host, overlay, macvlan), see
+    <a href="../net-12-container-networking/docker-networking.html">Net 12 — Docker Networking</a>.
+  </div>
+
+</body>
+</html>

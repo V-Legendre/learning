@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 06 — Sandboxed Container Runtimes</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 06 — Sandboxed Container Runtimes</h1>
+  <p class="subtitle">When shared kernel isn't secure enough — gVisor, Kata, Firecracker, and Wasm</p>
+
+  <!-- ============================================
+       The Security Gap
+       ============================================ -->
+  <h2>The Security Gap: Shared Kernel</h2>
+
+  <div class="warn">
+    <strong>The fundamental problem:</strong> Traditional containers (runc) share the host kernel. A kernel exploit in <em>any</em> container = full host compromise.
+  </div>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Physical Host</span>
+    <div class="nest-box os">
+      <span class="nest-label">Shared Linux Kernel (~300+ syscalls exposed)</span>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+        <div class="nest-box container" style="flex: 1; min-width: 120px;">
+          <span class="nest-label">Container A</span>
+          <p style="font-size: 12px; color: #888; text-align: center;">Trusted workload</p>
+        </div>
+        <div class="nest-box container" style="flex: 1; min-width: 120px; border-color: #ef4444;">
+          <span class="nest-label" style="color: #f87171;">Container B</span>
+          <p style="font-size: 12px; color: #f87171; text-align: center;">Untrusted code / attacker</p>
+        </div>
+        <div class="nest-box container" style="flex: 1; min-width: 120px;">
+          <span class="nest-label">Container C</span>
+          <p style="font-size: 12px; color: #888; text-align: center;">Another tenant</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why Namespaces + cgroups Aren't Enough</div>
+    <ul>
+      <li><strong>Attack surface</strong>: the Linux kernel exposes ~300+ system calls. Many are complex, historically buggy subsystems (BPF, io_uring, futex, etc.)</li>
+      <li><strong>Kernel exploits</strong>: a single vulnerability (e.g., Dirty COW, OverlayFS CVEs) can break out of namespaces entirely</li>
+      <li><strong>Multi-tenant danger</strong>: if you run untrusted code from different customers on the same kernel, one exploit compromises everyone</li>
+      <li><strong>seccomp helps</strong> but is not a security boundary — it filters syscalls but the kernel still processes them</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Two Approaches to Solving This</div>
+    <div class="grid-2">
+      <div>
+        <h3 style="color: #34d399;">Reduce attack surface</h3>
+        <p>Intercept syscalls in user space so the host kernel sees only a tiny, well-audited set</p>
+        <p style="color: #888; font-size: 13px;">Approach: <strong>gVisor</strong> (user-space kernel)</p>
+      </div>
+      <div>
+        <h3 style="color: #60a5fa;">Eliminate kernel sharing</h3>
+        <p>Give each container its own kernel inside a lightweight VM</p>
+        <p style="color: #888; font-size: 13px;">Approach: <strong>Kata Containers</strong>, <strong>Firecracker</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       gVisor (runsc)
+       ============================================ -->
+  <h2>gVisor (runsc) — User-Space Kernel</h2>
+
+  <div class="panel">
+    <div class="panel-title">What gVisor Is</div>
+    <ul>
+      <li>Google's sandboxed container runtime (open-source)</li>
+      <li>Implements a <strong>subset of the Linux kernel in Go</strong> — runs entirely in user space</li>
+      <li>OCI-compatible: just swap <code>runc</code> for <code>runsc</code> (the gVisor binary)</li>
+      <li>Used by: <strong>Google Cloud Run</strong>, <strong>GKE Sandbox</strong></li>
+    </ul>
+  </div>
+
+  <h3>Architecture</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Host</span>
+    <div class="nest-box os">
+      <span class="nest-label">Host Kernel (only ~20 syscalls used by Sentry)</span>
+      <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+        <div class="nest-box runtime" style="flex: 2; min-width: 250px;">
+          <span class="nest-label">Sentry (user-space kernel)</span>
+          <p style="font-size: 13px; color: #ccc; margin: 6px 0;">Intercepts and handles all container syscalls in user space. Written in Go. Runs as a regular unprivileged process.</p>
+          <div class="nest-box container" style="margin-top: 8px;">
+            <span class="nest-label">Container</span>
+            <p style="font-size: 12px; color: #888; text-align: center;">Application thinks it's talking to a real Linux kernel</p>
+          </div>
+        </div>
+        <div class="nest-box namespace" style="flex: 1; min-width: 180px;">
+          <span class="nest-label">Gofer (file proxy)</span>
+          <p style="font-size: 13px; color: #ccc; margin: 6px 0;">Handles filesystem access via <strong>9P protocol</strong>. Isolated from Sentry — separate process, minimal privileges.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>How Syscalls Flow</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Container App</div>
+      <div class="desc">Calls read(), write(), open(), etc.</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #22d3ee;">
+      <div class="num">2</div>
+      <div class="label">Sentry</div>
+      <div class="desc">Intercepts syscall, handles in user-space Go code</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Host Kernel</div>
+      <div class="desc">Only ~20 syscalls (read, write, futex, etc.)</div>
+    </div>
+  </div>
+
+  <div class="mapping">
+    <div><strong>Container sees:</strong> ~300 Linux syscalls</div>
+    <div class="arr">&rarr;</div>
+    <div><strong>Host kernel sees:</strong> ~20 syscalls from Sentry</div>
+  </div>
+
+  <h3>Tradeoffs</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Advantages</div>
+      <div class="comp-body">
+        <ul>
+          <li>Massively reduced kernel attack surface (~20 vs ~300 syscalls)</li>
+          <li>Sentry is written in <strong>Go</strong> — memory-safe, no buffer overflows</li>
+          <li>No hardware virtualization needed (no KVM)</li>
+          <li>Drop-in replacement for runc (OCI-compatible)</li>
+          <li>Fine-grained syscall compatibility tracking</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Disadvantages</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>2-5x overhead</strong> for syscall-heavy workloads (each syscall goes through user-space)</li>
+          <li>Not all syscalls supported (e.g., no <code>io_uring</code>, limited <code>eBPF</code>)</li>
+          <li>Filesystem performance limited by 9P protocol to Gofer</li>
+          <li>Some applications may behave differently (kernel compatibility gaps)</li>
+          <li>Networking has higher latency (netstack in user-space)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best for:</strong> untrusted code execution, serverless functions, multi-tenant platforms, CI/CD build runners — anywhere you run code you don't fully trust.
+  </div>
+
+  <!-- ============================================
+       Kata Containers
+       ============================================ -->
+  <h2>Kata Containers — Per-Container Lightweight VMs</h2>
+
+  <div class="panel">
+    <div class="panel-title">What Kata Containers Does</div>
+    <ul>
+      <li>Each container runs in its own <strong>lightweight virtual machine</strong> with its own kernel</li>
+      <li>Combines VM-level isolation with container-level ergonomics (OCI-compatible)</li>
+      <li>Uses <strong>QEMU</strong> or <strong>Firecracker</strong> as the VMM (Virtual Machine Monitor)</li>
+      <li>Guest kernel is minimal (~30MB) — just enough to run containers</li>
+    </ul>
+  </div>
+
+  <h3>Architecture</h3>
+
+  <div class="nest-box hardware">
+    <span class="nest-label">Physical Host + KVM</span>
+    <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+      <div class="nest-box hypervisor" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">Lightweight VM (QEMU/Firecracker)</span>
+        <div class="nest-box os" style="margin-top: 6px;">
+          <span class="nest-label">Guest Kernel (~30MB)</span>
+          <div class="nest-box runtime" style="margin-top: 6px;">
+            <span class="nest-label">kata-agent</span>
+            <div class="nest-box container" style="margin-top: 6px;">
+              <span class="nest-label">Container A</span>
+              <p style="font-size: 12px; color: #888; text-align: center;">Runs inside VM with dedicated kernel</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nest-box hypervisor" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">Lightweight VM (QEMU/Firecracker)</span>
+        <div class="nest-box os" style="margin-top: 6px;">
+          <span class="nest-label">Guest Kernel (~30MB)</span>
+          <div class="nest-box runtime" style="margin-top: 6px;">
+            <span class="nest-label">kata-agent</span>
+            <div class="nest-box container" style="margin-top: 6px;">
+              <span class="nest-label">Container B</span>
+              <p style="font-size: 12px; color: #888; text-align: center;">Completely isolated kernel</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>How It Works</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">containerd / CRI-O</div>
+      <div class="desc">CRI request to run container</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="label">kata-runtime</div>
+      <div class="desc">OCI runtime (replaces runc)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="label">QEMU / Firecracker</div>
+      <div class="desc">Creates lightweight VM with KVM</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label">Guest Kernel</div>
+      <div class="desc">Minimal Linux kernel boots</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label">kata-agent</div>
+      <div class="desc">Manages container inside VM via vsock</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Performance Characteristics</div>
+      <ul>
+        <li><strong>CPU</strong>: near-native (hardware virtualization via VT-x/AMD-V)</li>
+        <li><strong>Memory</strong>: ~30MB overhead per VM for guest kernel + agent</li>
+        <li><strong>I/O</strong>: small overhead for virtio passthrough</li>
+        <li><strong>Startup</strong>: ~500ms (VM boot + kernel init + agent)</li>
+        <li><strong>Networking</strong>: tap device + virtio-net into VM</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Key Components</div>
+      <ul>
+        <li><strong>kata-runtime</strong>: OCI runtime binary (called by containerd-shim-kata-v2)</li>
+        <li><strong>kata-agent</strong>: runs inside the VM, manages the container</li>
+        <li><strong>vsock</strong>: host-to-VM communication (no network stack needed)</li>
+        <li><strong>virtiofsd</strong>: filesystem sharing between host and guest</li>
+        <li><strong>Guest kernel</strong>: stripped-down Linux (~30MB image)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best for:</strong> workloads needing strong kernel-level isolation with container ergonomics — regulated industries, multi-tenant clouds, running untrusted kernel modules.
+  </div>
+
+  <!-- ============================================
+       Firecracker
+       ============================================ -->
+  <h2>Firecracker — Minimal MicroVMs for Serverless</h2>
+
+  <div class="panel">
+    <div class="panel-title">What Firecracker Is</div>
+    <ul>
+      <li>Amazon's <strong>microVM manager</strong> — written in Rust</li>
+      <li>Powers <strong>AWS Lambda</strong> and <strong>AWS Fargate</strong></li>
+      <li>NOT a full QEMU — stripped-down VMM with minimal device model</li>
+      <li>Designed for serverless: <strong>fast startup</strong>, <strong>high density</strong></li>
+    </ul>
+  </div>
+
+  <h3>Key Specifications</h3>
+
+  <div class="grid-3">
+    <div class="panel" style="text-align: center;">
+      <div style="font-size: 36px; color: #34d399; font-weight: bold;">&lt;125ms</div>
+      <div style="color: #888; font-size: 13px;">Boot time</div>
+    </div>
+    <div class="panel" style="text-align: center;">
+      <div style="font-size: 36px; color: #60a5fa; font-weight: bold;">~5MB</div>
+      <div style="color: #888; font-size: 13px;">Memory overhead per microVM</div>
+    </div>
+    <div class="panel" style="text-align: center;">
+      <div style="font-size: 36px; color: #a78bfa; font-weight: bold;">1000s</div>
+      <div style="color: #888; font-size: 13px;">microVMs per host</div>
+    </div>
+  </div>
+
+  <h3>Firecracker vs QEMU</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">QEMU (full VMM)</div>
+      <div class="comp-body">
+        <ul>
+          <li>~70 emulated devices</li>
+          <li>Legacy hardware support (IDE, PS/2, VGA, PCI bridges...)</li>
+          <li>Huge codebase (~1.4M lines of C)</li>
+          <li>Boot time: seconds</li>
+          <li>Memory overhead: ~100MB+ per VM</li>
+          <li>Attack surface: large</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Firecracker (microVMM)</div>
+      <div class="comp-body">
+        <ul>
+          <li>~4 emulated devices only:
+            <ul>
+              <li><code>virtio-net</code> (networking)</li>
+              <li><code>virtio-blk</code> (block storage)</li>
+              <li>serial console</li>
+              <li>minimal legacy i8042 + RTC</li>
+            </ul>
+          </li>
+          <li>~50K lines of Rust (memory-safe)</li>
+          <li>Boot time: &lt;125ms</li>
+          <li>Memory overhead: ~5MB</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How It Integrates</div>
+    <ul>
+      <li>Uses <strong>KVM</strong> under the hood (requires hardware virtualization)</li>
+      <li>Managed via <strong>REST API</strong> (not OCI directly)</li>
+      <li>Can be used as a Kata Containers backend (instead of QEMU)</li>
+      <li><strong>firecracker-containerd</strong>: integration with containerd for running containers in Firecracker microVMs</li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">containerd</div>
+      <div class="desc">CRI / gRPC API</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #f59e0b;">
+      <div class="label">firecracker-containerd</div>
+      <div class="desc">Shim that manages Firecracker VMs</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="label">Firecracker</div>
+      <div class="desc">Creates microVM via KVM</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label">Container</div>
+      <div class="desc">Runs inside microVM</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best for:</strong> serverless platforms (Lambda-style), high-density multi-tenant workloads, any scenario needing thousands of isolated environments with fast cold starts.
+  </div>
+
+  <!-- ============================================
+       WebAssembly (Wasm) Runtimes
+       ============================================ -->
+  <h2>WebAssembly (Wasm) Runtimes</h2>
+
+  <div class="panel">
+    <div class="panel-title">Wasm as a Container Runtime</div>
+    <ul>
+      <li>Wasm containers via <code>runwasi</code> — a containerd shim for Wasm runtimes</li>
+      <li>Not a VM, not a Linux process — a Wasm module runs in a <strong>sandboxed Wasm VM</strong></li>
+      <li>Runtimes: <strong>wasmtime</strong> (Bytecode Alliance), <strong>WasmEdge</strong> (CNCF), <strong>Wasmer</strong></li>
+      <li>Applications must be compiled to Wasm (from Rust, Go, C/C++, Python, etc.)</li>
+    </ul>
+  </div>
+
+  <h3>Key Characteristics</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Strengths</div>
+      <ul>
+        <li><strong>Sub-millisecond cold start</strong> (&lt;1ms)</li>
+        <li><strong>Tiny footprint</strong> (~KB per module, not MB)</li>
+        <li><strong>Sandboxed by design</strong> — no access to host unless explicitly granted</li>
+        <li><strong>Portable</strong> — same binary runs on any OS/architecture</li>
+        <li><strong>Near-native performance</strong> for compute (AOT compiled)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Limitations</div>
+      <ul>
+        <li><strong>No Linux syscalls</strong> — only WASI (WebAssembly System Interface) APIs</li>
+        <li><strong>Limited filesystem access</strong> — must explicitly grant directory access</li>
+        <li><strong>No raw sockets</strong> — networking is evolving (wasi-sockets)</li>
+        <li><strong>Thread support</strong> — only recently standardized (wasm-threads proposal)</li>
+        <li><strong>Ecosystem maturity</strong> — not all libraries/frameworks support Wasm yet</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">WASI — WebAssembly System Interface</div>
+    <p>WASI is the standardized system API for Wasm modules — it's what allows Wasm to interact with the outside world:</p>
+    <ul>
+      <li><code>wasi-filesystem</code> — pre-opened directory handles (capability-based)</li>
+      <li><code>wasi-sockets</code> — TCP/UDP networking (in development)</li>
+      <li><code>wasi-http</code> — HTTP request/response handling</li>
+      <li><code>wasi-cli</code> — stdin/stdout/stderr, environment variables, args</li>
+    </ul>
+    <p style="color: #888; margin-top: 8px;">Think of WASI as a capability-based POSIX — you only get access to what the host explicitly grants.</p>
+  </div>
+
+  <h3>Integration with Kubernetes</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">kubelet</div>
+      <div class="desc">CRI request</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">containerd</div>
+      <div class="desc">Selects Wasm shim</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="label">containerd-shim-runwasi</div>
+      <div class="desc">Wasm-specific shim</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label">wasmtime / WasmEdge</div>
+      <div class="desc">Executes Wasm module</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Best for:</strong> edge computing, plugin systems, serverless functions, CDN workers (Cloudflare Workers, Fastly Compute), anywhere you need sub-millisecond startup with strong sandboxing.
+  </div>
+
+  <!-- ============================================
+       Comparison Matrix
+       ============================================ -->
+  <h2>Comparison Matrix — All Runtimes</h2>
+
+  <table>
+    <tr>
+      <th>Runtime</th>
+      <th>Isolation</th>
+      <th>Startup</th>
+      <th>Overhead</th>
+      <th>Syscall Support</th>
+      <th>Best For</th>
+    </tr>
+    <tr>
+      <td><strong>runc</strong></td>
+      <td>Namespaces + cgroups</td>
+      <td>~100ms</td>
+      <td>Minimal</td>
+      <td>Full Linux</td>
+      <td>General purpose</td>
+    </tr>
+    <tr>
+      <td><strong>gVisor (runsc)</strong></td>
+      <td>User-space kernel</td>
+      <td>~200ms</td>
+      <td>2-5x syscalls</td>
+      <td>Partial (~70%)</td>
+      <td>Untrusted code</td>
+    </tr>
+    <tr>
+      <td><strong>Kata Containers</strong></td>
+      <td>MicroVM + own kernel</td>
+      <td>~500ms</td>
+      <td>~30MB + VM</td>
+      <td>Full Linux</td>
+      <td>Strong isolation</td>
+    </tr>
+    <tr>
+      <td><strong>Firecracker</strong></td>
+      <td>MicroVM (minimal)</td>
+      <td>&lt;125ms</td>
+      <td>~5MB</td>
+      <td>Full Linux</td>
+      <td>Serverless, high density</td>
+    </tr>
+    <tr>
+      <td><strong>Wasm (runwasi)</strong></td>
+      <td>Wasm sandbox</td>
+      <td>&lt;1ms</td>
+      <td>~KB</td>
+      <td>WASI only</td>
+      <td>Edge, plugins</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Tradeoff spectrum:</strong> As you move from runc &rarr; gVisor &rarr; Kata/Firecracker, you get stronger isolation but higher overhead. Wasm breaks the pattern entirely — incredible startup and density, but a fundamentally different programming model (no Linux ABI).
+  </div>
+
+  <!-- ============================================
+       Isolation Models Visualized
+       ============================================ -->
+  <h2>Isolation Models — Side by Side</h2>
+
+  <div class="grid-2">
+    <div class="nest-box os">
+      <span class="nest-label">runc — Shared Kernel</span>
+      <div style="display: flex; gap: 8px;">
+        <div class="nest-box container" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">Container</span>
+          <p style="font-size: 11px; color: #888;">NS + cgroups only</p>
+        </div>
+        <div class="nest-box container" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">Container</span>
+          <p style="font-size: 11px; color: #888;">NS + cgroups only</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="nest-box os">
+      <span class="nest-label">gVisor — User-Space Kernel</span>
+      <div style="display: flex; gap: 8px;">
+        <div class="nest-box runtime" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">Sentry</span>
+          <div class="nest-box container" style="text-align: center; padding: 8px;">
+            <span class="nest-label">Container</span>
+            <p style="font-size: 11px; color: #888;">User-space syscall handling</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nest-box hardware">
+      <span class="nest-label">Kata — Per-Container VM</span>
+      <div style="display: flex; gap: 8px;">
+        <div class="nest-box hypervisor" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">VM</span>
+          <div class="nest-box os" style="padding: 8px;">
+            <span class="nest-label">Guest Kernel</span>
+            <div class="nest-box container" style="padding: 6px; text-align: center;">
+              <span class="nest-label">Container</span>
+            </div>
+          </div>
+        </div>
+        <div class="nest-box hypervisor" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">VM</span>
+          <div class="nest-box os" style="padding: 8px;">
+            <span class="nest-label">Guest Kernel</span>
+            <div class="nest-box container" style="padding: 6px; text-align: center;">
+              <span class="nest-label">Container</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nest-box os">
+      <span class="nest-label">Wasm — Sandboxed Module</span>
+      <div style="display: flex; gap: 8px;">
+        <div class="nest-box namespace" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">wasmtime</span>
+          <p style="font-size: 11px; color: #888;">Wasm sandbox, no kernel access, capability-based WASI</p>
+        </div>
+        <div class="nest-box namespace" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="nest-label">wasmtime</span>
+          <p style="font-size: 11px; color: #888;">Each module fully isolated, ~KB footprint</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Kubernetes RuntimeClass
+       ============================================ -->
+  <h2>Kubernetes RuntimeClass — Per-Pod Runtime Selection</h2>
+
+  <div class="panel">
+    <div class="panel-title">How Kubernetes Selects a Runtime</div>
+    <p>The <code>RuntimeClass</code> resource lets you run different pods with different runtimes on the same cluster:</p>
+  </div>
+
+  <pre><code><span class="cm"># Define a RuntimeClass for gVisor</span>
+<span class="kw">apiVersion</span>: node.k8s.io/v1
+<span class="kw">kind</span>: RuntimeClass
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">gvisor</span>
+<span class="kw">handler</span>: <span class="str">runsc</span>   <span class="cm"># matches containerd's runtime config name</span>
+<span class="kw">scheduling</span>:
+  <span class="kw">nodeSelector</span>:
+    <span class="kw">runtime/gvisor</span>: <span class="str">"true"</span>   <span class="cm"># only schedule on nodes that have gVisor installed</span>
+<span class="kw">overhead</span>:
+  <span class="kw">podFixed</span>:
+    <span class="kw">memory</span>: <span class="str">"64Mi"</span>   <span class="cm"># account for gVisor's memory overhead in scheduling</span>
+</code></pre>
+
+  <pre><code><span class="cm"># Use it in a Pod spec</span>
+<span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Pod
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">untrusted-workload</span>
+<span class="kw">spec</span>:
+  <span class="kw">runtimeClassName</span>: <span class="str">gvisor</span>   <span class="cm"># use gVisor instead of default runc</span>
+  <span class="kw">containers</span>:
+  - <span class="kw">name</span>: <span class="str">sandbox</span>
+    <span class="kw">image</span>: <span class="str">nginx:latest</span>
+</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Common RuntimeClass Configurations</div>
+    <table>
+      <tr><th>RuntimeClass Name</th><th>Handler</th><th>Runtime</th><th>Use Case</th></tr>
+      <tr><td><code>gvisor</code></td><td><code>runsc</code></td><td>gVisor</td><td>Untrusted code, multi-tenant</td></tr>
+      <tr><td><code>kata</code></td><td><code>kata</code></td><td>Kata Containers</td><td>VM-level isolation</td></tr>
+      <tr><td><code>wasm</code></td><td><code>wasmtime</code></td><td>runwasi + wasmtime</td><td>Wasm workloads</td></tr>
+      <tr><td>(default / none)</td><td><code>runc</code></td><td>runc</td><td>Standard containers</td></tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>scheduling.nodeSelector</strong> ensures pods land on nodes that actually have the requested runtime installed. Without this, a pod requesting <code>gvisor</code> could be scheduled on a node without gVisor, and it would fail to start.
+  </div>
+
+  <!-- ============================================
+       containerd Configuration
+       ============================================ -->
+  <h3>containerd Runtime Configuration</h3>
+
+  <p>To register alternative runtimes with containerd, add them to <code>/etc/containerd/config.toml</code>:</p>
+
+  <pre><code><span class="cm"># /etc/containerd/config.toml</span>
+
+[<span class="type">plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc</span>]
+  <span class="attr">runtime_type</span> = <span class="str">"io.containerd.runc.v2"</span>
+
+[<span class="type">plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc</span>]
+  <span class="attr">runtime_type</span> = <span class="str">"io.containerd.runsc.v1"</span>
+
+[<span class="type">plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata</span>]
+  <span class="attr">runtime_type</span> = <span class="str">"io.containerd.kata.v2"</span>
+
+[<span class="type">plugins."io.containerd.grpc.v1.cri".containerd.runtimes.wasmtime</span>]
+  <span class="attr">runtime_type</span> = <span class="str">"io.containerd.wasmtime.v1"</span>
+</code></pre>
+
+  <div class="tip">
+    <strong>Mix and match:</strong> On a single Kubernetes cluster, you can run trusted workloads with runc (lowest overhead), untrusted user code in gVisor (reduced kernel exposure), and regulated workloads in Kata (full kernel isolation) — all selected per-pod via RuntimeClass.
+  </div>
+
+</body>
+</html>

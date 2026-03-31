@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 03 — cgroups in Practice: Docker &amp; Kubernetes</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 03 — cgroups in Practice: Docker &amp; Kubernetes</h1>
+  <p class="subtitle">How container platforms translate user-facing flags to cgroup files</p>
+
+  <!-- ===== DOCKER MAPPING ===== -->
+  <h2>Docker Flag to cgroup File Mapping</h2>
+
+  <p>Every Docker resource flag is a thin wrapper around writing a value to a cgroup file. There is no magic — Docker computes the value, writes it to the correct cgroup file, and the kernel enforces it.</p>
+
+  <h3>CPU Mappings</h3>
+
+  <div class="mapping">
+    <div><code>--cpus 2</code></div>
+    <div class="arr">--></div>
+    <div><code>cpu.max</code> = <code>200000 100000</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>--cpus 0.5</code></div>
+    <div class="arr">--></div>
+    <div><code>cpu.max</code> = <code>50000 100000</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>--cpu-shares 512</code></div>
+    <div class="arr">--></div>
+    <div><code>cpu.weight</code> ~= 50 <span style="color: #888;">(converted: shares/1024*100)</span></div>
+  </div>
+  <div class="mapping">
+    <div><code>--cpuset-cpus "0,1"</code></div>
+    <div class="arr">--></div>
+    <div><code>cpuset.cpus</code> = <code>0,1</code></div>
+  </div>
+
+  <h3>Memory Mappings</h3>
+
+  <div class="mapping">
+    <div><code>--memory 512m</code></div>
+    <div class="arr">--></div>
+    <div><code>memory.max</code> = <code>536870912</code> <span style="color: #888;">(512 * 1024 * 1024)</span></div>
+  </div>
+  <div class="mapping">
+    <div><code>--memory-reservation 256m</code></div>
+    <div class="arr">--></div>
+    <div><code>memory.low</code> = <code>268435456</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>--memory-swap 1g</code></div>
+    <div class="arr">--></div>
+    <div><code>memory.swap.max</code> = <code>536870912</code> <span style="color: #888;">(1G total - 512M RAM = 512M swap)</span></div>
+  </div>
+
+  <h3>I/O and PIDs Mappings</h3>
+
+  <div class="mapping">
+    <div><code>--pids-limit 100</code></div>
+    <div class="arr">--></div>
+    <div><code>pids.max</code> = <code>100</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>--device-read-bps /dev/sda:10mb</code></div>
+    <div class="arr">--></div>
+    <div><code>io.max</code> = <code>8:0 rbps=10485760</code></div>
+  </div>
+  <div class="mapping">
+    <div><code>--device-write-iops /dev/sda:1000</code></div>
+    <div class="arr">--></div>
+    <div><code>io.max</code> = <code>8:0 wiops=1000</code></div>
+  </div>
+
+  <div class="tip">
+    <strong>Verify it yourself:</strong> Run a container with <code>--cpus 2 --memory 512m</code>, then inspect the cgroup files at <code>/sys/fs/cgroup/system.slice/docker-&lt;container-id&gt;.scope/</code> and you will see exactly these values.
+  </div>
+
+  <!-- ===== CGROUP DRIVER ===== -->
+  <h2>cgroup Driver: systemd vs cgroupfs</h2>
+
+  <p>Container runtimes need to create cgroup directories and write to files. There are two approaches to managing the cgroup hierarchy:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">cgroupfs Driver</div>
+      <div class="comp-body">
+        <p><strong>How it works:</strong> The container runtime directly creates directories under <code>/sys/fs/cgroup/</code> and writes to the files itself.</p>
+        <ul>
+          <li>Simple implementation</li>
+          <li>Runtime has full control over the hierarchy</li>
+          <li>Can conflict with systemd (both try to manage the same tree)</li>
+          <li>systemd may "clean up" cgroups it did not create</li>
+        </ul>
+        <pre><code><span class="cm"># cgroupfs path</span>
+/sys/fs/cgroup/docker/
+    &lt;container-id&gt;/
+        cpu.max
+        memory.max</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">systemd Driver</div>
+      <div class="comp-body">
+        <p><strong>How it works:</strong> The container runtime asks systemd to create <strong>transient scopes/slices</strong> via D-Bus API. systemd manages the hierarchy.</p>
+        <ul>
+          <li>Cooperates with systemd (no conflicts)</li>
+          <li>Uses proper systemd unit management</li>
+          <li>Kubernetes <strong>strongly recommends</strong> this driver</li>
+          <li>kubelet and runtime must use the same driver</li>
+        </ul>
+        <pre><code><span class="cm"># systemd path</span>
+/sys/fs/cgroup/system.slice/
+    docker-&lt;container-id&gt;.scope/
+        cpu.max
+        memory.max</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The cgroupfs driver is deprecated for Kubernetes.</strong> If kubelet uses systemd but the container runtime uses cgroupfs (or vice versa), you get two cgroup managers fighting over the same hierarchy. This leads to unstable resource management. Always match: both must use systemd.
+  </div>
+
+  <!-- ===== KUBERNETES RESOURCE MODEL ===== -->
+  <h2>Kubernetes Resource Model</h2>
+
+  <p>Kubernetes has its own abstraction layer over cgroups: <strong>requests</strong> and <strong>limits</strong>. These map directly to cgroup files, but serve different purposes.</p>
+
+  <h3>Requests vs Limits</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header docker">Docker</div>
+      <div class="comp-body">
+        <pre><code>docker run \
+  --cpus 2 \
+  --memory 512m \
+  my-app</code></pre>
+        <p style="color: #888; margin-top: 10px;">Docker only has <strong>limits</strong> — there is no concept of "minimum guaranteed." A container gets what it can until it hits the ceiling.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">Kubernetes</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">resources</span>:
+  <span class="fn">requests</span>:
+    <span class="attr">cpu</span>: <span class="str">"500m"</span>
+    <span class="attr">memory</span>: <span class="str">"256Mi"</span>
+  <span class="fn">limits</span>:
+    <span class="attr">cpu</span>: <span class="str">"2"</span>
+    <span class="attr">memory</span>: <span class="str">"512Mi"</span></code></pre>
+        <p style="color: #888; margin-top: 10px;">K8s has <strong>requests</strong> (minimum guaranteed floor) AND <strong>limits</strong> (maximum ceiling). This enables better scheduling and resource protection.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>K8s Resource to cgroup File Mapping</h3>
+
+  <table>
+    <tr>
+      <th>K8s Resource</th>
+      <th>cgroup File</th>
+      <th>Behavior</th>
+    </tr>
+    <tr>
+      <td><code>requests.cpu: "500m"</code></td>
+      <td><code>cpu.weight</code></td>
+      <td>Proportional sharing. 500m = ~50 weight (converted from millicores). Guarantees fair CPU share under contention.</td>
+    </tr>
+    <tr>
+      <td><code>limits.cpu: "2"</code></td>
+      <td><code>cpu.max</code> = <code>200000 100000</code></td>
+      <td>Hard throttle. Process is paused when it exceeds 2 CPUs per period.</td>
+    </tr>
+    <tr>
+      <td><code>requests.memory: "256Mi"</code></td>
+      <td><code>memory.low</code> = <code>268435456</code></td>
+      <td>Protection from reclaim. This memory is "reserved" — kernel avoids reclaiming it.</td>
+    </tr>
+    <tr>
+      <td><code>limits.memory: "512Mi"</code></td>
+      <td><code>memory.max</code> = <code>536870912</code></td>
+      <td>Hard limit. OOM kill if exceeded. No throttling — it is immediate death.</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>CPU vs Memory limits behave very differently.</strong> Exceeding a CPU limit causes <strong>throttling</strong> (the process slows down but keeps running). Exceeding a memory limit causes <strong>OOM kill</strong> (the process dies). This is why setting memory limits too low is more dangerous than setting CPU limits too low.
+  </div>
+
+  <!-- ===== QOS CLASSES ===== -->
+  <h2>QoS Classes</h2>
+
+  <p>Kubernetes classifies every pod into one of three Quality of Service classes based on how requests and limits are configured. This classification determines <strong>eviction priority</strong> when the node runs out of resources.</p>
+
+  <!-- QoS stacked diagram -->
+  <div style="padding: 25px; background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 12px; margin: 15px 0;">
+    <p style="text-align: center; color: #fff; font-weight: bold; margin-bottom: 20px;">Eviction Priority (first evicted at the top)</p>
+    <div style="display: flex; flex-direction: column; gap: 0; max-width: 650px; margin: 0 auto;">
+      <div style="background: #ef444420; border: 2px solid #ef4444; border-radius: 8px 8px 0 0; padding: 16px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div style="color: #f87171; font-weight: bold; font-size: 16px;">BestEffort</div>
+            <div style="color: #888; font-size: 13px; margin-top: 4px;">No requests or limits set at all</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="color: #f87171; font-weight: bold;">FIRST to be evicted</div>
+            <div style="color: #888; font-size: 12px;">Lowest priority</div>
+          </div>
+        </div>
+        <pre style="margin-top: 10px; border: none; background: transparent; padding: 0;"><code><span class="kw">resources</span>: {}  <span class="cm"># nothing specified</span></code></pre>
+      </div>
+      <div style="background: #f59e0b20; border: 2px solid #f59e0b; padding: 16px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div style="color: #fbbf24; font-weight: bold; font-size: 16px;">Burstable</div>
+            <div style="color: #888; font-size: 13px; margin-top: 4px;">requests &lt; limits for at least one resource (or limits set without requests)</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="color: #fbbf24; font-weight: bold;">Evicted before Guaranteed</div>
+            <div style="color: #888; font-size: 12px;">Middle priority</div>
+          </div>
+        </div>
+        <pre style="margin-top: 10px; border: none; background: transparent; padding: 0;"><code><span class="kw">resources</span>:
+  <span class="fn">requests</span>: { <span class="attr">cpu</span>: <span class="str">"250m"</span>, <span class="attr">memory</span>: <span class="str">"128Mi"</span> }
+  <span class="fn">limits</span>:   { <span class="attr">cpu</span>: <span class="str">"1"</span>,    <span class="attr">memory</span>: <span class="str">"512Mi"</span> }</code></pre>
+      </div>
+      <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 0 0 8px 8px; padding: 16px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div style="color: #34d399; font-weight: bold; font-size: 16px;">Guaranteed</div>
+            <div style="color: #888; font-size: 13px; margin-top: 4px;">requests == limits for BOTH cpu and memory (on every container in the pod)</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="color: #34d399; font-weight: bold;">LAST to be evicted</div>
+            <div style="color: #888; font-size: 12px;">Highest priority</div>
+          </div>
+        </div>
+        <pre style="margin-top: 10px; border: none; background: transparent; padding: 0;"><code><span class="kw">resources</span>:
+  <span class="fn">requests</span>: { <span class="attr">cpu</span>: <span class="str">"1"</span>, <span class="attr">memory</span>: <span class="str">"512Mi"</span> }
+  <span class="fn">limits</span>:   { <span class="attr">cpu</span>: <span class="str">"1"</span>, <span class="attr">memory</span>: <span class="str">"512Mi"</span> }</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Scheduling implication:</strong> Requests are what the scheduler uses to place pods. If a pod requests 2 CPUs and a node only has 1 CPU allocatable, the pod will not be scheduled there. Limits are enforced at runtime by cgroups. A node can be overcommitted on limits (sum of all limits > node capacity) but not on requests.
+  </div>
+
+  <!-- ===== POD CGROUP HIERARCHY ===== -->
+  <h2>Pod cgroup Hierarchy</h2>
+
+  <p>Kubernetes organizes cgroups in a two-level hierarchy: pod-level cgroups enforce total pod limits, and container-level cgroups enforce per-container limits within the pod.</p>
+
+  <div class="nest-box hardware" style="margin-top: 15px;">
+    <span class="nest-label">/sys/fs/cgroup/kubepods.slice/</span>
+    <div style="display: flex; gap: 15px; margin-top: 15px; flex-wrap: wrap;">
+      <!-- Guaranteed -->
+      <div class="nest-box container" style="flex: 1; min-width: 250px;">
+        <span class="nest-label">kubepods-guaranteed (implied)</span>
+        <p style="color: #888; font-size: 12px; margin-top: 8px;">Guaranteed QoS pods live at this level</p>
+      </div>
+      <!-- Burstable -->
+      <div class="nest-box cgroup" style="flex: 2; min-width: 350px;">
+        <span class="nest-label">kubepods-burstable.slice/</span>
+        <div class="nest-box namespace" style="margin-top: 12px;">
+          <span class="nest-label">kubepods-burstable-pod&lt;uid&gt;.slice/</span>
+          <p style="color: #888; font-size: 12px; margin-top: 10px;">Pod-level cgroup (total pod limits)</p>
+          <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+            <div class="nest-box runtime" style="flex: 1; min-width: 130px;">
+              <span class="nest-label">&lt;container-1-id&gt;.scope</span>
+              <p style="color: #888; font-size: 12px; margin-top: 8px;">nginx</p>
+            </div>
+            <div class="nest-box runtime" style="flex: 1; min-width: 130px;">
+              <span class="nest-label">&lt;container-2-id&gt;.scope</span>
+              <p style="color: #888; font-size: 12px; margin-top: 8px;">app</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top: 15px;">
+      <div class="nest-box os" style="min-width: 250px;">
+        <span class="nest-label">kubepods-besteffort.slice/</span>
+        <p style="color: #888; font-size: 12px; margin-top: 8px;">BestEffort pods — evicted first</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top: 20px;">
+    <div class="panel-title">Two-Level Enforcement</div>
+    <ul>
+      <li><strong>Pod-level cgroup:</strong> Enforces the <em>sum</em> of all container limits. Prevents the pod as a whole from exceeding its allocation, even if individual containers are within their limits.</li>
+      <li><strong>Container-level cgroups:</strong> Enforce <em>per-container</em> limits. A single container cannot exceed its own limit even if the pod has headroom.</li>
+      <li>This means a 2-container pod with <code>memory: 256Mi</code> each has a pod-level cgroup with <code>memory.max = 536870912</code> (512Mi total), and each container cgroup has <code>memory.max = 268435456</code> (256Mi).</li>
+    </ul>
+  </div>
+
+  <!-- ===== RESOURCEQUOTA & LIMITRANGE ===== -->
+  <h2>ResourceQuota &amp; LimitRange</h2>
+
+  <p>These are <strong>admission-time controls</strong> — they are enforced by the Kubernetes API server when pods are created, not at runtime by the kernel. They determine which cgroup values kubelet will configure.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">ResourceQuota</div>
+      <div class="comp-body">
+        <p><strong>Namespace-level totals.</strong> Limits the aggregate resources across all pods in a namespace.</p>
+        <pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: ResourceQuota
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">team-quota</span>
+  <span class="attr">namespace</span>: <span class="str">team-a</span>
+<span class="kw">spec</span>:
+  <span class="fn">hard</span>:
+    <span class="attr">requests.cpu</span>: <span class="str">"10"</span>
+    <span class="attr">requests.memory</span>: <span class="str">"20Gi"</span>
+    <span class="attr">limits.cpu</span>: <span class="str">"20"</span>
+    <span class="attr">limits.memory</span>: <span class="str">"40Gi"</span>
+    <span class="attr">pods</span>: <span class="str">"50"</span></code></pre>
+        <p style="color: #888; margin-top: 8px;">Prevents team-a from deploying more than 50 pods or requesting more than 10 CPUs total.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">LimitRange</div>
+      <div class="comp-body">
+        <p><strong>Per-pod/container defaults and constraints.</strong> Sets defaults and min/max per container.</p>
+        <pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: LimitRange
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">container-limits</span>
+<span class="kw">spec</span>:
+  <span class="fn">limits</span>:
+  - <span class="attr">type</span>: Container
+    <span class="fn">default</span>:
+      <span class="attr">cpu</span>: <span class="str">"500m"</span>
+      <span class="attr">memory</span>: <span class="str">"256Mi"</span>
+    <span class="fn">defaultRequest</span>:
+      <span class="attr">cpu</span>: <span class="str">"100m"</span>
+      <span class="attr">memory</span>: <span class="str">"128Mi"</span>
+    <span class="fn">max</span>:
+      <span class="attr">cpu</span>: <span class="str">"2"</span>
+      <span class="attr">memory</span>: <span class="str">"1Gi"</span></code></pre>
+        <p style="color: #888; margin-top: 8px;">If a container does not specify requests/limits, these defaults are injected. No container can request more than 2 CPUs.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">kubectl apply</div>
+      <div class="desc">User submits pod spec</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">API Server</div>
+      <div class="desc">LimitRange injects defaults, ResourceQuota checks totals</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Scheduler</div>
+      <div class="desc">Places pod based on requests</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">kubelet</div>
+      <div class="desc">Creates cgroups with the computed values</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key distinction:</strong> ResourceQuota and LimitRange are <em>admission-time</em> controls. They reject the pod at creation if it would exceed limits. They do not enforce anything at runtime — that is the kernel's job via cgroups. They merely ensure that cgroup values are always set.
+  </div>
+
+  <!-- ===== HPA AND VPA ===== -->
+  <h2>HPA and VPA</h2>
+
+  <p>Autoscalers use <strong>cgroup accounting data</strong> as their input signal. The entire metrics pipeline is built on reading cgroup files.</p>
+
+  <h3>The Metrics Pipeline</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">cgroup Files</div>
+      <div class="desc">cpu.stat, memory.current, etc.</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">kubelet</div>
+      <div class="desc">Reads cgroup files, exposes /stats/summary</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">metrics-server</div>
+      <div class="desc">Scrapes kubelet, aggregates into metrics API</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">HPA / VPA</div>
+      <div class="desc">Reads metrics, adjusts replicas or resources</div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">HPA (Horizontal Pod Autoscaler)</div>
+      <div class="comp-body">
+        <p><strong>Scales the number of pod replicas</strong> based on observed CPU/memory utilization.</p>
+        <pre><code><span class="kw">apiVersion</span>: autoscaling/v2
+<span class="kw">kind</span>: HorizontalPodAutoscaler
+<span class="kw">spec</span>:
+  <span class="attr">minReplicas</span>: <span class="num">2</span>
+  <span class="attr">maxReplicas</span>: <span class="num">10</span>
+  <span class="fn">metrics</span>:
+  - <span class="attr">type</span>: Resource
+    <span class="fn">resource</span>:
+      <span class="attr">name</span>: <span class="str">cpu</span>
+      <span class="fn">target</span>:
+        <span class="attr">type</span>: Utilization
+        <span class="attr">averageUtilization</span>: <span class="num">70</span></code></pre>
+        <ul style="margin-top: 10px;">
+          <li>If average CPU > 70% of request, scale up</li>
+          <li>If average CPU < 70% of request, scale down</li>
+          <li>Utilization = <code>cpu.stat usage / cpu.weight allocation</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">VPA (Vertical Pod Autoscaler)</div>
+      <div class="comp-body">
+        <p><strong>Adjusts resource requests and limits</strong> based on observed usage history.</p>
+        <pre><code><span class="kw">apiVersion</span>: autoscaling.k8s.io/v1
+<span class="kw">kind</span>: VerticalPodAutoscaler
+<span class="kw">spec</span>:
+  <span class="fn">targetRef</span>:
+    <span class="attr">kind</span>: Deployment
+    <span class="attr">name</span>: <span class="str">my-app</span>
+  <span class="fn">updatePolicy</span>:
+    <span class="attr">updateMode</span>: <span class="str">"Auto"</span>
+  <span class="fn">resourcePolicy</span>:
+    <span class="fn">containerPolicies</span>:
+    - <span class="attr">minAllowed</span>:
+        <span class="attr">cpu</span>: <span class="str">"100m"</span>
+      <span class="attr">maxAllowed</span>:
+        <span class="attr">cpu</span>: <span class="str">"4"</span></code></pre>
+        <ul style="margin-top: 10px;">
+          <li>Analyzes usage over time (memory.current, cpu.stat)</li>
+          <li>Recommends or sets new requests/limits</li>
+          <li>Requires pod restart to apply (changes cgroup values)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">HPA vs VPA: When to Use Which</div>
+    <table>
+      <tr>
+        <th>Scenario</th>
+        <th>HPA</th>
+        <th>VPA</th>
+      </tr>
+      <tr>
+        <td>Stateless web servers</td>
+        <td style="color: #34d399;">Ideal — add more replicas</td>
+        <td style="color: #888;">Less useful</td>
+      </tr>
+      <tr>
+        <td>Database / stateful workloads</td>
+        <td style="color: #888;">Hard to scale horizontally</td>
+        <td style="color: #34d399;">Ideal — right-size the single instance</td>
+      </tr>
+      <tr>
+        <td>Batch jobs</td>
+        <td style="color: #888;">Not applicable</td>
+        <td style="color: #34d399;">Good for right-sizing</td>
+      </tr>
+      <tr>
+        <td>Unknown resource needs</td>
+        <td style="color: #888;">Needs correct requests first</td>
+        <td style="color: #34d399;">Can discover correct requests</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Do not use HPA and VPA on the same resource (e.g., both on CPU).</strong> They will fight: HPA tries to scale replicas based on utilization, while VPA changes the requests that define utilization. Use HPA for CPU and VPA for memory, or use one at a time.
+  </div>
+
+  <!-- ===== FULL PICTURE ===== -->
+  <h2>The Full Picture: From User Config to Kernel Enforcement</h2>
+
+  <p>Here is the complete chain from a Kubernetes manifest to kernel-level enforcement:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>User writes a pod spec</strong> with <code>resources.requests</code> and <code>resources.limits</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>API server admission</strong>: LimitRange injects defaults if missing. ResourceQuota checks namespace totals. Pod is rejected or accepted.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Scheduler places the pod</strong> on a node with enough allocatable resources (based on requests, not limits).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>kubelet on the target node</strong> asks the container runtime (containerd/CRI-O) to create the container.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Container runtime creates cgroups</strong> (via systemd or direct cgroupfs) and writes the computed values to <code>cpu.max</code>, <code>cpu.weight</code>, <code>memory.max</code>, <code>memory.low</code>, <code>pids.max</code>, etc.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>Linux kernel enforces</strong> the limits at the CFS scheduler (CPU), memory allocator (memory), and block I/O layer (I/O). This is all kernel code — no userspace overhead.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong>kubelet reads cgroup accounting files</strong> (<code>cpu.stat</code>, <code>memory.current</code>) and exposes them via <code>/stats/summary</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div>
+        <strong>metrics-server and HPA/VPA</strong> consume these metrics to make scaling decisions, which loop back to step 1 (new pod specs with adjusted resources).
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>The elegant simplicity:</strong> Containers are just processes in cgroups and namespaces. Kubernetes is just an orchestrator that writes values to cgroup files via a chain of API calls. The kernel does all the actual enforcement. There is no container runtime in the data path — once the cgroup is configured, the kernel handles everything directly.
+  </div>
+
+</body>
+</html>

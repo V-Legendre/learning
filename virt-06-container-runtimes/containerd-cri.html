@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 06 — containerd & the Container Runtime Interface</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 06 — containerd &amp; the Container Runtime Interface</h1>
+  <p class="subtitle">Why runc isn't enough — image management, supervision, and Kubernetes integration</p>
+
+  <!-- ============================================
+       Why runc Isn't Enough
+       ============================================ -->
+  <h2>Why runc Isn't Enough</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">What runc DOES</div>
+      <div class="comp-body">
+        <ul>
+          <li>Takes a rootfs + config.json</li>
+          <li>Creates namespaces, cgroups, mounts</li>
+          <li>Starts the container process</li>
+          <li>Exits (it's not a daemon)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">What runc DOESN'T Do</div>
+      <div class="comp-body">
+        <ul>
+          <li>Pull or store images</li>
+          <li>Manage container lifecycle (restart, logs)</li>
+          <li>Provide an API for orchestrators</li>
+          <li>Handle snapshots or layer storage</li>
+          <li>Survive daemon restarts</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The gap:</strong> runc is a low-level tool. You need a higher-level runtime to bridge the gap between "run this bundle" and "manage containers as a service." That's what <strong>containerd</strong> and <strong>CRI-O</strong> provide.
+  </div>
+
+  <!-- ============================================
+       containerd Architecture
+       ============================================ -->
+  <h2>containerd Architecture</h2>
+
+  <div class="panel">
+    <div class="panel-title">Origin &amp; Status</div>
+    <ul>
+      <li>Originally extracted from the Docker daemon (2016)</li>
+      <li>Donated to the <strong>CNCF</strong> — graduated project</li>
+      <li>Used by Docker Engine, Kubernetes, and standalone deployments</li>
+    </ul>
+  </div>
+
+  <h3>Core Responsibilities</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Image Pull &amp; Push</div>
+      <ul>
+        <li>Implements OCI Distribution spec</li>
+        <li>Content-addressable storage for blobs</li>
+        <li>Pulls manifests, image configs, layer tarballs</li>
+        <li>Supports multiple registries and auth</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Snapshots</div>
+      <ul>
+        <li>Manages <strong>overlay2</strong> filesystem layers</li>
+        <li>Operations: <code>prepare</code>, <code>commit</code>, <code>remove</code></li>
+        <li>Each container gets a thin writable layer on top of read-only image layers</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Task Management</div>
+      <ul>
+        <li>Create / start / stop / delete containers</li>
+        <li>Uses <strong>runc</strong> (or other OCI runtimes) under the hood</li>
+        <li>Manages container state and exit codes</li>
+        <li>Streams stdout/stderr logs</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Content Store</div>
+      <ul>
+        <li>Stores blobs: image layers, configs, manifests</li>
+        <li>SHA256 content-addressable</li>
+        <li>Deduplicates identical layers across images</li>
+        <li>Garbage collection of unreferenced content</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">API &amp; CLI Tools</div>
+    <table>
+      <tr><th>Interface</th><th>Protocol</th><th>Use Case</th></tr>
+      <tr><td>containerd gRPC API</td><td>gRPC (not REST)</td><td>Programmatic access — used by kubelet, Docker, BuildKit</td></tr>
+      <tr><td><code>ctr</code></td><td>CLI</td><td>Low-level debugging tool (not user-friendly)</td></tr>
+      <tr><td><code>nerdctl</code></td><td>CLI</td><td>Docker-compatible CLI for containerd (drop-in replacement)</td></tr>
+    </table>
+  </div>
+
+  <!-- ============================================
+       containerd-shim
+       ============================================ -->
+  <h2>containerd-shim — Decoupling Runtime from Containers</h2>
+
+  <div class="warn">
+    <strong>The problem:</strong> If containerd restarts (e.g., during an upgrade), all containers would die if containerd were their parent process. You can't restart your container manager without killing all containers.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Solution: containerd-shim</div>
+    <p>A small process that sits between containerd and the container, acting as the container's <strong>actual parent process</strong>:</p>
+    <ul>
+      <li>One shim per container (lightweight, ~10MB RSS)</li>
+      <li><strong>runc exits</strong> after starting the container — the shim takes over as parent</li>
+      <li>If containerd restarts, shims keep running, containers stay alive</li>
+      <li>Shim reports container state back to containerd via <strong>ttrpc</strong> (lightweight gRPC variant)</li>
+      <li>Handles <code>stdin</code>/<code>stdout</code>/<code>stderr</code> streams</li>
+      <li>Reaps zombie processes (acts as init/subreaper for container PID 1)</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Current implementation:</strong> <code>containerd-shim-runc-v2</code> — the v2 shim protocol. Other runtimes implement their own shims (e.g., <code>containerd-shim-kata-v2</code>, <code>containerd-shim-runsc-v1</code> for gVisor).
+  </div>
+
+  <!-- ============================================
+       The Full Stack
+       ============================================ -->
+  <h2>The Full Stack — Who Does What</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">User / kubelet</div>
+      <div class="desc">Issues API calls</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">containerd</div>
+      <div class="desc">gRPC daemon: images, snapshots, tasks</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">containerd-shim</div>
+      <div class="desc">Parent process, survives containerd restarts</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">runc</div>
+      <div class="desc">Sets up NS/cgroups, execs, then EXITS</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Container Process</div>
+      <div class="desc">Your workload (PID 1 inside container)</div>
+    </div>
+  </div>
+
+  <h3>Process Tree Visualization</h3>
+
+  <div class="nest-box os">
+    <span class="nest-label">Host OS</span>
+    <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+      <div class="nest-box runtime" style="flex: 1; min-width: 200px;">
+        <span class="nest-label">containerd (daemon)</span>
+        <p style="color: #888; font-size: 13px; margin: 8px 0;">Manages images, snapshots, tasks. Communicates via gRPC. Can restart without killing containers.</p>
+      </div>
+      <div class="nest-box container" style="flex: 2; min-width: 300px;">
+        <span class="nest-label">containerd-shim (per container)</span>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px;">
+          <div class="panel" style="flex: 1; min-width: 140px; margin: 0;">
+            <div class="panel-title">Container A</div>
+            <p style="font-size: 12px; color: #888;">PID 1: nginx</p>
+          </div>
+          <div class="panel" style="flex: 1; min-width: 140px; margin: 0;">
+            <div class="panel-title">Container B</div>
+            <p style="font-size: 12px; color: #888;">PID 1: python app.py</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p style="color: #666; font-size: 12px; margin-top: 10px;">Note: runc is NOT in this tree — it already exited after setting up each container.</p>
+  </div>
+
+  <!-- ============================================
+       CRI: Container Runtime Interface
+       ============================================ -->
+  <h2>CRI — Container Runtime Interface</h2>
+
+  <div class="panel">
+    <div class="panel-title">Why CRI Exists</div>
+    <ul>
+      <li>Kubernetes needed a <strong>stable, runtime-agnostic API</strong> to manage containers</li>
+      <li>Early Kubernetes was tightly coupled to Docker — adding new runtimes required modifying kubelet</li>
+      <li>CRI = a <strong>gRPC API specification</strong> that any runtime can implement</li>
+      <li>kubelet speaks CRI; the runtime translates CRI calls into actual container operations</li>
+    </ul>
+  </div>
+
+  <h3>CRI Services</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header k8s">RuntimeService</div>
+      <div class="comp-body">
+        <p><strong>Pod-level:</strong></p>
+        <ul>
+          <li><code>RunPodSandbox</code> — create the pod's network namespace and infra container</li>
+          <li><code>StopPodSandbox</code></li>
+          <li><code>RemovePodSandbox</code></li>
+          <li><code>PodSandboxStatus</code></li>
+        </ul>
+        <p style="margin-top: 10px;"><strong>Container-level:</strong></p>
+        <ul>
+          <li><code>CreateContainer</code></li>
+          <li><code>StartContainer</code></li>
+          <li><code>StopContainer</code></li>
+          <li><code>RemoveContainer</code></li>
+          <li><code>ListContainers</code></li>
+          <li><code>ContainerStatus</code></li>
+          <li><code>ExecSync</code> / <code>Exec</code></li>
+          <li><code>Attach</code> / <code>PortForward</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header docker">ImageService</div>
+      <div class="comp-body">
+        <ul>
+          <li><code>PullImage</code> — download image from registry</li>
+          <li><code>RemoveImage</code></li>
+          <li><code>ListImages</code></li>
+          <li><code>ImageStatus</code></li>
+          <li><code>ImageFsInfo</code> — filesystem usage stats</li>
+        </ul>
+        <p style="margin-top: 10px; color: #888;">The ImageService is simpler — just CRUD on images. All the heavy lifting (layer deduplication, content-addressable storage) is handled by the runtime internally.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Historical Docker Path vs Modern
+       ============================================ -->
+  <h2>Historical vs Modern Runtime Path</h2>
+
+  <h3>Old Path (before Kubernetes 1.24)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">kubelet</div>
+      <div class="desc">Kubernetes node agent</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #ef4444;">
+      <div class="label" style="color: #f87171;">dockershim</div>
+      <div class="desc">Built INTO kubelet, translated CRI to Docker API</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Docker daemon</div>
+      <div class="desc">dockerd — full Docker engine</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">containerd</div>
+      <div class="desc">Embedded in Docker</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">runc</div>
+      <div class="desc">OCI runtime</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The problem:</strong> kubelet &rarr; dockershim &rarr; Docker &rarr; containerd &rarr; runc = <em>4 layers of indirection</em>. Docker added features (build, swarm, CLI) that Kubernetes didn't need. The dockershim was removed in Kubernetes 1.24 (April 2022).
+  </div>
+
+  <h3>Current Path (Kubernetes 1.24+)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">kubelet</div>
+      <div class="desc">Kubernetes node agent</div>
+    </div>
+    <div class="arrow">CRI &rarr;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">containerd</div>
+      <div class="desc">CRI plugin built-in</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">containerd-shim</div>
+      <div class="desc">Parent process</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">runc</div>
+      <div class="desc">OCI runtime (exits)</div>
+    </div>
+  </div>
+
+  <h3>Alternative Path (CRI-O)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">kubelet</div>
+      <div class="desc">Kubernetes node agent</div>
+    </div>
+    <div class="arrow">CRI &rarr;</div>
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="label" style="color: #60a5fa;">CRI-O</div>
+      <div class="desc">CRI-native runtime</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">conmon</div>
+      <div class="desc">Container monitor (like shim)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">runc</div>
+      <div class="desc">OCI runtime (exits)</div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       CRI-O
+       ============================================ -->
+  <h2>CRI-O</h2>
+
+  <div class="panel">
+    <div class="panel-title">CRI-O — Purpose-Built for Kubernetes</div>
+    <ul>
+      <li>Built by <strong>Red Hat</strong>, specifically for Kubernetes</li>
+      <li>Implements <strong>only CRI</strong> — nothing extra (no build, no push, no standalone container management)</li>
+      <li>Simpler codebase than containerd (does less, so less attack surface)</li>
+      <li>Uses <code>conmon</code> (container monitor) instead of containerd-shim — same role, different implementation</li>
+      <li>Default runtime in <strong>OpenShift</strong> and RHEL-based Kubernetes distributions</li>
+      <li>Version-locked to Kubernetes (CRI-O 1.28 for K8s 1.28)</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>conmon vs containerd-shim:</strong> Both serve the same purpose — act as the parent process of the container after the OCI runtime exits. conmon is written in C, containerd-shim in Go. conmon also handles logging (writing container stdout/stderr to disk).
+  </div>
+
+  <!-- ============================================
+       Comparison Table
+       ============================================ -->
+  <h2>Comparison: Docker vs containerd vs CRI-O</h2>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>Docker</th>
+      <th>containerd</th>
+      <th>CRI-O</th>
+    </tr>
+    <tr>
+      <td><strong>Image pull</strong></td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td><strong>Image build</strong></td>
+      <td>Yes (<code>docker build</code>)</td>
+      <td>No (use BuildKit separately)</td>
+      <td>No (use Buildah, kaniko)</td>
+    </tr>
+    <tr>
+      <td><strong>CRI support</strong></td>
+      <td>Via dockershim (removed K8s 1.24)</td>
+      <td>Built-in CRI plugin</td>
+      <td>Native (CRI is all it does)</td>
+    </tr>
+    <tr>
+      <td><strong>CLI tool</strong></td>
+      <td><code>docker</code></td>
+      <td><code>ctr</code> / <code>nerdctl</code></td>
+      <td><code>crictl</code></td>
+    </tr>
+    <tr>
+      <td><strong>Container monitor</strong></td>
+      <td>containerd-shim (via containerd)</td>
+      <td>containerd-shim</td>
+      <td>conmon</td>
+    </tr>
+    <tr>
+      <td><strong>Standalone use</strong></td>
+      <td>Yes (docker run)</td>
+      <td>Yes (nerdctl run)</td>
+      <td>No (Kubernetes only)</td>
+    </tr>
+    <tr>
+      <td><strong>Used by</strong></td>
+      <td>Docker Desktop, dev machines</td>
+      <td>Most K8s clusters, Docker Engine</td>
+      <td>OpenShift, RHEL K8s</td>
+    </tr>
+    <tr>
+      <td><strong>Scope</strong></td>
+      <td>Full platform (build, run, push, compose, swarm)</td>
+      <td>Container runtime + image management</td>
+      <td>CRI implementation only</td>
+    </tr>
+  </table>
+
+  <!-- ============================================
+       CLI tools quick reference
+       ============================================ -->
+  <h2>CLI Tools Quick Reference</h2>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">ctr (containerd)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>ctr images pull docker.io/library/nginx:latest<br>
+        <span class="prompt">$ </span>ctr containers create nginx:latest myng<br>
+        <span class="prompt">$ </span>ctr tasks start myng<br>
+        <span class="prompt">$ </span>ctr tasks list<br>
+        <span class="prompt">$ </span>ctr tasks kill myng<br>
+      </div>
+      <p style="font-size: 12px; color: #888; margin-top: 8px;">Low-level, for debugging. No docker-compose equivalent.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">nerdctl (containerd)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>nerdctl run -d --name myng nginx<br>
+        <span class="prompt">$ </span>nerdctl ps<br>
+        <span class="prompt">$ </span>nerdctl logs myng<br>
+        <span class="prompt">$ </span>nerdctl stop myng<br>
+        <span class="prompt">$ </span>nerdctl compose up<br>
+      </div>
+      <p style="font-size: 12px; color: #888; margin-top: 8px;">Docker-compatible CLI. Supports compose files.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">crictl (any CRI runtime)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>crictl pull nginx:latest<br>
+        <span class="prompt">$ </span>crictl images<br>
+        <span class="prompt">$ </span>crictl pods<br>
+        <span class="prompt">$ </span>crictl ps<br>
+        <span class="prompt">$ </span>crictl logs &lt;container-id&gt;<br>
+      </div>
+      <p style="font-size: 12px; color: #888; margin-top: 8px;">Works with containerd AND CRI-O. K8s debugging tool.</p>
+    </div>
+  </div>
+
+  <!-- ============================================
+       How containerd Processes an Image
+       ============================================ -->
+  <h2>How containerd Processes an Image into a Container</h2>
+
+  <div class="steps">
+    <div class="step"><div class="step-num">1</div><div><strong>Pull manifest</strong> — fetch OCI image index / manifest from registry (content-addressable by digest)</div></div>
+    <div class="step"><div class="step-num">2</div><div><strong>Pull config blob</strong> — image config contains default CMD, ENV, exposed ports, layer digests</div></div>
+    <div class="step"><div class="step-num">3</div><div><strong>Pull layers</strong> — download each layer tarball (gzip-compressed), store in content store</div></div>
+    <div class="step"><div class="step-num">4</div><div><strong>Prepare snapshot</strong> — overlay2 snapshotter stacks layers: base &rarr; layer1 &rarr; layer2 &rarr; ... &rarr; writable top layer</div></div>
+    <div class="step"><div class="step-num">5</div><div><strong>Generate OCI bundle</strong> — create rootfs from snapshot + generate config.json from image config + pod spec</div></div>
+    <div class="step"><div class="step-num">6</div><div><strong>Create shim</strong> — spawn containerd-shim-runc-v2 process</div></div>
+    <div class="step"><div class="step-num">7</div><div><strong>Shim invokes runc</strong> — runc create (sets up NS, cgroups, mounts) &rarr; runc start (execs process) &rarr; runc exits</div></div>
+    <div class="step"><div class="step-num">8</div><div><strong>Container running</strong> — shim is parent process, reports state to containerd via ttrpc</div></div>
+  </div>
+
+</body>
+</html>

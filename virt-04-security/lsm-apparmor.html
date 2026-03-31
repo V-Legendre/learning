@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 04 — LSMs, AppArmor & SELinux</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Virt 04 — LSMs, AppArmor & SELinux</h1>
+  <p class="subtitle">Mandatory Access Control — the last line of container defense</p>
+
+  <!-- ============================== -->
+  <!-- Linux Security Modules (LSM)   -->
+  <!-- ============================== -->
+  <h2>Linux Security Modules (LSM) Framework</h2>
+
+  <div class="panel">
+    <div class="panel-title">What is LSM?</div>
+    <p>LSM is a <strong>framework of hooks</strong> placed throughout the Linux kernel. When the kernel is about to perform a sensitive operation (opening a file, creating a socket, mounting a filesystem), it calls the registered LSM hooks <em>before</em> proceeding. Security modules plug into these hooks to enforce their policies.</p>
+  </div>
+
+  <h3>DAC vs. MAC</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">DAC — Discretionary Access Control</div>
+      <div class="comp-body">
+        <p>Traditional Unix file permissions:</p>
+        <ul>
+          <li>Owner sets permissions (<code>chmod</code>, <code>chown</code>)</li>
+          <li><strong>Root bypasses everything</strong></li>
+          <li>Users can share files however they want</li>
+          <li>No system-wide policy enforcement</li>
+        </ul>
+        <p style="color:#888; margin-top:8px;">If a process runs as root, DAC provides zero protection. Root can read any file, kill any process, bind any port.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">MAC — Mandatory Access Control</div>
+      <div class="comp-body">
+        <p>System-enforced security policy:</p>
+        <ul>
+          <li>Administrator defines policy centrally</li>
+          <li><strong>Even root is restricted</strong></li>
+          <li>Processes cannot override the policy</li>
+          <li>Every access is checked against the policy</li>
+        </ul>
+        <p style="color:#888; margin-top:8px;">Even if an attacker gains root inside a container, the MAC policy prevents accessing host files, loading kernel modules, or escaping.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Major LSM Implementations</h3>
+
+  <table>
+    <tr>
+      <th>LSM</th>
+      <th>Approach</th>
+      <th>Default On</th>
+      <th>Used By</th>
+    </tr>
+    <tr>
+      <td><strong>AppArmor</strong></td>
+      <td>Path-based profiles — each program has rules about which paths it can access</td>
+      <td>Ubuntu, Debian, SUSE</td>
+      <td>Docker (default on Ubuntu)</td>
+    </tr>
+    <tr>
+      <td><strong>SELinux</strong></td>
+      <td>Label-based policies — every object gets a security label, rules define label interactions</td>
+      <td>RHEL, CentOS, Fedora</td>
+      <td>Podman, CRI-O, OpenShift</td>
+    </tr>
+    <tr>
+      <td><strong>TOMOYO</strong></td>
+      <td>Path-based, learning mode for profile generation</td>
+      <td>None (opt-in)</td>
+      <td>Niche use</td>
+    </tr>
+    <tr>
+      <td><strong>Smack</strong></td>
+      <td>Simplified label-based MAC</td>
+      <td>Tizen OS</td>
+      <td>Embedded/IoT</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>LSM stacking:</strong> Since Linux 5.1, multiple <em>minor</em> LSMs can stack alongside one <em>major</em> LSM. Since Linux 6.8+, full major LSM stacking is supported (e.g., AppArmor + SELinux simultaneously, though this is rarely done in practice).
+  </div>
+
+  <!-- ============================== -->
+  <!-- AppArmor                        -->
+  <!-- ============================== -->
+  <h2>AppArmor</h2>
+
+  <p>AppArmor uses <strong>path-based profiles</strong> — each program has a profile that defines exactly which files, capabilities, and network operations it can use. If a program tries something not in its profile, the access is denied.</p>
+
+  <h3>Profile Modes</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Enforce Mode</div>
+      <div class="comp-body">
+        <p>Violations are <strong>denied and logged</strong>.</p>
+        <p>This is the production mode — rules are actively enforced.</p>
+<pre><code><span class="fn">aa-enforce</span> /etc/apparmor.d/usr.sbin.nginx</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Complain Mode</div>
+      <div class="comp-body">
+        <p>Violations are <strong>logged but allowed</strong>.</p>
+        <p>Used for profiling and testing — lets you see what a program needs before writing a strict profile.</p>
+<pre><code><span class="fn">aa-complain</span> /etc/apparmor.d/usr.sbin.nginx</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>What Profiles Define</h3>
+
+  <div class="panel">
+    <div class="panel-title">Example AppArmor Profile</div>
+<pre><code><span class="cm"># /etc/apparmor.d/usr.sbin.nginx</span>
+
+<span class="kw">#include</span> &lt;tunables/global&gt;
+
+<span class="type">/usr/sbin/nginx</span> {
+  <span class="kw">#include</span> &lt;abstractions/base&gt;
+  <span class="kw">#include</span> &lt;abstractions/nameservice&gt;
+
+  <span class="cm">## File access rules</span>
+  <span class="str">/etc/nginx/**</span>                <span class="kw">r</span>,     <span class="cm"># read config files</span>
+  <span class="str">/var/log/nginx/**</span>             <span class="kw">rw</span>,    <span class="cm"># read/write logs</span>
+  <span class="str">/var/www/html/**</span>              <span class="kw">r</span>,     <span class="cm"># read web content</span>
+  <span class="str">/run/nginx.pid</span>               <span class="kw">rw</span>,    <span class="cm"># PID file</span>
+  <span class="str">/usr/sbin/nginx</span>              <span class="kw">mr</span>,    <span class="cm"># read + mmap self</span>
+
+  <span class="cm">## Capability rules</span>
+  <span class="kw">capability</span> net_bind_service,         <span class="cm"># bind port 80/443</span>
+  <span class="kw">capability</span> setuid,                   <span class="cm"># drop privileges after start</span>
+  <span class="kw">capability</span> setgid,
+  <span class="kw">capability</span> dac_override,
+
+  <span class="cm">## Network rules</span>
+  <span class="kw">network</span> inet stream,                 <span class="cm"># TCP over IPv4</span>
+  <span class="kw">network</span> inet6 stream,                <span class="cm"># TCP over IPv6</span>
+
+  <span class="cm">## Deny everything else implicitly</span>
+  <span class="kw">deny</span> <span class="str">/proc/sysrq-trigger</span>  <span class="kw">rwklx</span>,   <span class="cm"># explicit deny + log</span>
+  <span class="kw">deny</span> <span class="str">/proc/kcore</span>          <span class="kw">rwklx</span>,
+}</code></pre>
+  </div>
+
+  <table>
+    <tr>
+      <th>Rule Type</th>
+      <th>Syntax</th>
+      <th>What It Controls</th>
+    </tr>
+    <tr>
+      <td>File access</td>
+      <td><code>/path r</code>, <code>/path rw</code>, <code>/path/** rix</code></td>
+      <td>Read, write, execute, memory-map, link — per file/directory</td>
+    </tr>
+    <tr>
+      <td>Capabilities</td>
+      <td><code>capability net_bind_service</code></td>
+      <td>Which Linux capabilities the process can use</td>
+    </tr>
+    <tr>
+      <td>Network</td>
+      <td><code>network inet stream</code></td>
+      <td>Which address families and socket types are allowed</td>
+    </tr>
+    <tr>
+      <td>Mount</td>
+      <td><code>mount options=(ro) /dev/sda -> /mnt</code></td>
+      <td>Which mount operations are permitted</td>
+    </tr>
+    <tr>
+      <td>Signal</td>
+      <td><code>signal send set=(term) peer=other_profile</code></td>
+      <td>Which signals can be sent to which processes</td>
+    </tr>
+    <tr>
+      <td>Deny</td>
+      <td><code>deny /path rwklx</code></td>
+      <td>Explicit deny — overrides any allow rule, always logged</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>File permission codes:</strong> <code>r</code> = read, <code>w</code> = write, <code>x</code> = execute, <code>m</code> = memory map executable, <code>k</code> = lock, <code>l</code> = link, <code>ix</code> = inherit execute (child inherits profile), <code>px</code> = profile execute (child gets its own profile).
+  </div>
+
+  <!-- ============================== -->
+  <!-- Docker's default AppArmor      -->
+  <!-- ============================== -->
+  <h3>Docker's <code>docker-default</code> AppArmor Profile</h3>
+
+  <p>When Docker runs on a system with AppArmor enabled (Ubuntu, Debian), it automatically applies the <code>docker-default</code> profile to every container. This profile:</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color:#ef4444;">Denies</div>
+      <ul>
+        <li>Writing to <code>/proc/sysrq-trigger</code> (magic SysRq — can reboot, kill all processes)</li>
+        <li>Reading <code>/proc/kcore</code> (physical memory dump)</li>
+        <li>Writing to <code>/proc/acpi/alarm</code></li>
+        <li>Accessing <code>/sys/firmware/**</code></li>
+        <li>Mounting any filesystem</li>
+        <li>Modifying <code>/proc/sys/**</code> (kernel tunables)</li>
+        <li>Accessing <code>/sys/kernel/security/**</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#34d399;">Allows</div>
+      <ul>
+        <li>All normal file operations within the container's filesystem</li>
+        <li>Network operations (container networking)</li>
+        <li>Signal sending within the container's PID namespace</li>
+        <li>Reading most <code>/proc</code> entries</li>
+        <li>Standard capabilities granted by Docker</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Overriding AppArmor in Docker and Kubernetes</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Docker</div>
+<pre><code><span class="cm"># Disable AppArmor for a container</span>
+<span class="fn">docker run</span> \
+  <span class="kw">--security-opt</span> <span class="str">apparmor=unconfined</span> \
+  nginx
+
+<span class="cm"># Use a custom profile</span>
+<span class="fn">docker run</span> \
+  <span class="kw">--security-opt</span> <span class="str">apparmor=my-custom-profile</span> \
+  nginx
+
+<span class="cm"># Load a profile first</span>
+<span class="fn">apparmor_parser</span> -r -W /etc/apparmor.d/my-custom-profile</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Kubernetes</div>
+<pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Pod
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">secure-pod</span>
+  <span class="kw">annotations</span>:
+    <span class="cm"># Per-container annotation</span>
+    <span class="str">container.apparmor.security</span>
+     <span class="str">.beta.kubernetes.io/web</span>:
+      <span class="str">localhost/my-custom-profile</span>
+<span class="kw">spec</span>:
+  <span class="kw">containers</span>:
+  - <span class="kw">name</span>: <span class="str">web</span>
+    <span class="kw">image</span>: <span class="str">nginx</span></code></pre>
+      <p style="color:#888; font-size:13px; margin-top:8px;">The profile must be loaded on the node where the pod runs. K8s does not distribute profiles — use a DaemonSet or init system to load them.</p>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- SELinux                         -->
+  <!-- ============================== -->
+  <h2>SELinux</h2>
+
+  <p>SELinux uses a <strong>label-based</strong> approach. Every process, file, port, and socket gets a security label. Policies define which label interactions are permitted.</p>
+
+  <h3>SELinux Labels</h3>
+
+  <div class="panel">
+    <div class="panel-title">Label Format: user:role:type:level</div>
+    <div class="mapping">
+      <div>
+        <code style="font-size: 15px;">system_u:system_r:container_t:s0:c1,c2</code>
+      </div>
+      <div class="arr">&darr;</div>
+      <div></div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px;">
+      <div class="panel" style="margin:0; text-align:center;">
+        <div class="panel-title" style="color:#a78bfa;">User</div>
+        <code>system_u</code>
+        <p style="font-size:12px; color:#888; margin-top:4px;">SELinux user identity (not Unix user)</p>
+      </div>
+      <div class="panel" style="margin:0; text-align:center;">
+        <div class="panel-title" style="color:#60a5fa;">Role</div>
+        <code>system_r</code>
+        <p style="font-size:12px; color:#888; margin-top:4px;">Determines which types/domains are accessible</p>
+      </div>
+      <div class="panel" style="margin:0; text-align:center;">
+        <div class="panel-title" style="color:#34d399;">Type</div>
+        <code>container_t</code>
+        <p style="font-size:12px; color:#888; margin-top:4px;">Main enforcement mechanism — Type Enforcement (TE)</p>
+      </div>
+      <div class="panel" style="margin:0; text-align:center;">
+        <div class="panel-title" style="color:#fbbf24;">Level</div>
+        <code>s0:c1,c2</code>
+        <p style="font-size:12px; color:#888; margin-top:4px;">MCS/MLS — sensitivity + categories</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>How SELinux Protects Containers</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Type Enforcement (TE)</strong> — Container processes run as <code>container_t</code>. SELinux policy defines what <code>container_t</code> can access: container files (<code>container_file_t</code>), container ports, etc. It <em>cannot</em> access <code>etc_t</code>, <code>var_log_t</code>, or other host file types.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Multi-Category Security (MCS)</strong> — Each container gets <strong>unique category labels</strong> (e.g., <code>c1,c2</code> vs. <code>c3,c4</code>). Even though both containers are <code>container_t</code>, they <em>cannot access each other's files</em> because the categories don't match.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Separation</strong> — Container A (<code>s0:c1,c2</code>) cannot read files labeled <code>s0:c3,c4</code> (Container B). The kernel checks categories at every file access, even for root.
+      </div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">AppArmor</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Path-based</strong> — rules reference file paths</li>
+          <li>Easier to write and understand</li>
+          <li>Profile per program</li>
+          <li>No relabeling needed</li>
+          <li>Default on: Ubuntu, Debian, SUSE</li>
+          <li>Used by Docker by default (on Ubuntu)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header linux">SELinux</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Label-based</strong> — rules reference security labels</li>
+          <li>More granular, harder to learn</li>
+          <li>System-wide policy for all processes</li>
+          <li>Files must be labeled correctly</li>
+          <li>Default on: RHEL, CentOS, Fedora</li>
+          <li>Used by Podman, CRI-O, OpenShift</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>SELinux in Docker</h3>
+
+  <div class="panel">
+    <div class="panel-title">Managing SELinux for containers</div>
+<pre><code><span class="cm"># Disable SELinux for a container (not recommended)</span>
+<span class="fn">docker run</span> <span class="kw">--security-opt</span> <span class="str">label=disable</span> nginx
+
+<span class="cm"># Set a custom SELinux label</span>
+<span class="fn">docker run</span> <span class="kw">--security-opt</span> <span class="str">label=type:custom_t</span> nginx
+
+<span class="cm"># Check container labels</span>
+<span class="fn">ps</span> -eZ | <span class="fn">grep</span> <span class="str">container</span>
+<span class="output">system_u:system_r:container_t:s0:c100,c200  12345 ?  00:00:01 nginx</span>
+
+<span class="cm"># Check file labels</span>
+<span class="fn">ls</span> -Z /var/lib/docker/volumes/
+<span class="output">system_u:object_r:container_file_t:s0:c100,c200  my_volume</span></code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Volume mount gotcha:</strong> When mounting host directories into containers with SELinux, you often need the <code>:z</code> or <code>:Z</code> suffix to relabel the content:
+    <ul style="margin-top:8px;">
+      <li><code>-v /data:/data:z</code> — shared label (multiple containers can access)</li>
+      <li><code>-v /data:/data:Z</code> — private label (only this container)</li>
+    </ul>
+    Without relabeling, SELinux denies access even though the file permissions look correct.
+  </div>
+
+  <!-- ============================== -->
+  <!-- Defense in Depth                -->
+  <!-- ============================== -->
+  <h2>Defense in Depth — The Container Security Boundary</h2>
+
+  <p>No single mechanism provides container security. The boundary is built from <strong>multiple overlapping layers</strong>, each catching what others miss:</p>
+
+  <div class="nest-box hardware" style="padding: 24px;">
+    <span class="nest-label">Hardware / Host Kernel</span>
+    <div class="nest-box os" style="padding: 20px; margin-top: 12px;">
+      <span class="nest-label">Layer 1 — Linux Security Module (AppArmor / SELinux)</span>
+      <p style="font-size:13px; color:#888; margin: 8px 0 12px;">MAC policy enforcement — restricts file, network, and capability access even for root</p>
+      <div class="nest-box namespace" style="padding: 20px;">
+        <span class="nest-label">Layer 2 — Seccomp-BPF</span>
+        <p style="font-size:13px; color:#888; margin: 8px 0 12px;">Syscall filtering — blocks dangerous kernel interfaces (mount, reboot, kexec)</p>
+        <div class="nest-box runtime" style="padding: 20px;">
+          <span class="nest-label">Layer 3 — Linux Capabilities</span>
+          <p style="font-size:13px; color:#888; margin: 8px 0 12px;">Privilege subsetting — splits root into discrete, droppable units</p>
+          <div class="nest-box cgroup" style="padding: 20px;">
+            <span class="nest-label">Layer 4 — cgroups (Resource Limits)</span>
+            <p style="font-size:13px; color:#888; margin: 8px 0 12px;">Prevents CPU/memory/IO exhaustion — <a href="../virt-03-cgroups/index.html">see Virt 03</a></p>
+            <div class="nest-box namespace" style="padding: 20px;">
+              <span class="nest-label">Layer 5 — Namespaces (View Isolation)</span>
+              <p style="font-size:13px; color:#888; margin: 8px 0 12px;">Hides host PIDs, network, mounts, users — <a href="../virt-02-namespaces/index.html">see Virt 02</a></p>
+              <div class="nest-box container" style="padding: 20px; text-align: center;">
+                <span class="nest-label">Container Process</span>
+                <p style="font-size: 15px; color: #34d399; font-weight: bold; margin-top: 10px;">
+                  Isolated process running here
+                </p>
+                <p style="font-size: 12px; color: #888;">Must pass through ALL layers to reach the host</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Critical limitation:</strong> No single layer is sufficient. Containers share the host kernel — a <strong>kernel exploit bypasses ALL these layers</strong>. Every layer above is enforced <em>by</em> the kernel. If an attacker can execute arbitrary code in kernel space, namespaces, cgroups, capabilities, seccomp, and LSMs are all irrelevant. For stronger isolation, see sandboxed runtimes (gVisor, Kata Containers) in <a href="../virt-06-container-runtimes/sandboxed-runtimes.html">Virt 06</a>.
+  </div>
+
+  <!-- ============================== -->
+  <!-- Summary Table                   -->
+  <!-- ============================== -->
+  <h2>Container Security Layers — Summary</h2>
+
+  <table>
+    <tr>
+      <th>Layer</th>
+      <th>Mechanism</th>
+      <th>What It Does</th>
+      <th>If Bypassed</th>
+    </tr>
+    <tr>
+      <td style="color:#a78bfa; font-weight:bold;">MAC</td>
+      <td>AppArmor / SELinux</td>
+      <td>Restricts file access, network operations, and capability usage — even for root</td>
+      <td style="color:#f87171;">Attacker can access any host file, load kernel modules, modify system configuration</td>
+    </tr>
+    <tr>
+      <td style="color:#60a5fa; font-weight:bold;">Syscall Filter</td>
+      <td>Seccomp-BPF</td>
+      <td>Blocks dangerous syscalls — prevents mount, reboot, kexec, module loading</td>
+      <td style="color:#f87171;">Attacker can invoke any kernel interface, exploit kernel vulnerabilities via obscure syscalls</td>
+    </tr>
+    <tr>
+      <td style="color:#22d3ee; font-weight:bold;">Capabilities</td>
+      <td>Linux capabilities</td>
+      <td>Limits root powers — each container gets only the capabilities it needs</td>
+      <td style="color:#f87171;">Attacker can escalate to full root — mount, ptrace, load modules, configure networking</td>
+    </tr>
+    <tr>
+      <td style="color:#fbbf24; font-weight:bold;">Resources</td>
+      <td>cgroups</td>
+      <td>Prevents resource exhaustion — CPU, memory, I/O, PIDs limits</td>
+      <td style="color:#f87171;">Attacker can DoS the host — consume all memory, fork bomb, saturate I/O</td>
+    </tr>
+    <tr>
+      <td style="color:#34d399; font-weight:bold;">View</td>
+      <td>Namespaces</td>
+      <td>Hides host resources — separate PID, network, mount, user, UTS, IPC views</td>
+      <td style="color:#f87171;">Attacker can see and interact with host processes, network stack, and filesystem</td>
+    </tr>
+  </table>
+
+  <h3>How the Layers Interact</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Process calls syscall</div>
+      <div class="desc">e.g., open("/etc/shadow")</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Seccomp check</div>
+      <div class="desc">Is open() allowed at all?</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Capability check</div>
+      <div class="desc">Does process have CAP_DAC_OVERRIDE?</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">DAC check</div>
+      <div class="desc">Unix file permissions</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">LSM check</div>
+      <div class="desc">AppArmor/SELinux policy allows?</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Order matters:</strong> Seccomp runs first (in the syscall entry path). Then the kernel checks capabilities and DAC. Finally, LSM hooks fire last. A request must pass <em>all</em> checks — any single "deny" blocks the operation.
+  </div>
+
+  <h3>Terminal — Checking Active LSM</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cat /sys/kernel/security/lsm<br>
+    <span class="output">lockdown,capability,landlock,yama,apparmor</span>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Check AppArmor status</span><br>
+    <span class="prompt">$ </span>aa-status<br>
+    <span class="output">apparmor module is loaded.<br>
+54 profiles are loaded.<br>
+42 profiles are in enforce mode.<br>
+   docker-default<br>
+   /usr/sbin/nginx<br>
+   ...<br>
+12 profiles are in complain mode.<br>
+3 processes have profiles defined.<br>
+3 processes are in enforce mode.</span>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Check SELinux status (on RHEL/CentOS)</span><br>
+    <span class="prompt">$ </span>getenforce<br>
+    <span class="output">Enforcing</span><br><br>
+    <span class="prompt">$ </span>sestatus<br>
+    <span class="output">SELinux status:                 enabled<br>
+SELinuxfs mount:                /sys/fs/selinux<br>
+SELinux root directory:         /etc/selinux<br>
+Loaded policy name:             targeted<br>
+Current mode:                   enforcing<br>
+Mode from config file:          enforcing<br>
+Policy MLS status:              enabled<br>
+Policy deny_unknown status:     allowed<br>
+Memory protection checking:     actual (secure)<br>
+Max kernel policy version:      33</span>
+  </div>
+
+</body>
+</html>

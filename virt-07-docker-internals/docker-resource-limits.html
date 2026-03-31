@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virt 07 — Docker Resource Limits</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+  <h1>Virt 07 — Docker Resource Limits</h1>
+  <p class="subtitle">CPU, memory, I/O, and PID limits — and what happens when they're exceeded</p>
+
+  <!-- ============================================
+       CPU Limits
+       ============================================ -->
+  <h2>CPU Limits</h2>
+
+  <div class="panel">
+    <div class="panel-title">Hard Limit: --cpus</div>
+    <p>Sets the maximum number of CPU cores a container can use.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --cpus 2.5 myapp
+    </div>
+    <ul>
+      <li>Container can use at most <strong>2.5 CPU cores</strong></li>
+      <li>Maps to cgroup v2: <code>cpu.max</code> = <code>250000 100000</code> (250ms quota out of every 100ms period)</li>
+      <li>When the quota is exhausted in a period, the container is <strong>throttled</strong> — processes are paused until the next period</li>
+      <li>Container is <strong>never killed</strong> for exceeding CPU — only throttled</li>
+    </ul>
+    <div class="mapping">
+      <div><code>--cpus 2.5</code></div>
+      <div class="arr">&#8594;</div>
+      <div><code>cpu.max: 250000 100000</code></div>
+    </div>
+    <div class="mapping">
+      <div><code>--cpus 0.5</code></div>
+      <div class="arr">&#8594;</div>
+      <div><code>cpu.max: 50000 100000</code></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Proportional Sharing: --cpu-shares</div>
+    <p>Relative CPU weight — only matters when CPU is <strong>contended</strong>.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --cpu-shares 512 myapp
+    </div>
+    <ul>
+      <li>Default: <code>1024</code></li>
+      <li>A container with <code>512</code> shares gets half the CPU time of a container with <code>1024</code> shares — <strong>only when both are competing for CPU</strong></li>
+      <li>When no contention, containers can use all available CPU regardless of shares</li>
+      <li>Maps to cgroup v2: <code>cpu.weight</code> (converted from v1 shares scale)</li>
+    </ul>
+    <div class="note">
+      <strong>Note:</strong> <code>--cpu-shares</code> is a soft limit. Unlike <code>--cpus</code>, it never throttles a container
+      when CPU is available. Think of it as priority, not a cap.
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">CPU Pinning: --cpuset-cpus</div>
+    <p>Restrict a container to specific CPU cores.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --cpuset-cpus "0,1" myapp<br>
+      <span class="prompt">$ </span>docker run --cpuset-cpus "0-3" myapp
+    </div>
+    <ul>
+      <li>Container can <strong>only execute on the specified cores</strong></li>
+      <li>Maps to cgroup: <code>cpuset.cpus</code></li>
+      <li>Use cases: NUMA-aware workloads, latency-sensitive applications, isolating noisy neighbors</li>
+      <li>Combine with <code>--cpus</code> for both pinning and bandwidth limiting</li>
+    </ul>
+    <div class="mapping">
+      <div><code>--cpuset-cpus "0,1"</code></div>
+      <div class="arr">&#8594;</div>
+      <div><code>cpuset.cpus: 0,1</code></div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       Memory Limits
+       ============================================ -->
+  <h2>Memory Limits</h2>
+
+  <div class="panel">
+    <div class="panel-title">Hard Limit: --memory</div>
+    <p>Maximum memory the container can use. Exceeding it triggers the OOM killer.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --memory 512m myapp
+    </div>
+    <ul>
+      <li>Hard limit — maps to cgroup v2: <code>memory.max = 536870912</code> (512 * 1024 * 1024)</li>
+      <li>When the container exceeds this, the kernel OOM killer <strong>kills the container process</strong></li>
+      <li>Docker then applies the restart policy to determine whether to restart it</li>
+      <li>Suffixes: <code>b</code>, <code>k</code>, <code>m</code>, <code>g</code></li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Soft Limit: --memory-reservation</div>
+    <p>Best-effort limit — only enforced when the host is under memory pressure.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --memory 512m --memory-reservation 256m myapp
+    </div>
+    <ul>
+      <li>Maps to cgroup v2: <code>memory.low</code></li>
+      <li>Under normal conditions, the container can use up to <code>--memory</code></li>
+      <li>Under host memory pressure, the kernel tries to reclaim memory down to the reservation level</li>
+      <li>Must be lower than <code>--memory</code></li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Swap: --memory-swap</div>
+    <p>Controls total memory + swap available to the container.</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --memory 512m --memory-swap 1g myapp
+    </div>
+    <ul>
+      <li><code>--memory-swap 1g --memory 512m</code> = 512m RAM + 512m swap (total = swap value)</li>
+      <li><code>--memory-swap -1</code> = unlimited swap</li>
+      <li><code>--memory-swap</code> equal to <code>--memory</code> = <strong>no swap</strong></li>
+      <li>If <code>--memory-swap</code> is not set, swap = 2x memory (default)</li>
+    </ul>
+
+    <table>
+      <tr>
+        <th><code>--memory</code></th>
+        <th><code>--memory-swap</code></th>
+        <th>Result</th>
+      </tr>
+      <tr>
+        <td><code>512m</code></td>
+        <td><code>1g</code></td>
+        <td>512m RAM + 512m swap</td>
+      </tr>
+      <tr>
+        <td><code>512m</code></td>
+        <td><code>512m</code></td>
+        <td>512m RAM + 0 swap</td>
+      </tr>
+      <tr>
+        <td><code>512m</code></td>
+        <td><code>-1</code></td>
+        <td>512m RAM + unlimited swap</td>
+      </tr>
+      <tr>
+        <td><code>512m</code></td>
+        <td>(unset)</td>
+        <td>512m RAM + 512m swap (2x default)</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">OOM Kill Disable: --oom-kill-disable</div>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --memory 512m --oom-kill-disable myapp
+    </div>
+    <ul>
+      <li>Prevents the OOM killer from killing the container when it exceeds <code>--memory</code></li>
+      <li>The container <strong>hangs</strong> instead — memory allocations block indefinitely</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>DANGEROUS:</strong> <code>--oom-kill-disable</code> without <code>--memory</code> is especially dangerous.
+    The container can consume <strong>all host memory</strong>, causing the host's OOM killer to kill random host processes
+    (including other containers, SSH, or system daemons). Always set <code>--memory</code> when using
+    <code>--oom-kill-disable</code>, and even then, think twice — a hung container is rarely better than a restarted one.
+  </div>
+
+  <!-- ============================================
+       I/O Limits
+       ============================================ -->
+  <h2>I/O Limits</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Bandwidth Limits</div>
+      <p>Maximum bytes per second for reads/writes to a specific device.</p>
+      <div class="terminal">
+        <span class="prompt">$ </span>docker run \<br>
+        &nbsp;&nbsp;--device-read-bps /dev/sda:10mb \<br>
+        &nbsp;&nbsp;--device-write-bps /dev/sda:10mb \<br>
+        &nbsp;&nbsp;myapp
+      </div>
+      <ul>
+        <li>Max 10 MB/s read from <code>/dev/sda</code></li>
+        <li>Max 10 MB/s write to <code>/dev/sda</code></li>
+        <li>Maps to cgroup: <code>io.max ... rbps=10485760 wbps=10485760</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">IOPS Limits</div>
+      <p>Maximum I/O operations per second.</p>
+      <div class="terminal">
+        <span class="prompt">$ </span>docker run \<br>
+        &nbsp;&nbsp;--device-read-iops /dev/sda:1000 \<br>
+        &nbsp;&nbsp;--device-write-iops /dev/sda:1000 \<br>
+        &nbsp;&nbsp;myapp
+      </div>
+      <ul>
+        <li>Max 1000 read IOPS from <code>/dev/sda</code></li>
+        <li>Max 1000 write IOPS to <code>/dev/sda</code></li>
+        <li>Maps to cgroup: <code>io.max ... riops=1000 wiops=1000</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Important limitation:</strong> I/O limits only work with <strong>direct I/O</strong> (bypassing the page cache,
+    e.g., <code>O_DIRECT</code>). Buffered I/O goes through the page cache and is not subject to these limits.
+    Most applications use buffered I/O by default, so these limits may have little practical effect unless the workload
+    uses direct I/O (e.g., some databases with <code>O_DIRECT</code> enabled).
+  </div>
+
+  <!-- ============================================
+       PID Limits
+       ============================================ -->
+  <h2>PID Limits</h2>
+
+  <div class="panel">
+    <div class="panel-title">--pids-limit</div>
+    <div class="terminal">
+      <span class="prompt">$ </span>docker run --pids-limit 100 myapp
+    </div>
+    <ul>
+      <li>Maximum <strong>100 processes</strong> (including threads) inside the container</li>
+      <li>Maps to cgroup: <code>pids.max = 100</code></li>
+      <li>Primary use case: <strong>fork bomb protection</strong></li>
+      <li>When the limit is hit, <code>fork()</code> / <code>clone()</code> fails with <code>EAGAIN</code></li>
+      <li>The container is <strong>not killed</strong> — new process creation is simply denied</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without PID Limit</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt">$ </span>docker run ubuntu bash -c ":(){ :|:& };:"<br>
+          <span class="output">Fork bomb consumes all PIDs on the HOST<br>System becomes unresponsive<br>May require hard reboot</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With PID Limit</div>
+      <div class="comp-body">
+        <div class="terminal">
+          <span class="prompt">$ </span>docker run --pids-limit 100 ubuntu bash -c ":(){ :|:& };:"<br>
+          <span class="output">bash: fork: retry: Resource temporarily unavailable<br>Fork bomb contained to 100 processes<br>Host is unaffected</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       docker stats
+       ============================================ -->
+  <h2><code>docker stats</code></h2>
+  <p>Real-time resource usage monitoring — reads directly from cgroup accounting files.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>docker stats --no-stream<br>
+    <span class="output">CONTAINER ID   NAME   CPU %   MEM USAGE / LIMIT     MEM %   NET I/O         BLOCK I/O       PIDS
+abc123def456   web    0.07%   24.5MiB / 512MiB      4.79%   1.2kB / 648B    8.19kB / 0B     5
+def789abc012   db     2.31%   384MiB / 1GiB         37.5%   2.1kB / 1.4kB   12MB / 45MB     28</span>
+  </div>
+
+  <table>
+    <tr>
+      <th>Column</th>
+      <th>Source</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td><code>CPU %</code></td>
+      <td><code>cpu.stat</code></td>
+      <td>Percentage of host CPU time used</td>
+    </tr>
+    <tr>
+      <td><code>MEM USAGE / LIMIT</code></td>
+      <td><code>memory.current</code> / <code>memory.max</code></td>
+      <td>Current memory vs hard limit</td>
+    </tr>
+    <tr>
+      <td><code>NET I/O</code></td>
+      <td>Network namespace counters</td>
+      <td>Total bytes received / transmitted</td>
+    </tr>
+    <tr>
+      <td><code>BLOCK I/O</code></td>
+      <td><code>io.stat</code></td>
+      <td>Total bytes read / written to block devices</td>
+    </tr>
+    <tr>
+      <td><code>PIDS</code></td>
+      <td><code>pids.current</code></td>
+      <td>Number of processes in the container</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Tip:</strong> <code>docker stats</code> (without <code>--no-stream</code>) gives a live-updating view,
+    similar to <code>top</code>. Use <code>--no-stream</code> for scripting and one-shot snapshots.
+  </div>
+
+  <!-- ============================================
+       Custom Runtimes
+       ============================================ -->
+  <h2>Custom Runtimes</h2>
+  <p>Docker supports pluggable OCI runtimes. Instead of runc, you can use security-focused alternatives:</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">gVisor (runsc)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>docker run --runtime=runsc myapp
+      </div>
+      <ul>
+        <li>User-space kernel that intercepts syscalls</li>
+        <li>Container processes never directly touch the host kernel</li>
+        <li>Stronger isolation at the cost of performance and syscall compatibility</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Kata Containers</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>docker run --runtime=kata-runtime myapp
+      </div>
+      <ul>
+        <li>Runs each container inside a lightweight VM</li>
+        <li>Full kernel isolation — each container has its own kernel</li>
+        <li>Higher overhead than runc, but VM-level security</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>Runtimes are configured in <code>/etc/docker/daemon.json</code>:</p>
+
+  <pre><code>{
+  <span class="str">"runtimes"</span>: {
+    <span class="str">"runsc"</span>: {
+      <span class="str">"path"</span>: <span class="str">"/usr/local/bin/runsc"</span>
+    },
+    <span class="str">"kata-runtime"</span>: {
+      <span class="str">"path"</span>: <span class="str">"/usr/bin/kata-runtime"</span>
+    }
+  },
+  <span class="str">"default-runtime"</span>: <span class="str">"runc"</span>
+}</code></pre>
+
+  <!-- ============================================
+       Cross-References
+       ============================================ -->
+  <h2>Cross-References</h2>
+  <div class="note">
+    <strong>Related:</strong> For the cgroup internals behind these flags (cpu.max, memory.max, pids.max, io.max),
+    see <a href="../virt-03-cgroups/cgroup-controllers.html">Virt 03 — cgroup Controllers</a>.
+  </div>
+  <div class="note">
+    <strong>Related:</strong> For Kubernetes resource limits (requests, limits, QoS classes) which build on these
+    same cgroup mechanisms, see <a href="../virt-03-cgroups/cgroup-in-practice.html">Virt 03 — cgroups in Practice</a>.
+  </div>
+
+  <!-- ============================================
+       Quick Reference Table
+       ============================================ -->
+  <h2>Quick Reference Table</h2>
+
+  <table>
+    <tr>
+      <th>Docker Flag</th>
+      <th>cgroup File</th>
+      <th>Behavior on Exceed</th>
+    </tr>
+    <tr>
+      <td><code>--cpus 2</code></td>
+      <td><code>cpu.max 200000 100000</code></td>
+      <td><strong>Throttled</strong> — processes paused until next period</td>
+    </tr>
+    <tr>
+      <td><code>--cpu-shares 512</code></td>
+      <td><code>cpu.weight ~50</code></td>
+      <td><strong>Gets less CPU</strong> (only when contended)</td>
+    </tr>
+    <tr>
+      <td><code>--cpuset-cpus "0,1"</code></td>
+      <td><code>cpuset.cpus 0,1</code></td>
+      <td><strong>Restricted</strong> to those cores only</td>
+    </tr>
+    <tr>
+      <td><code>--memory 512m</code></td>
+      <td><code>memory.max 536870912</code></td>
+      <td><strong>OOM killed</strong> — process terminated by kernel</td>
+    </tr>
+    <tr>
+      <td><code>--memory-reservation 256m</code></td>
+      <td><code>memory.low 268435456</code></td>
+      <td><strong>Reclaim pressure</strong> — best-effort under contention</td>
+    </tr>
+    <tr>
+      <td><code>--pids-limit 100</code></td>
+      <td><code>pids.max 100</code></td>
+      <td><strong>Fork fails</strong> — <code>EAGAIN</code> error on <code>fork()</code>/<code>clone()</code></td>
+    </tr>
+    <tr>
+      <td><code>--device-read-bps /dev/sda:10mb</code></td>
+      <td><code>io.max ... rbps=10485760</code></td>
+      <td><strong>Throttled</strong> — reads delayed until bandwidth available</td>
+    </tr>
+    <tr>
+      <td><code>--device-write-bps /dev/sda:10mb</code></td>
+      <td><code>io.max ... wbps=10485760</code></td>
+      <td><strong>Throttled</strong> — writes delayed until bandwidth available</td>
+    </tr>
+    <tr>
+      <td><code>--device-read-iops /dev/sda:1000</code></td>
+      <td><code>io.max ... riops=1000</code></td>
+      <td><strong>Throttled</strong> — I/O ops queued</td>
+    </tr>
+    <tr>
+      <td><code>--device-write-iops /dev/sda:1000</code></td>
+      <td><code>io.max ... wiops=1000</code></td>
+      <td><strong>Throttled</strong> — I/O ops queued</td>
+    </tr>
+  </table>
+
+  <!-- ============================================
+       Summary Diagram
+       ============================================ -->
+  <h2>What Happens When Limits Are Exceeded</h2>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label">CPU Exceeded</div>
+      <div class="desc" style="color: #fbbf24;">THROTTLED<br>Processes paused, never killed</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step" style="border-color: #ef4444;">
+      <div class="label">Memory Exceeded</div>
+      <div class="desc" style="color: #f87171;">OOM KILLED<br>Process terminated by kernel</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label">I/O Exceeded</div>
+      <div class="desc" style="color: #fbbf24;">THROTTLED<br>I/O operations delayed</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="label">PIDs Exceeded</div>
+      <div class="desc" style="color: #60a5fa;">FORK DENIED<br>EAGAIN, existing processes unaffected</div>
+    </div>
+  </div>
+
+</body>
+</html>
