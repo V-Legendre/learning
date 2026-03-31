@@ -379,3 +379,317 @@ td {
 /* --- Links --- */
 a { color: #82aaff; }
 a:hover { color: #c3e88d; }
+
+/* ============================================
+   Networking-specific styles
+   ============================================ */
+
+/* --- OSI/TCP-IP Layer Diagrams --- */
+.layer-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 20px 0;
+  max-width: 700px;
+}
+
+.layer {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  border: 1px solid #2a2a4a;
+  font-size: 14px;
+}
+
+.layer .layer-num {
+  font-weight: bold;
+  width: 30px;
+  color: #888;
+}
+
+.layer .layer-name {
+  font-weight: bold;
+  width: 180px;
+}
+
+.layer .layer-pdu {
+  color: #888;
+  width: 120px;
+  font-size: 13px;
+}
+
+.layer .layer-protocols {
+  color: #999;
+  font-size: 13px;
+}
+
+/* Layer color coding */
+.layer.l7 { background: #7c3aed20; }
+.layer.l7 .layer-name { color: #a78bfa; }
+.layer.l6 { background: #6366f120; }
+.layer.l6 .layer-name { color: #818cf8; }
+.layer.l5 { background: #3b82f620; }
+.layer.l5 .layer-name { color: #60a5fa; }
+.layer.l4 { background: #06b6d420; }
+.layer.l4 .layer-name { color: #22d3ee; }
+.layer.l3 { background: #10b98120; }
+.layer.l3 .layer-name { color: #34d399; }
+.layer.l2 { background: #f59e0b20; }
+.layer.l2 .layer-name { color: #fbbf24; }
+.layer.l1 { background: #ef444420; }
+.layer.l1 .layer-name { color: #f87171; }
+
+/* --- Packet / Frame Header Diagrams --- */
+.packet-diagram {
+  display: flex;
+  flex-wrap: wrap;
+  border: 2px solid #2a2a4a;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 15px 0;
+  background: #1a1a2e;
+}
+
+.pkt-field {
+  padding: 10px 14px;
+  border: 1px solid #2a2a4a;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pkt-field .field-name {
+  font-weight: bold;
+  color: #fff;
+  display: block;
+}
+
+.pkt-field .field-size {
+  color: #888;
+  font-size: 11px;
+}
+
+/* Packet field color variants */
+.pkt-field.src    { background: #3b82f620; border-color: #3b82f640; }
+.pkt-field.src .field-name { color: #60a5fa; }
+.pkt-field.dst    { background: #e9456020; border-color: #e9456040; }
+.pkt-field.dst .field-name { color: #f87171; }
+.pkt-field.proto  { background: #a78bfa20; border-color: #a78bfa40; }
+.pkt-field.proto .field-name { color: #a78bfa; }
+.pkt-field.data   { background: #34d39920; border-color: #34d39940; }
+.pkt-field.data .field-name { color: #34d399; }
+.pkt-field.check  { background: #fbbf2420; border-color: #fbbf2440; }
+.pkt-field.check .field-name { color: #fbbf24; }
+.pkt-field.flag   { background: #f59e0b20; border-color: #f59e0b40; }
+.pkt-field.flag .field-name { color: #fbbf24; }
+
+/* --- Sequence / Handshake Diagrams --- */
+.seq-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 20px 0;
+  padding: 20px;
+  background: #1a1a2e;
+  border: 2px solid #2a2a4a;
+  border-radius: 12px;
+  max-width: 600px;
+}
+
+.seq-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 20px 15px;
+  border-bottom: 2px solid #2a2a4a;
+  margin-bottom: 15px;
+}
+
+.seq-entity {
+  font-weight: bold;
+  color: #fff;
+  text-align: center;
+  font-size: 14px;
+}
+
+.seq-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.seq-arrow-right, .seq-arrow-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.seq-arrow-right .seq-line {
+  flex: 1;
+  border-top: 2px solid #82aaff;
+  position: relative;
+}
+
+.seq-arrow-right .seq-line::after {
+  content: '▶';
+  position: absolute;
+  right: -8px;
+  top: -10px;
+  color: #82aaff;
+  font-size: 12px;
+}
+
+.seq-arrow-left .seq-line {
+  flex: 1;
+  border-top: 2px dashed #34d399;
+  position: relative;
+}
+
+.seq-arrow-left .seq-line::before {
+  content: '◀';
+  position: absolute;
+  left: -8px;
+  top: -10px;
+  color: #34d399;
+  font-size: 12px;
+}
+
+.seq-label {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 2px 8px;
+  background: #1a1a2e;
+  border-radius: 4px;
+}
+
+.seq-arrow-right .seq-label { color: #82aaff; }
+.seq-arrow-left .seq-label  { color: #34d399; }
+
+/* --- Encapsulation / Stack Diagrams --- */
+.encap-diagram {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 20px 0;
+}
+
+.encap-layer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  border: 2px solid;
+  font-size: 13px;
+  font-weight: bold;
+  text-align: center;
+  width: 100%;
+  max-width: 700px;
+}
+
+.encap-layer.app  { background: #7c3aed15; border-color: #7c3aed; color: #a78bfa; border-radius: 8px 8px 0 0; }
+.encap-layer.tcp  { background: #06b6d415; border-color: #06b6d4; color: #22d3ee; }
+.encap-layer.ip   { background: #10b98115; border-color: #10b981; color: #34d399; }
+.encap-layer.eth  { background: #f59e0b15; border-color: #f59e0b; color: #fbbf24; }
+.encap-layer.phys { background: #ef444415; border-color: #ef4444; color: #f87171; border-radius: 0 0 8px 8px; }
+
+/* --- Network Topology Diagrams --- */
+.topology {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin: 20px 0;
+  padding: 30px;
+  background: #1a1a2e;
+  border: 2px solid #2a2a4a;
+  border-radius: 12px;
+}
+
+.topo-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border: 2px solid #2a2a4a;
+  border-radius: 8px;
+  background: #0f0f1a;
+  min-width: 100px;
+  text-align: center;
+}
+
+.topo-node .topo-icon { font-size: 28px; }
+.topo-node .topo-label { font-size: 12px; font-weight: bold; color: #fff; }
+.topo-node .topo-detail { font-size: 11px; color: #888; }
+
+.topo-node.router  { border-color: #34d399; }
+.topo-node.switch  { border-color: #fbbf24; }
+.topo-node.host    { border-color: #60a5fa; }
+.topo-node.server  { border-color: #a78bfa; }
+.topo-node.cloud   { border-color: #e94560; }
+.topo-node.firewall { border-color: #ef4444; }
+
+.topo-link {
+  color: #555;
+  font-size: 20px;
+  padding: 0 5px;
+}
+
+/* --- State Machine Diagrams --- */
+.state-diagram {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+  padding: 20px;
+  background: #1a1a2e;
+  border: 2px solid #2a2a4a;
+  border-radius: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.state {
+  padding: 8px 16px;
+  border: 2px solid;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.state.active  { border-color: #34d399; color: #34d399; background: #34d39915; }
+.state.waiting { border-color: #fbbf24; color: #fbbf24; background: #fbbf2415; }
+.state.closed  { border-color: #ef4444; color: #f87171; background: #ef444415; }
+.state.initial { border-color: #60a5fa; color: #60a5fa; background: #3b82f615; }
+.state.special { border-color: #a78bfa; color: #a78bfa; background: #7c3aed15; }
+
+.state-arrow {
+  color: #555;
+  font-size: 16px;
+}
+
+/* --- Comparison header variants for networking --- */
+.comp-header.l2      { background: #f59e0b33; color: #fbbf24; }
+.comp-header.l3      { background: #10b98133; color: #34d399; }
+.comp-header.l4      { background: #06b6d433; color: #22d3ee; }
+.comp-header.l7      { background: #7c3aed33; color: #a78bfa; }
+.comp-header.old     { background: #ef444433; color: #f87171; }
+.comp-header.new     { background: #34d39933; color: #34d399; }
+.comp-header.request { background: #3b82f633; color: #60a5fa; }
+.comp-header.response { background: #10b98133; color: #34d399; }
+.comp-header.tcp     { background: #06b6d433; color: #22d3ee; }
+.comp-header.udp     { background: #f59e0b33; color: #fbbf24; }
+.comp-header.ipv4    { background: #10b98133; color: #34d399; }
+.comp-header.ipv6    { background: #3b82f633; color: #60a5fa; }
+.comp-header.linux   { background: #f59e0b33; color: #fbbf24; }
+.comp-header.k8s     { background: #326ce533; color: #60a5fa; }
+.comp-header.docker  { background: #2496ed33; color: #60a5fa; }
+.comp-header.ebpf    { background: #a78bfa33; color: #a78bfa; }

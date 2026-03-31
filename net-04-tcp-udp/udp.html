@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 04 — UDP</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 04 — UDP</h1>
+  <p class="subtitle">Connectionless, fast, no guarantees</p>
+
+  <!-- ===== WHAT UDP IS ===== -->
+  <h2>What UDP Is (and Isn't)</h2>
+
+  <p>UDP (User Datagram Protocol) is the other major Layer 4 transport protocol. Where TCP provides a reliable, ordered byte stream, UDP provides <strong>almost nothing</strong> on top of raw IP — and that's the point.</p>
+
+  <div class="panel">
+    <div class="panel-title">What UDP Does NOT Provide</div>
+    <ul>
+      <li><strong>No connection establishment</strong> — no handshake, no state machine, no teardown</li>
+      <li><strong>No reliability</strong> — packets can be lost, duplicated, or corrupted (beyond checksum)</li>
+      <li><strong>No ordering</strong> — packets can arrive in any order</li>
+      <li><strong>No retransmission</strong> — if a packet is lost, UDP doesn't know or care</li>
+      <li><strong>No flow control</strong> — sender can blast data as fast as it wants</li>
+      <li><strong>No congestion control</strong> — UDP will happily contribute to network congestion</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What UDP DOES Provide</div>
+    <ul>
+      <li><strong>Multiplexing via ports</strong> — multiple applications can share an IP address</li>
+      <li><strong>Integrity check</strong> — optional checksum (optional in IPv4, mandatory in IPv6)</li>
+      <li><strong>Message boundaries</strong> — unlike TCP's byte stream, each <code>sendto()</code> maps to exactly one datagram. The receiver gets complete messages, not a stream.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Message boundaries matter:</strong> TCP is a byte stream — a <code>send(1000 bytes)</code> followed by <code>send(500 bytes)</code> might be received as a single 1500-byte read. UDP preserves message boundaries — each <code>sendto()</code> produces exactly one datagram that the receiver gets as a complete unit via <code>recvfrom()</code>.
+  </div>
+
+  <!-- ===== UDP HEADER ===== -->
+  <h2>UDP Header</h2>
+
+  <p>The UDP header is <strong>8 bytes</strong> — that's it. Compare this to TCP's minimum 20 bytes (and typically 32 bytes with options). UDP's simplicity is its greatest feature.</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1 1 50%;">
+      <span class="field-name">Source Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1 1 50%;">
+      <span class="field-name">Destination Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1 1 50%;">
+      <span class="field-name">Length</span>
+      <span class="field-size">16 bits (header + data)</span>
+    </div>
+    <div class="pkt-field check" style="flex: 1 1 50%;">
+      <span class="field-name">Checksum</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Header Fields</div>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Source Port</code></td><td>Optional (can be 0 if no reply expected)</td></tr>
+        <tr><td><code>Destination Port</code></td><td>Required — identifies the target application</td></tr>
+        <tr><td><code>Length</code></td><td>Total datagram size (header + payload). Min = 8 (empty payload). Max = 65,535 (but practically limited by IP MTU)</td></tr>
+        <tr><td><code>Checksum</code></td><td>Covers pseudo-header + header + payload. Optional in IPv4 (0 = no checksum), mandatory in IPv6.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== TCP vs UDP COMPARISON ===== -->
+  <h2>TCP vs UDP Header Comparison</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header tcp">TCP Header (20-60 bytes)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Source Port (16 bits)</li>
+          <li>Destination Port (16 bits)</li>
+          <li>Sequence Number (32 bits)</li>
+          <li>Acknowledgment Number (32 bits)</li>
+          <li>Data Offset (4 bits)</li>
+          <li>Reserved (3 bits)</li>
+          <li>9 Flags (9 bits)</li>
+          <li>Window Size (16 bits)</li>
+          <li>Checksum (16 bits)</li>
+          <li>Urgent Pointer (16 bits)</li>
+          <li>Options (0-320 bits)</li>
+        </ul>
+        <p style="margin-top: 10px; color: #22d3ee;"><strong>= 160+ bits minimum = 20+ bytes</strong></p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header udp">UDP Header (8 bytes, always)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Source Port (16 bits)</li>
+          <li>Destination Port (16 bits)</li>
+          <li>Length (16 bits)</li>
+          <li>Checksum (16 bits)</li>
+        </ul>
+        <p style="margin-top: 10px; color: #fbbf24;"><strong>= 64 bits = 8 bytes</strong></p>
+        <p style="color: #888; font-size: 13px; margin-top: 10px;">No sequence numbers. No acknowledgments. No flags. No window. No options. No state.</p>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Property</th><th>TCP</th><th>UDP</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Connection</td><td>Connection-oriented (3-way handshake)</td><td>Connectionless</td></tr>
+      <tr><td>Reliability</td><td>Guaranteed delivery with retransmission</td><td>Best effort — fire and forget</td></tr>
+      <tr><td>Ordering</td><td>Guaranteed in-order delivery</td><td>No ordering guarantees</td></tr>
+      <tr><td>Flow control</td><td>Sliding window (rwnd)</td><td>None</td></tr>
+      <tr><td>Congestion control</td><td>cwnd, slow start, CUBIC/BBR</td><td>None (application must self-regulate)</td></tr>
+      <tr><td>Message boundaries</td><td>Byte stream (no boundaries)</td><td>Datagram (preserved boundaries)</td></tr>
+      <tr><td>Header overhead</td><td>20-60 bytes</td><td>8 bytes</td></tr>
+      <tr><td>Latency to first data</td><td>1.5 RTT (handshake + data)</td><td>0 RTT (send immediately)</td></tr>
+      <tr><td>Use case</td><td>HTTP, SSH, databases, file transfer</td><td>DNS, video/audio, gaming, VPN tunnels</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== WHEN UDP WINS ===== -->
+  <h2>When UDP Wins</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">DNS Lookups</div>
+      <ul>
+        <li>Tiny request (~50 bytes), tiny response (~100-500 bytes)</li>
+        <li>TCP handshake would triple the latency (1 RTT vs 3 RTT)</li>
+        <li>If the response is lost, the client just retries</li>
+        <li>Falls back to TCP for responses > 512 bytes (or uses EDNS0 for larger UDP)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Video / Audio Streaming</div>
+      <ul>
+        <li>Late data is <strong>useless</strong> — a retransmitted video frame that arrives 500ms late causes a stutter worse than just skipping it</li>
+        <li>Tolerate packet loss gracefully (codec interpolation, FEC)</li>
+        <li>RTP (Real-time Transport Protocol) runs over UDP</li>
+        <li>WebRTC uses UDP for media streams</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Gaming</div>
+      <ul>
+        <li>Player position updates are sent 30-60 times per second</li>
+        <li>A lost update is immediately superseded by the next one</li>
+        <li>TCP retransmission would cause a latency spike (head-of-line blocking)</li>
+        <li>Games implement their own reliability layer for critical events (damage, kills) while letting position updates be unreliable</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">VPN Tunnels</div>
+      <ul>
+        <li><strong>WireGuard uses UDP</strong> — its entire protocol is UDP-based</li>
+        <li>Avoids <strong>TCP-in-TCP meltdown</strong>: if you tunnel TCP traffic inside a TCP VPN, both layers retransmit on loss, causing exponential backoff stacking</li>
+        <li>OpenVPN also supports UDP mode (recommended over TCP mode)</li>
+        <li>IPsec ESP can run directly over IP or be wrapped in UDP (NAT traversal)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">DHCP</div>
+    <ul>
+      <li>The client doesn't have an IP address yet — it can't establish a TCP connection</li>
+      <li>Uses broadcast/multicast on UDP ports 67 (server) and 68 (client)</li>
+      <li>DISCOVER → OFFER → REQUEST → ACK, all over UDP</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>TCP-in-TCP meltdown explained:</strong> When TCP runs inside a TCP tunnel, packet loss triggers retransmission at <em>both</em> layers. The inner TCP retransmits, increasing the data volume. The outer TCP also retransmits. Both reduce their congestion windows. The result: throughput collapses far worse than a single layer of TCP would. This is why WireGuard, IPsec, and well-configured OpenVPN all use UDP as the outer transport.
+  </div>
+
+  <!-- ===== RELIABLE-UDP PROTOCOLS ===== -->
+  <h2>Reliable-UDP Protocols</h2>
+
+  <h3>QUIC (HTTP/3)</h3>
+
+  <p>QUIC is the most important networking protocol development in the last decade. It's a reliable, encrypted transport protocol built <strong>on top of UDP</strong>, designed by Google and standardized as RFC 9000.</p>
+
+  <div class="panel">
+    <div class="panel-title">QUIC Architecture</div>
+    <div class="encap-diagram">
+      <div class="encap-layer app">HTTP/3 (application data)</div>
+      <div class="encap-layer tcp" style="border-color: #a78bfa; color: #a78bfa; background: #7c3aed15;">QUIC (reliability, streams, congestion control, encryption)</div>
+      <div class="encap-layer tcp" style="border-color: #06b6d4; color: #22d3ee;">UDP (just ports + checksum)</div>
+      <div class="encap-layer ip">IP</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why QUIC Over UDP Instead of Fixing TCP?</div>
+    <table>
+      <thead>
+        <tr><th>Problem with TCP</th><th>QUIC's Solution</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Ossification:</strong> Middleboxes (firewalls, NATs, load balancers) inspect and sometimes modify TCP headers. Deploying TCP extensions is nearly impossible.</td>
+          <td>QUIC encrypts everything except the connection ID. Middleboxes can't inspect or modify what they can't read.</td>
+        </tr>
+        <tr>
+          <td><strong>Head-of-line blocking:</strong> In HTTP/2 over TCP, a single lost packet blocks ALL streams (TCP guarantees in-order delivery of the byte stream).</td>
+          <td>QUIC provides independent streams — a lost packet only blocks the affected stream. Other streams continue flowing.</td>
+        </tr>
+        <tr>
+          <td><strong>Handshake latency:</strong> TCP handshake (1 RTT) + TLS handshake (1-2 RTT) = 2-3 RTT before data.</td>
+          <td>QUIC integrates TLS 1.3 into its handshake: 1 RTT for new connections, <strong>0-RTT for resumed connections</strong>.</td>
+        </tr>
+        <tr>
+          <td><strong>Connection migration:</strong> TCP connections are tied to the 4-tuple. WiFi → cellular = new connection.</td>
+          <td>QUIC uses Connection IDs, not IP:port tuples. Connections survive network changes (phone switches from WiFi to LTE).</td>
+        </tr>
+        <tr>
+          <td><strong>Kernel dependency:</strong> TCP is implemented in the OS kernel. Updates require kernel upgrades across the fleet.</td>
+          <td>QUIC runs in userspace. Deploy a new version by updating the application binary.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Adoption status:</strong> QUIC / HTTP/3 is used by Google (YouTube, Search, Gmail), Cloudflare, Meta, and most CDNs. Chrome, Firefox, Safari, and Edge all support it. If you run a web-facing service behind Cloudflare or a major CDN, your users are likely already using QUIC.
+  </div>
+
+  <!-- ===== UDP AND NAT ===== -->
+  <h2>UDP and NAT</h2>
+
+  <p>NAT traversal for UDP is conceptually simpler than for TCP because there's no connection state to track.</p>
+
+  <div class="panel">
+    <div class="panel-title">How UDP NAT Traversal Works</div>
+    <ul>
+      <li>When an internal host sends a UDP packet out, the NAT creates a mapping: <code>(internal IP:port) → (external IP:port)</code></li>
+      <li>Replies from the external destination to that external IP:port are forwarded back to the internal host</li>
+      <li>The mapping times out after an idle period (typically 30-120 seconds for UDP, varies by device)</li>
+      <li><strong>STUN</strong> (Session Traversal Utilities for NAT): allows a host to discover its public IP:port mapping by querying an external server</li>
+      <li><strong>TURN</strong> (Traversal Using Relays around NAT): relay server for when direct P2P fails (symmetric NAT)</li>
+      <li>UDP hole punching: both peers send packets to each other's NAT-mapped addresses simultaneously, creating bidirectional mappings</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>NAT keepalive:</strong> UDP NAT mappings expire on idle (often 30s). Long-lived UDP connections (VPN, VoIP) must send periodic keepalive packets to prevent the NAT mapping from expiring. WireGuard has a <code>PersistentKeepalive</code> setting specifically for this (commonly set to 25 seconds).
+  </div>
+
+  <!-- ===== UDP CHECKSUM ===== -->
+  <h2>UDP Checksum</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ipv4">IPv4</div>
+      <div class="comp-body">
+        <ul>
+          <li>UDP checksum is <strong>optional</strong></li>
+          <li>A checksum value of 0 means "no checksum computed"</li>
+          <li>IPv4 has its own header checksum, but it only covers the IP header, not the payload</li>
+          <li>Without the UDP checksum, bit flips in the payload go undetected (relying on link-layer CRC, which isn't end-to-end)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ipv6">IPv6</div>
+      <div class="comp-body">
+        <ul>
+          <li>UDP checksum is <strong>mandatory</strong></li>
+          <li>IPv6 removed the IP header checksum (to speed up router processing)</li>
+          <li>Without a mandatory UDP checksum, there would be no integrity check at all above the link layer</li>
+          <li>Exception: RFC 6936 allows checksum-zero for IPv6 tunneling protocols</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>In practice:</strong> All modern UDP implementations compute the checksum. The "optional" nature in IPv4 is a historical artifact. Disabling it would be dangerous — intermediate routers can corrupt data in ways that link-layer CRC doesn't catch (silent corruption from buggy firmware, bit flips in router memory, etc.).
+  </div>
+
+  <!-- ===== PRACTICAL CONSIDERATIONS ===== -->
+  <h2>Practical Considerations</h2>
+
+  <div class="panel">
+    <div class="panel-title">UDP Datagram Size Limits</div>
+    <table>
+      <thead>
+        <tr><th>Limit</th><th>Value</th><th>Why It Matters</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Theoretical max</td>
+          <td>65,507 bytes (65,535 - 8 UDP header - 20 IP header)</td>
+          <td>The Length field is 16 bits</td>
+        </tr>
+        <tr>
+          <td>Typical safe size</td>
+          <td>~1,472 bytes (1500 MTU - 20 IP - 8 UDP)</td>
+          <td>Avoids IP fragmentation on Ethernet</td>
+        </tr>
+        <tr>
+          <td>Internet safe size</td>
+          <td>~1,200 bytes</td>
+          <td>Avoids fragmentation across VPNs, tunnels, and paths with smaller MTU</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>IP fragmentation is dangerous for UDP:</strong> If a UDP datagram exceeds the path MTU, IP will fragment it. If <em>any</em> fragment is lost, the entire datagram is lost (UDP has no retransmission). This effectively amplifies the packet loss rate. QUIC deliberately keeps its packets under the MTU to avoid this.
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Test path MTU to a destination<br>
+    <span class="prompt">$ </span>tracepath -n 10.0.0.5<br>
+    <span class="output"> 1?: [LOCALHOST]                     pmtu 1500</span><br>
+    <span class="output"> 1:  10.0.0.1                          0.234ms</span><br>
+    <span class="output"> 2:  10.0.0.5                          1.023ms reached</span><br>
+    <span class="output">     Resume: pmtu 1500 hops 2 back 2</span><br><br>
+    <span class="prompt"># </span>Send a UDP packet with specific size (useful for testing)<br>
+    <span class="prompt">$ </span>echo "test payload" | socat - UDP4:10.0.0.5:9999
+  </div>
+
+</body>
+</html>

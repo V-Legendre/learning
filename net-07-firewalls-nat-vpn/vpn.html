@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 07 — VPNs</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 07 — VPNs</h1>
+  <p class="subtitle">Encrypted tunnels — IPsec, OpenVPN, and WireGuard</p>
+
+  <!-- ===== VPN ARCHITECTURES ===== -->
+  <h2>VPN Architectures</h2>
+
+  <p>A VPN creates an encrypted tunnel between endpoints, making it appear as if they share a private network even when communicating over the public internet. The architecture determines how many tunnels exist and who connects to whom.</p>
+
+  <h3>Site-to-Site</h3>
+
+  <p>Connects two <strong>entire networks</strong> over an encrypted tunnel. All traffic between the networks is automatically routed through the VPN. Common for connecting offices, data centers, or cloud VPCs.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Office Hosts</div>
+      <div class="topo-detail">10.1.0.0/16</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128274;</div>
+      <div class="topo-label">VPN Gateway</div>
+      <div class="topo-detail">Office A</div>
+    </div>
+    <div class="topo-link">&#128272; Encrypted Tunnel</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128274;</div>
+      <div class="topo-label">VPN Gateway</div>
+      <div class="topo-detail">Office B</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">DC Hosts</div>
+      <div class="topo-detail">10.2.0.0/16</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Cloud equivalent:</strong> AWS VPN Gateway, GCP Cloud VPN, Azure VPN Gateway. These create IPsec tunnels between your VPC and on-prem network. Also: AWS Transit Gateway for hub-and-spoke multi-VPC connectivity.
+  </div>
+
+  <h3>Remote Access</h3>
+
+  <p>A single device (laptop, phone) connects to a network. The VPN client creates a tunnel to the VPN server, and the device gets an IP on the remote network.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Remote Laptop</div>
+      <div class="topo-detail">Coffee shop WiFi</div>
+    </div>
+    <div class="topo-link">&#128272; Encrypted Tunnel</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128274;</div>
+      <div class="topo-label">VPN Server</div>
+      <div class="topo-detail">Corporate network</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node host">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Internal Services</div>
+      <div class="topo-detail">10.0.0.0/8</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The traditional corporate VPN model:</strong> OpenVPN, Cisco AnyConnect, GlobalProtect. The problem: all traffic routes through a central VPN server, creating a bottleneck. This is the "hub-and-spoke" anti-pattern that mesh VPNs solve.
+  </div>
+
+  <h3>Full Mesh</h3>
+
+  <p>Every node connects <strong>directly</strong> to every other node. No central server bottleneck — traffic takes the shortest path. This is the Tailscale/Nebula model.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Laptop</div>
+      <div class="topo-detail">Home</div>
+    </div>
+    <div class="topo-link">&#128272;</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Server</div>
+      <div class="topo-detail">AWS</div>
+    </div>
+    <div class="topo-link">&#128272;</div>
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Workstation</div>
+      <div class="topo-detail">Office</div>
+    </div>
+  </div>
+  <p style="text-align: center; color: #888; font-size: 13px; margin-top: -10px;">All nodes have direct encrypted tunnels to each other — no central hub</p>
+
+  <div class="tip">
+    <strong>Tailscale's model:</strong> A coordination server (control plane) distributes public keys and endpoint info. Data plane is fully mesh — WireGuard tunnels directly between nodes. The coordination server never sees your traffic. If direct connections fail (NAT), DERP relay servers are used as a fallback.
+  </div>
+
+  <!-- ===== IPSEC ===== -->
+  <h2>IPsec</h2>
+
+  <p>IPsec is the <strong>original</strong> VPN standard, operating at Layer 3 (network layer). It's built into every major OS kernel and is the default for site-to-site VPNs in enterprise and cloud environments. It's powerful but notoriously complex to configure and debug.</p>
+
+  <h3>IKE (Internet Key Exchange)</h3>
+
+  <p>Before IPsec can encrypt traffic, peers must authenticate and agree on encryption parameters. This negotiation happens in two phases via IKE (usually IKEv2).</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Peer A (Initiator)</div>
+      <div class="seq-entity">Peer B (Responder)</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">IKE_SA_INIT (DH exchange, proposals)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">IKE_SA_INIT response (DH, chosen proposal)</span></div>
+      </div>
+    </div>
+    <div style="text-align: center; color: #fbbf24; font-size: 12px; padding: 8px 0; font-weight: bold;">--- Phase 1 Complete: IKE SA established (encrypted channel) ---</div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">IKE_AUTH (identity, auth, traffic selectors)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">IKE_AUTH response (identity, auth, SA)</span></div>
+      </div>
+    </div>
+    <div style="text-align: center; color: #34d399; font-size: 12px; padding: 8px 0; font-weight: bold;">--- Phase 2 Complete: IPsec SA established (data can flow) ---</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">IKE Phase Summary</div>
+    <table>
+      <tr><th>Phase</th><th>Purpose</th><th>Result</th></tr>
+      <tr>
+        <td><strong>Phase 1</strong> (IKE SA)</td>
+        <td>Authenticate peers, Diffie-Hellman key exchange, negotiate encryption algorithms</td>
+        <td>Secure channel for Phase 2 negotiation</td>
+      </tr>
+      <tr>
+        <td><strong>Phase 2</strong> (IPsec SA)</td>
+        <td>Negotiate IPsec parameters, define which traffic to protect (traffic selectors)</td>
+        <td>IPsec Security Associations — ready to encrypt data</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>ESP (Encapsulating Security Payload)</h3>
+
+  <p>ESP is the protocol that actually encrypts and authenticates the data. It's IP protocol 50 (not TCP or UDP — it's its own protocol at the IP layer).</p>
+
+  <h3>Tunnel Mode vs Transport Mode</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">Tunnel Mode</div>
+      <div class="comp-body">
+        <p><strong>Entire original IP packet</strong> is encrypted and wrapped in a new IP header.</p>
+        <div class="encap-diagram">
+          <div class="encap-layer ip">New IP Header (gateway IPs)</div>
+          <div class="encap-layer tcp">ESP Header</div>
+          <div class="encap-layer app">Original IP Header + Payload (encrypted)</div>
+        </div>
+        <ul>
+          <li>Original source/destination IPs are <strong>hidden</strong></li>
+          <li>Used for <strong>site-to-site</strong> VPNs (gateway-to-gateway)</li>
+          <li>New IP header uses the VPN gateway addresses</li>
+          <li>This is the default and most common mode</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l4">Transport Mode</div>
+      <div class="comp-body">
+        <p><strong>Only the payload</strong> is encrypted. Original IP header is preserved.</p>
+        <div class="encap-diagram">
+          <div class="encap-layer ip">Original IP Header (preserved!)</div>
+          <div class="encap-layer tcp">ESP Header</div>
+          <div class="encap-layer app">Payload only (encrypted)</div>
+        </div>
+        <ul>
+          <li>Original source/destination IPs are <strong>visible</strong></li>
+          <li>Used for <strong>host-to-host</strong> encryption</li>
+          <li>Less overhead (no extra IP header)</li>
+          <li>Rare in practice — mostly for L2TP/IPsec</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>IPsec complexity is real.</strong> Configuring IPsec involves: IKE version, encryption algorithm, hash algorithm, DH group, authentication method (PSK vs certificates), SA lifetime, PFS (Perfect Forward Secrecy), DPD (Dead Peer Detection), traffic selectors, NAT-T (NAT Traversal on UDP 4500)... and both sides must match exactly. A single mismatch = silent failure. Debugging means reading IKE logs line by line. This is why WireGuard was created.
+  </div>
+
+  <!-- ===== OPENVPN ===== -->
+  <h2>OpenVPN</h2>
+
+  <p>OpenVPN is a <strong>TLS-based VPN</strong> that runs in userspace (not kernel). It's been the de facto standard for remote access VPNs for over a decade — mature, well-understood, and widely deployed.</p>
+
+  <div class="panel">
+    <div class="panel-title">OpenVPN Architecture</div>
+    <table>
+      <tr><th>Aspect</th><th>Details</th></tr>
+      <tr>
+        <td>Transport</td>
+        <td>UDP (preferred) or TCP (fallback for restrictive firewalls)</td>
+      </tr>
+      <tr>
+        <td>Encryption</td>
+        <td>TLS for control channel, AES-256-GCM or ChaCha20-Poly1305 for data channel</td>
+      </tr>
+      <tr>
+        <td>Authentication</td>
+        <td>Certificates (PKI), pre-shared keys, or username/password + certificates</td>
+      </tr>
+      <tr>
+        <td>Interface type</td>
+        <td><code>tun</code> (Layer 3 — IP packets) or <code>tap</code> (Layer 2 — Ethernet frames)</td>
+      </tr>
+      <tr>
+        <td>Runs in</td>
+        <td>Userspace (not kernel) — processes packets via <code>/dev/net/tun</code></td>
+      </tr>
+      <tr>
+        <td>Codebase</td>
+        <td>~100,000+ lines of C — large attack surface for auditing</td>
+      </tr>
+      <tr>
+        <td>Default port</td>
+        <td>UDP 1194</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Strengths</div>
+      <div class="comp-body">
+        <ul>
+          <li>Battle-tested over 20+ years</li>
+          <li>Extremely flexible configuration</li>
+          <li>Works over TCP (can traverse HTTP proxies)</li>
+          <li>Rich PKI support for enterprise cert management</li>
+          <li>Runs on everything (Linux, macOS, Windows, Android, iOS, routers)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Weaknesses</div>
+      <div class="comp-body">
+        <ul>
+          <li>Userspace processing = lower throughput than kernel VPNs</li>
+          <li>Large codebase = harder to audit, larger attack surface</li>
+          <li>Complex configuration (server.conf can be 50+ lines)</li>
+          <li>TCP mode suffers from "TCP meltdown" (TCP over TCP)</li>
+          <li>No built-in roaming support — connection drops on network change</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>tun vs tap:</strong> <code>tun</code> creates a virtual network interface that handles IP packets (Layer 3). <code>tap</code> creates one that handles Ethernet frames (Layer 2) — needed if you want the VPN peers to be on the same broadcast domain (bridging). Almost all modern deployments use <code>tun</code>.
+  </div>
+
+  <!-- ===== WIREGUARD ===== -->
+  <h2>WireGuard</h2>
+
+  <p>WireGuard is a modern VPN protocol designed to be <strong>simpler, faster, and more secure</strong> than IPsec and OpenVPN. It's built into the Linux kernel since 5.6 (2020) and is the foundation for Tailscale, Mullvad, and many other modern VPN products.</p>
+
+  <h3>Design Philosophy</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Minimal</div>
+      <p>~4,000 lines of kernel code. IPsec is ~400,000 lines. OpenVPN is ~100,000 lines. Less code = fewer bugs = auditable by a single person.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Opinionated</div>
+      <p>No cipher negotiation. One fixed set of modern primitives. If a vulnerability is found, the entire protocol version is replaced — not patched with options.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Silent</div>
+      <p>Does not respond to unauthenticated packets. From the network's perspective, a WireGuard interface is invisible — no handshake until you send a valid packet.</p>
+    </div>
+  </div>
+
+  <h3>Cryptographic Primitives</h3>
+
+  <table>
+    <tr><th>Function</th><th>Algorithm</th><th>Notes</th></tr>
+    <tr>
+      <td>Key exchange</td>
+      <td><strong>Curve25519</strong> (ECDH)</td>
+      <td>Fast, safe elliptic curve. Used in Noise protocol handshake.</td>
+    </tr>
+    <tr>
+      <td>Symmetric encryption</td>
+      <td><strong>ChaCha20-Poly1305</strong></td>
+      <td>AEAD cipher. Fast in software (no AES-NI needed). Same as used in TLS 1.3.</td>
+    </tr>
+    <tr>
+      <td>Hashing</td>
+      <td><strong>BLAKE2s</strong></td>
+      <td>Faster than SHA-256, cryptographically strong.</td>
+    </tr>
+    <tr>
+      <td>Key derivation</td>
+      <td><strong>HKDF</strong></td>
+      <td>Derives session keys from the Noise handshake output.</td>
+    </tr>
+    <tr>
+      <td>Handshake framework</td>
+      <td><strong>Noise_IK</strong></td>
+      <td>Formally verified key exchange pattern. 1-RTT handshake.</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>No cipher negotiation:</strong> Unlike IPsec/TLS where peers negotiate which algorithms to use (creating downgrade attack opportunities), WireGuard uses exactly these algorithms. If they're ever broken, WireGuard will ship a new protocol version with new algorithms — simple version bump, no backward compatibility mess.
+  </div>
+
+  <h3>Cryptokey Routing</h3>
+
+  <p>This is WireGuard's core innovation. The <strong>public key &rarr; allowed IPs</strong> mapping IS the routing table. There's no separate routing configuration — the tunnel configuration IS the routing.</p>
+
+  <div class="panel">
+    <div class="panel-title">How Cryptokey Routing Works</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>Sending:</strong> Kernel looks up destination IP in the AllowedIPs of each peer. Finds matching peer's public key. Encrypts packet with that peer's session key. Sends to that peer's endpoint.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>Receiving:</strong> Decrypts packet. Checks that the decrypted source IP is within that peer's AllowedIPs. If not, the packet is dropped — <strong>this is the firewall</strong>.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mapping">
+    <div><strong>Peer's Public Key</strong><br><code>aB3d...xY9z=</code></div>
+    <div class="arr">&rarr;</div>
+    <div><strong>AllowedIPs</strong><br><code>10.0.0.2/32, 192.168.1.0/24</code></div>
+  </div>
+  <p style="color: #888; font-size: 13px;">This mapping says: packets destined for 10.0.0.2 or 192.168.1.0/24 should be encrypted with this peer's key. Packets received from this peer must have source IPs in these ranges.</p>
+
+  <h3>Stateless and Roaming</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Traditional VPN (OpenVPN/IPsec)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Connection state: sessions, handshakes, keepalives</li>
+          <li>Network change (WiFi &rarr; cellular) = reconnect</li>
+          <li>Timeout/renegotiation required</li>
+          <li>Client must know server IP upfront</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">WireGuard</div>
+      <div class="comp-body">
+        <ul>
+          <li>No connection state — just send encrypted UDP packets</li>
+          <li>Network change = next packet comes from new IP, endpoint updated</li>
+          <li><strong>Roaming is automatic</strong> — peer's endpoint updates on every authenticated packet</li>
+          <li>Works like "encrypted IP" — stateless at the tunnel level</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>How roaming works:</strong> WireGuard stores the last known endpoint (IP:port) for each peer. When it receives an authenticated packet from a peer at a new IP:port, it simply updates the endpoint. No renegotiation, no reconnection. Your phone switches from WiFi to cellular — the next packet arrives from the new IP, WireGuard updates, and traffic continues seamlessly.
+  </div>
+
+  <h3>WireGuard Configuration Example</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">Server (10.0.0.1)</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># /etc/wireguard/wg0.conf</span>
+
+<span class="kw">[Interface]</span>
+<span class="attr">Address</span> = <span class="num">10.0.0.1/24</span>
+<span class="attr">ListenPort</span> = <span class="num">51820</span>
+<span class="attr">PrivateKey</span> = <span class="str">SERVER_PRIVATE_KEY</span>
+
+<span class="cm"># Enable IP forwarding and NAT</span>
+<span class="attr">PostUp</span> = <span class="fn">iptables</span> -A FORWARD -i wg0 -j ACCEPT; \
+         <span class="fn">iptables</span> -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+<span class="attr">PostDown</span> = <span class="fn">iptables</span> -D FORWARD -i wg0 -j ACCEPT; \
+           <span class="fn">iptables</span> -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+<span class="kw">[Peer]</span>
+<span class="cm"># Laptop</span>
+<span class="attr">PublicKey</span> = <span class="str">LAPTOP_PUBLIC_KEY</span>
+<span class="attr">AllowedIPs</span> = <span class="num">10.0.0.2/32</span>
+
+<span class="kw">[Peer]</span>
+<span class="cm"># Phone</span>
+<span class="attr">PublicKey</span> = <span class="str">PHONE_PUBLIC_KEY</span>
+<span class="attr">AllowedIPs</span> = <span class="num">10.0.0.3/32</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">Client / Laptop (10.0.0.2)</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># /etc/wireguard/wg0.conf</span>
+
+<span class="kw">[Interface]</span>
+<span class="attr">Address</span> = <span class="num">10.0.0.2/24</span>
+<span class="attr">PrivateKey</span> = <span class="str">LAPTOP_PRIVATE_KEY</span>
+<span class="attr">DNS</span> = <span class="num">1.1.1.1</span>
+
+<span class="kw">[Peer]</span>
+<span class="cm"># Server</span>
+<span class="attr">PublicKey</span> = <span class="str">SERVER_PUBLIC_KEY</span>
+<span class="attr">Endpoint</span> = <span class="num">203.0.113.5:51820</span>
+<span class="attr">AllowedIPs</span> = <span class="num">0.0.0.0/0</span>
+<span class="cm"># ↑ Route ALL traffic through VPN</span>
+<span class="cm"># Use 10.0.0.0/24 for split tunnel</span>
+
+<span class="attr">PersistentKeepalive</span> = <span class="num">25</span>
+<span class="cm"># ↑ Send keepalive every 25s</span>
+<span class="cm"># Needed when client is behind NAT</span>
+<span class="cm"># Keeps the NAT mapping alive</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Generate key pair</span><br>
+    <span class="prompt">$ </span>wg genkey | tee privatekey | wg pubkey > publickey<br><br>
+    <span class="prompt"># Bring up the interface</span><br>
+    <span class="prompt">$ </span>wg-quick up wg0<br><br>
+    <span class="prompt"># Check status</span><br>
+    <span class="prompt">$ </span>wg show<br>
+    <span class="output">interface: wg0</span><br>
+    <span class="output">  public key: aB3d...xY9z=</span><br>
+    <span class="output">  private key: (hidden)</span><br>
+    <span class="output">  listening port: 51820</span><br><br>
+    <span class="output">peer: Kf5x...bN2w=</span><br>
+    <span class="output">  endpoint: 198.51.100.42:38291</span><br>
+    <span class="output">  allowed ips: 10.0.0.2/32</span><br>
+    <span class="output">  latest handshake: 42 seconds ago</span><br>
+    <span class="output">  transfer: 1.48 MiB received, 3.21 MiB sent</span>
+  </div>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>IPsec vs OpenVPN vs WireGuard</h2>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>IPsec</th>
+      <th>OpenVPN</th>
+      <th>WireGuard</th>
+    </tr>
+    <tr>
+      <td><strong>Layer</strong></td>
+      <td>L3 (kernel)</td>
+      <td>L3/L2 (userspace)</td>
+      <td>L3 (kernel)</td>
+    </tr>
+    <tr>
+      <td><strong>Codebase</strong></td>
+      <td>~400K lines</td>
+      <td>~100K lines</td>
+      <td>~4K lines</td>
+    </tr>
+    <tr>
+      <td><strong>Handshake</strong></td>
+      <td>IKEv1/v2 (complex multi-phase)</td>
+      <td>TLS handshake</td>
+      <td>Noise_IK (1-RTT)</td>
+    </tr>
+    <tr>
+      <td><strong>Transport</strong></td>
+      <td>IP protocol 50 (ESP) + UDP 500/4500</td>
+      <td>UDP 1194 or TCP</td>
+      <td>UDP only (custom port)</td>
+    </tr>
+    <tr>
+      <td><strong>Cipher negotiation</strong></td>
+      <td>Yes (many options)</td>
+      <td>Yes (TLS cipher suites)</td>
+      <td>No (fixed primitives)</td>
+    </tr>
+    <tr>
+      <td><strong>Performance</strong></td>
+      <td>High (kernel, but complex path)</td>
+      <td>Moderate (userspace)</td>
+      <td>Highest (kernel, minimal overhead)</td>
+    </tr>
+    <tr>
+      <td><strong>Roaming</strong></td>
+      <td>No (requires renegotiation)</td>
+      <td>No (reconnection needed)</td>
+      <td>Yes (automatic endpoint update)</td>
+    </tr>
+    <tr>
+      <td><strong>NAT traversal</strong></td>
+      <td>NAT-T (UDP encap on port 4500)</td>
+      <td>Native (runs over UDP/TCP)</td>
+      <td>Native (runs over UDP)</td>
+    </tr>
+    <tr>
+      <td><strong>Stealth</strong></td>
+      <td>IKE packets are identifiable</td>
+      <td>Can be disguised as HTTPS (TCP mode)</td>
+      <td>Silent to unauthenticated traffic</td>
+    </tr>
+    <tr>
+      <td><strong>Configuration</strong></td>
+      <td>Complex (many knobs, both sides must match)</td>
+      <td>Complex (.conf files, PKI setup)</td>
+      <td>Simple (~10 lines per peer)</td>
+    </tr>
+    <tr>
+      <td><strong>Auditability</strong></td>
+      <td>Difficult (massive codebase)</td>
+      <td>Difficult (large codebase)</td>
+      <td>Realistic (single person can audit)</td>
+    </tr>
+    <tr>
+      <td><strong>Best for</strong></td>
+      <td>Site-to-site, cloud VPN gateways</td>
+      <td>Remote access, legacy compatibility</td>
+      <td>Everything modern (remote access, mesh, site-to-site)</td>
+    </tr>
+    <tr>
+      <td><strong>Used by</strong></td>
+      <td>AWS VPN, Cisco, strongSwan</td>
+      <td>Many corporate VPNs</td>
+      <td>Tailscale, Mullvad, Cloudflare WARP</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>When WireGuard is NOT the answer:</strong> If you need TCP transport (to traverse aggressive firewalls/proxies that block non-HTTPS UDP), WireGuard can't do it natively. OpenVPN over TCP or tunneling WireGuard inside a WebSocket/HTTPS wrapper is needed. Also, WireGuard doesn't natively support dynamic peer authentication (like RADIUS/LDAP) — that's what Tailscale's coordination layer adds.
+  </div>
+
+  <div class="tip">
+    <strong>The modern stack:</strong> WireGuard (encryption + tunneling) + Tailscale/Headscale (coordination, auth, NAT traversal, ACLs) = what corporate VPNs should be. No more "connect to VPN, then everything routes through HQ." Instead: mesh connectivity, zero-trust ACLs, SSO integration, and direct peer-to-peer connections.
+  </div>
+
+</body>
+</html>

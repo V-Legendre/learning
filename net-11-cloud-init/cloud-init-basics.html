@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 11 — Cloud-Init Basics</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 11 — Cloud-Init Basics</h1>
+  <p class="subtitle">The industry standard for instance initialization</p>
+
+  <!-- ===== WHAT IS CLOUD-INIT ===== -->
+  <h2>What Is Cloud-Init?</h2>
+
+  <p>Cloud-init is the <strong>de facto standard</strong> for configuring Linux instances at first boot. It handles everything from setting hostnames and creating users to writing files, installing packages, and running arbitrary scripts — all before anyone ever SSHes in.</p>
+
+  <div class="panel">
+    <div class="panel-title">Where Cloud-Init Runs</div>
+    <ul>
+      <li><strong>AWS EC2</strong> — every Amazon Linux, Ubuntu, Debian, RHEL AMI ships with cloud-init</li>
+      <li><strong>GCP Compute Engine</strong> — all standard images</li>
+      <li><strong>Azure VMs</strong> — standard on all Linux marketplace images</li>
+      <li><strong>OpenStack</strong> — cloud-init was originally built for it (Canonical)</li>
+      <li><strong>Proxmox VE</strong> — cloud-init drive support for VM templates</li>
+      <li><strong>libvirt / QEMU / KVM</strong> — via NoCloud datasource (seed ISO or directory)</li>
+      <li><strong>LXD / Incus</strong> — native cloud-init integration for containers and VMs</li>
+      <li><strong>Vagrant, Multipass, DigitalOcean, Oracle Cloud, Hetzner...</strong> — the list goes on</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> Cloud-init is cloud-agnostic. You write one cloud-config YAML and it works across providers. The abstraction layer between "what you want configured" and "which cloud you're on" is the <strong>datasource</strong> — cloud-init auto-detects where it's running and fetches metadata accordingly.
+  </div>
+
+  <!-- ===== BOOT STAGES ===== -->
+  <h2>Boot Stages</h2>
+
+  <p>Cloud-init runs across <strong>five distinct stages</strong> during the systemd boot process. Each stage is a separate systemd unit with explicit ordering dependencies. Understanding the sequence is critical for debugging "why didn't my config apply" issues.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Generator</div>
+      <div class="desc">systemd generator — decide if cloud-init should run at all</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">init-local</div>
+      <div class="desc">cloud-init-local.service — before networking</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">init-network</div>
+      <div class="desc">cloud-init.service — networking is up</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">config</div>
+      <div class="desc">cloud-config.service — config modules</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">final</div>
+      <div class="desc">cloud-final.service — final modules</div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Generator</strong> (systemd generator)<br>
+        Runs very early in systemd boot. Checks if cloud-init should be enabled at all. Looks for <code>/etc/cloud/cloud-init.disabled</code>, kernel command-line flags (<code>cloud-init=disabled</code>), or a missing datasource. If disabled, no cloud-init units start. This is how you permanently disable cloud-init on a golden image.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>init-local</strong> (<code>cloud-init-local.service</code>)<br>
+        Runs <strong>before networking is up</strong>. Can only access <em>local</em> datasources: attached config drives, seed directories, or SMBIOS/DMI data. This stage determines the datasource, applies network configuration (so the next stage can bring up networking), and sets up the instance identity. Critically, this is where <strong>network config is rendered</strong> (e.g., writing Netplan YAML).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>init-network</strong> (<code>cloud-init.service</code>)<br>
+        Networking is now available. Cloud-init fetches <strong>remote datasources</strong>: the EC2 metadata service at <code>169.254.169.254</code>, GCE metadata at <code>metadata.google.internal</code>, etc. Retrieves user-data, vendor-data, and full instance metadata. Runs <code>disk_setup</code>, <code>mounts</code>, and <code>bootcmd</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>config</strong> (<code>cloud-config.service</code>)<br>
+        Runs <strong>config modules</strong> only. This is where the bulk of declarative configuration happens: creating users/groups, installing packages, writing files, configuring SSH, setting timezone, NTP, CA certs, apt/yum repos, etc. Modules run in a defined order set by <code>/etc/cloud/cloud.cfg</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>final</strong> (<code>cloud-final.service</code>)<br>
+        Runs <strong>final modules</strong>: <code>runcmd</code>, user scripts (<code>/var/lib/cloud/scripts/</code>), <code>phone_home</code>, package install completion, and final message. This is the "do whatever you want" stage — arbitrary shell commands run here, after everything else is configured.
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Debugging tip:</strong> If your <code>runcmd</code> script needs a package installed by <code>packages:</code>, it will work — packages install in the config stage (4), and runcmd runs in the final stage (5). But if your <code>bootcmd</code> needs a package, it will fail — bootcmd runs in stage 3, before package installation.
+  </div>
+
+  <!-- ===== DATASOURCES ===== -->
+  <h2>Datasources</h2>
+
+  <p>A <strong>datasource</strong> is the mechanism cloud-init uses to discover where it's running and retrieve configuration. Each cloud provider exposes instance metadata and user-data through a provider-specific interface. Cloud-init abstracts these behind a common API.</p>
+
+  <table>
+    <tr>
+      <th>Datasource</th>
+      <th>Provider</th>
+      <th>How It Works</th>
+      <th>Endpoint / Path</th>
+    </tr>
+    <tr>
+      <td><code>Ec2</code></td>
+      <td>AWS</td>
+      <td>Link-local HTTP metadata service (IMDSv1/v2)</td>
+      <td><code>http://169.254.169.254/latest/</code></td>
+    </tr>
+    <tr>
+      <td><code>GCE</code></td>
+      <td>Google Cloud</td>
+      <td>HTTP metadata service with <code>Metadata-Flavor: Google</code> header</td>
+      <td><code>http://metadata.google.internal/</code></td>
+    </tr>
+    <tr>
+      <td><code>Azure</code></td>
+      <td>Azure</td>
+      <td>IMDS + wireserver, <code>Metadata: true</code> header</td>
+      <td><code>http://169.254.169.254/metadata/</code></td>
+    </tr>
+    <tr>
+      <td><code>OpenStack</code></td>
+      <td>OpenStack</td>
+      <td>HTTP metadata or config drive (attached disk)</td>
+      <td><code>http://169.254.169.254/openstack/</code></td>
+    </tr>
+    <tr>
+      <td><code>NoCloud</code></td>
+      <td>Local VMs / libvirt / Proxmox</td>
+      <td>Attached ISO or seed directory with <code>meta-data</code> + <code>user-data</code> files</td>
+      <td><code>/var/lib/cloud/seed/nocloud/</code></td>
+    </tr>
+    <tr>
+      <td><code>ConfigDrive</code></td>
+      <td>OpenStack (alt)</td>
+      <td>Attached disk (FAT/ISO9660) with JSON metadata</td>
+      <td>Mounted at <code>/config-2/</code></td>
+    </tr>
+    <tr>
+      <td><code>VMware</code></td>
+      <td>vSphere</td>
+      <td>GuestInfo properties or OVF environment</td>
+      <td><code>vmtoolsd --cmd "info-get guestinfo.userdata"</code></td>
+    </tr>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Datasource Detection Order</div>
+    <p>Cloud-init doesn't blindly try every datasource. Detection follows a priority list defined in <code>/etc/cloud/cloud.cfg.d/</code> and built-in defaults:</p>
+    <ul>
+      <li>First, check <strong>DMI/SMBIOS data</strong> — hypervisors embed vendor identifiers (e.g., <code>Amazon EC2</code>, <code>Google Compute Engine</code>) in system product name fields</li>
+      <li>Then check for <strong>config drives</strong> — attached disks with known labels (<code>cidata</code>, <code>config-2</code>)</li>
+      <li>Then attempt <strong>HTTP metadata endpoints</strong> — probe link-local addresses with timeouts</li>
+      <li>Finally, fall back to <strong>None</strong> datasource if nothing matches</li>
+    </ul>
+    <p>You can override detection with <code>datasource_list</code> in <code>/etc/cloud/cloud.cfg</code> to force a specific datasource or change priority order.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Security note:</strong> AWS IMDSv1 is vulnerable to SSRF attacks (any process can curl the metadata endpoint). IMDSv2 requires a PUT-based token exchange, which mitigates this. Always enforce IMDSv2 on production instances. Cloud-init supports both, but your launch template should mandate v2.
+  </div>
+
+  <!-- ===== DATA TYPES ===== -->
+  <h2>Data Types</h2>
+
+  <p>Cloud-init distinguishes between three categories of data it receives from datasources. Understanding the distinction matters for both security and configuration layering.</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Instance Metadata</div>
+      <p><strong>Source:</strong> Cloud provider</p>
+      <p><strong>Content:</strong></p>
+      <ul>
+        <li>Instance ID, region, availability zone</li>
+        <li>Instance type / machine type</li>
+        <li>Network configuration (IPs, MACs, VPC)</li>
+        <li>SSH host keys (provider-generated)</li>
+        <li>Block device mappings</li>
+        <li>Placement info (host, rack, etc.)</li>
+      </ul>
+      <p><strong>Who controls it:</strong> The cloud provider, based on the instance's properties.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">User-Data</div>
+      <p><strong>Source:</strong> You (the operator)</p>
+      <p><strong>Content:</strong></p>
+      <ul>
+        <li>Cloud-config YAML (<code>#cloud-config</code>)</li>
+        <li>Shell scripts (<code>#!/bin/bash</code>)</li>
+        <li>Multi-part MIME bundles</li>
+        <li>Jinja2-templated configs</li>
+        <li>Gzip-compressed data</li>
+        <li>Include files (URLs to fetch)</li>
+      </ul>
+      <p><strong>Who controls it:</strong> Whoever launches the instance. This is your primary configuration mechanism.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Vendor-Data</div>
+      <p><strong>Source:</strong> Cloud provider (supplemental)</p>
+      <p><strong>Content:</strong></p>
+      <ul>
+        <li>Provider-specific agents (e.g., AWS SSM agent)</li>
+        <li>Monitoring hooks</li>
+        <li>Default package repos / mirrors</li>
+        <li>License activation scripts</li>
+        <li>Provider NTP configuration</li>
+      </ul>
+      <p><strong>Who controls it:</strong> The cloud vendor. Runs <em>after</em> user-data, so user config takes precedence where there's overlap.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Merge order matters:</strong> When cloud-init processes configuration, the merge order is: <strong>base defaults</strong> &#8594; <strong>vendor-data</strong> &#8594; <strong>user-data</strong>. User-data wins. This means your cloud-config overrides whatever the vendor sets. You can also use <code>merge_how</code> directives for fine-grained control over list/dict merging behavior.
+  </div>
+
+  <!-- ===== INSTANCE IDENTITY ===== -->
+  <h2>Instance Identity &amp; Re-Run Behavior</h2>
+
+  <p>Cloud-init uses the <code>instance-id</code> from metadata to decide whether to re-run. This is fundamental to understanding cloud-init's idempotency model.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Same Instance ID</div>
+      <div class="comp-body">
+        <p><strong>Result:</strong> Cloud-init skips initialization</p>
+        <ul>
+          <li>Compares <code>instance-id</code> against <code>/var/lib/cloud/data/instance-id</code></li>
+          <li>If they match, the instance was already initialized</li>
+          <li>Only <code>bootcmd</code> and per-boot scripts run again</li>
+          <li>No user creation, package install, runcmd, etc.</li>
+        </ul>
+        <p><strong>Use case:</strong> Normal reboots of an existing instance.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">Different Instance ID</div>
+      <div class="comp-body">
+        <p><strong>Result:</strong> Cloud-init runs full initialization</p>
+        <ul>
+          <li>New <code>instance-id</code> detected, treats as new instance</li>
+          <li>All modules run: users, packages, write_files, runcmd, etc.</li>
+          <li>Previous instance data archived to <code>/var/lib/cloud/data/previous-*</code></li>
+        </ul>
+        <p><strong>Use case:</strong> Cloning a VM template, re-deploying with new metadata, or manually running <code>cloud-init clean</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Operational tip:</strong> To force cloud-init to re-run on an existing instance (e.g., testing your user-data), use <code>cloud-init clean --logs</code> then reboot. This wipes <code>/var/lib/cloud/</code> and resets the instance-id check. Alternatively, <code>cloud-init clean --logs --seed</code> also removes seed data for NoCloud setups.
+  </div>
+
+  <!-- ===== FILESYSTEM PATHS ===== -->
+  <h2>Filesystem Paths</h2>
+
+  <p>Cloud-init uses two primary directory trees. Knowing what lives where is essential for debugging.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Runtime: /run/cloud-init/</div>
+      <div class="comp-body">
+        <p><strong>Ephemeral</strong> — cleared on every boot (tmpfs).</p>
+        <div class="file-tree">
+          <span class="dir">/run/cloud-init/</span><br>
+          &nbsp;&nbsp;<span class="file">cloud-init-generator.log</span><br>
+          &nbsp;&nbsp;<span class="file">enabled</span> <span style="color:#888">— marker that cloud-init is active</span><br>
+          &nbsp;&nbsp;<span class="file">ds-identify.log</span> <span style="color:#888">— datasource detection log</span><br>
+          &nbsp;&nbsp;<span class="file">instance-data.json</span> <span style="color:#888">— resolved metadata (sanitized)</span><br>
+          &nbsp;&nbsp;<span class="file">instance-data-sensitive.json</span> <span style="color:#888">— full metadata (root-only)</span><br>
+          &nbsp;&nbsp;<span class="file">status.json</span> <span style="color:#888">— current run status per stage</span><br>
+          &nbsp;&nbsp;<span class="file">result.json</span> <span style="color:#888">— final result after all stages</span>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Persistent: /var/lib/cloud/</div>
+      <div class="comp-body">
+        <p><strong>Persistent</strong> — survives reboots. This is cloud-init's state store.</p>
+        <div class="file-tree">
+          <span class="dir">/var/lib/cloud/</span><br>
+          &nbsp;&nbsp;<span class="dir">data/</span> <span style="color:#888">— instance-id, datasource name, result</span><br>
+          &nbsp;&nbsp;<span class="dir">instance/</span> <span style="color:#888">— symlink to current instance</span><br>
+          &nbsp;&nbsp;<span class="dir">instances/</span> <span style="color:#888">— per-instance data dirs</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">i-0abc123/</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">cloud-config.txt</span> <span style="color:#888">— merged cloud-config</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">user-data.txt</span> <span style="color:#888">— raw user-data</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">vendor-data.txt</span> <span style="color:#888">— raw vendor-data</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">sem/</span> <span style="color:#888">— semaphore files (per-once tracking)</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dir">scripts/</span> <span style="color:#888">— cached scripts</span><br>
+          &nbsp;&nbsp;<span class="dir">scripts/</span> <span style="color:#888">— per-boot, per-instance, per-once scripts</span><br>
+          &nbsp;&nbsp;<span class="dir">seed/</span> <span style="color:#888">— NoCloud seed directory</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Script Frequency Directories</div>
+    <p>Scripts placed in <code>/var/lib/cloud/scripts/</code> subdirectories run at different frequencies:</p>
+    <table>
+      <tr>
+        <th>Directory</th>
+        <th>Frequency</th>
+        <th>Use Case</th>
+      </tr>
+      <tr>
+        <td><code>per-boot/</code></td>
+        <td>Every boot</td>
+        <td>Dynamic registration, health check hooks</td>
+      </tr>
+      <tr>
+        <td><code>per-instance/</code></td>
+        <td>Once per instance-id</td>
+        <td>Initial setup, one-time provisioning</td>
+      </tr>
+      <tr>
+        <td><code>per-once/</code></td>
+        <td>Once ever (tracked by semaphore)</td>
+        <td>Migrations, one-off fixes</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Common pitfall:</strong> <code>/run/cloud-init/instance-data-sensitive.json</code> contains <em>all</em> metadata including potential secrets (e.g., user-data with embedded passwords). It's root-only (mode 0600), but be aware it exists — don't expose it via a web endpoint or logging pipeline.
+  </div>
+
+  <!-- ===== CONFIGURATION HIERARCHY ===== -->
+  <h2>Configuration Hierarchy</h2>
+
+  <p>Cloud-init's own behavior is configured through a layered system. Understanding the precedence is critical when debugging why a setting isn't taking effect.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong><code>/etc/cloud/cloud.cfg</code></strong> — Base configuration file. Defines default user, module run order, datasource list, and system-level defaults. Managed by the distro's cloud-init package. Avoid editing directly — use drop-ins instead.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong><code>/etc/cloud/cloud.cfg.d/*.cfg</code></strong> — Drop-in configuration files. Merged in lexicographic order (so <code>99-custom.cfg</code> overrides <code>50-defaults.cfg</code>). This is where you customize cloud-init on a base image: force a datasource, change the default user, disable modules, etc.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>User-data</strong> — Provided at launch time. Highest precedence for module configuration. Your <code>#cloud-config</code> YAML overrides everything above where keys overlap.
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Kernel command line:</strong> You can also pass <code>cc:{"key":"value"}</code> on the kernel cmdline to inject cloud-config at the earliest possible stage. Useful for PXE boot scenarios where you need to set the datasource before cloud-init even runs.
+  </div>
+
+  <!-- ===== DISABLING CLOUD-INIT ===== -->
+  <h2>Disabling Cloud-Init</h2>
+
+  <p>On images that ship with cloud-init but don't need it (e.g., converted VM templates running on bare metal), there are several ways to disable it:</p>
+
+  <table>
+    <tr>
+      <th>Method</th>
+      <th>Scope</th>
+      <th>How</th>
+    </tr>
+    <tr>
+      <td>Marker file</td>
+      <td>Persistent</td>
+      <td><code>touch /etc/cloud/cloud-init.disabled</code></td>
+    </tr>
+    <tr>
+      <td>Kernel cmdline</td>
+      <td>Per boot</td>
+      <td>Add <code>cloud-init=disabled</code> to GRUB</td>
+    </tr>
+    <tr>
+      <td>Environment variable</td>
+      <td>Per invocation</td>
+      <td><code>CLOUD_INIT_DISABLED=1</code></td>
+    </tr>
+    <tr>
+      <td>Uninstall</td>
+      <td>Permanent</td>
+      <td><code>apt remove cloud-init</code> / <code>dnf remove cloud-init</code></td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Best practice:</strong> For Packer-built images that will run on a cloud, don't disable cloud-init. Instead, run <code>cloud-init clean --logs</code> at the end of your Packer provisioner so the next boot treats the instance as new. This is standard practice for AMI/image baking pipelines.
+  </div>
+
+</body>
+</html>

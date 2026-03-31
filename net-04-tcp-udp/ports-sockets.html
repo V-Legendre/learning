@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 04 — Ports & Sockets</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 04 — Ports & Sockets</h1>
+  <p class="subtitle">How the OS multiplexes network connections</p>
+
+  <!-- ===== PORT NUMBERS ===== -->
+  <h2>Port Numbers</h2>
+
+  <p>A port is a <strong>16-bit number (0-65535)</strong> that identifies a specific process or service on a host. Ports exist at Layer 4 (Transport) — both TCP and UDP use them, and they are independent namespaces (TCP port 53 and UDP port 53 are different).</p>
+
+  <h3>Port Ranges</h3>
+
+  <table>
+    <thead>
+      <tr><th>Range</th><th>Name</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>0 - 1023</code></td>
+        <td><strong>Well-Known Ports</strong></td>
+        <td>Assigned by IANA. Require root/CAP_NET_BIND_SERVICE to bind on Linux.</td>
+      </tr>
+      <tr>
+        <td><code>1024 - 49151</code></td>
+        <td><strong>Registered Ports</strong></td>
+        <td>Assigned by IANA for specific services. No special privileges required.</td>
+      </tr>
+      <tr>
+        <td><code>49152 - 65535</code></td>
+        <td><strong>Ephemeral (Dynamic) Ports</strong></td>
+        <td>Automatically assigned by the OS for client-side connections.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Linux ephemeral range:</strong> Linux actually defaults to <code>32768-60999</code> (configurable via <code>net.ipv4.ip_local_port_range</code>), which is wider than the IANA recommendation. This gives ~28,000 ephemeral ports per destination IP.
+  </div>
+
+  <h3>Common Well-Known Ports</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Web & Email</div>
+      <table>
+        <thead><tr><th>Port</th><th>Protocol</th><th>Service</th></tr></thead>
+        <tbody>
+          <tr><td><code>80</code></td><td>TCP</td><td>HTTP</td></tr>
+          <tr><td><code>443</code></td><td>TCP/UDP</td><td>HTTPS / HTTP/3 (QUIC)</td></tr>
+          <tr><td><code>25</code></td><td>TCP</td><td>SMTP (mail relay)</td></tr>
+          <tr><td><code>465</code></td><td>TCP</td><td>SMTPS (SMTP over TLS)</td></tr>
+          <tr><td><code>587</code></td><td>TCP</td><td>SMTP submission</td></tr>
+          <tr><td><code>143</code></td><td>TCP</td><td>IMAP</td></tr>
+          <tr><td><code>993</code></td><td>TCP</td><td>IMAPS</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Infrastructure</div>
+      <table>
+        <thead><tr><th>Port</th><th>Protocol</th><th>Service</th></tr></thead>
+        <tbody>
+          <tr><td><code>22</code></td><td>TCP</td><td>SSH</td></tr>
+          <tr><td><code>53</code></td><td>TCP/UDP</td><td>DNS</td></tr>
+          <tr><td><code>67/68</code></td><td>UDP</td><td>DHCP (server/client)</td></tr>
+          <tr><td><code>123</code></td><td>UDP</td><td>NTP</td></tr>
+          <tr><td><code>161/162</code></td><td>UDP</td><td>SNMP / SNMP Trap</td></tr>
+          <tr><td><code>514</code></td><td>UDP</td><td>Syslog</td></tr>
+          <tr><td><code>179</code></td><td>TCP</td><td>BGP</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3>Common Registered Ports (DevOps Essentials)</h3>
+
+  <table>
+    <thead><tr><th>Port</th><th>Protocol</th><th>Service</th></tr></thead>
+    <tbody>
+      <tr><td><code>5432</code></td><td>TCP</td><td>PostgreSQL</td></tr>
+      <tr><td><code>3306</code></td><td>TCP</td><td>MySQL</td></tr>
+      <tr><td><code>6379</code></td><td>TCP</td><td>Redis</td></tr>
+      <tr><td><code>27017</code></td><td>TCP</td><td>MongoDB</td></tr>
+      <tr><td><code>9092</code></td><td>TCP</td><td>Kafka</td></tr>
+      <tr><td><code>2379/2380</code></td><td>TCP</td><td>etcd (client/peer)</td></tr>
+      <tr><td><code>6443</code></td><td>TCP</td><td>Kubernetes API server</td></tr>
+      <tr><td><code>10250</code></td><td>TCP</td><td>Kubelet API</td></tr>
+      <tr><td><code>8080</code></td><td>TCP</td><td>HTTP alternate (common for app servers)</td></tr>
+      <tr><td><code>8443</code></td><td>TCP</td><td>HTTPS alternate</td></tr>
+      <tr><td><code>9090</code></td><td>TCP</td><td>Prometheus</td></tr>
+      <tr><td><code>3000</code></td><td>TCP</td><td>Grafana</td></tr>
+      <tr><td><code>51820</code></td><td>UDP</td><td>WireGuard</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== WHAT IS A SOCKET ===== -->
+  <h2>What a Socket Really Is</h2>
+
+  <p>A "socket" in networking has two meanings that are often conflated. Understanding the distinction is important.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l4">The Network Definition (5-Tuple)</div>
+      <div class="comp-body">
+        <p>A unique connection is identified by a <strong>5-tuple</strong>:</p>
+        <ol style="padding-left: 20px; margin-top: 10px;">
+          <li><strong>Protocol</strong> (TCP or UDP)</li>
+          <li><strong>Source IP</strong></li>
+          <li><strong>Source Port</strong></li>
+          <li><strong>Destination IP</strong></li>
+          <li><strong>Destination Port</strong></li>
+        </ol>
+        <p style="margin-top: 10px; color: #888; font-size: 13px;">Any difference in any field = different connection.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header linux">The OS Definition (File Descriptor)</div>
+      <div class="comp-body">
+        <p>In Unix/Linux, a socket is a <strong>file descriptor</strong> — an integer that represents an open I/O channel.</p>
+        <ul style="margin-top: 10px;">
+          <li>Created by the <code>socket()</code> syscall</li>
+          <li>Readable/writable with <code>read()</code> / <code>write()</code></li>
+          <li>Lives in <code>/proc/PID/fd/</code></li>
+          <li>Inherits the "everything is a file" Unix philosophy</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MULTIPLEXING ===== -->
+  <h2>How Multiplexing Works</h2>
+
+  <p>A common misconception: "a server on port 443 can only handle one connection." In reality, a server can handle <strong>millions</strong> of concurrent connections on a single port because each connection has a unique 5-tuple.</p>
+
+  <div class="panel">
+    <div class="panel-title">Example: Nginx on Port 443</div>
+    <table>
+      <thead>
+        <tr><th>Protocol</th><th>Source IP</th><th>Source Port</th><th>Dest IP</th><th>Dest Port</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>TCP</td><td>203.0.113.1</td><td>52341</td><td>10.0.0.1</td><td>443</td></tr>
+        <tr><td>TCP</td><td>203.0.113.1</td><td>52342</td><td>10.0.0.1</td><td>443</td></tr>
+        <tr><td>TCP</td><td>198.51.100.5</td><td>44801</td><td>10.0.0.1</td><td>443</td></tr>
+        <tr><td>TCP</td><td>198.51.100.5</td><td>44802</td><td>10.0.0.1</td><td>443</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top: 10px; color: #888;">All four connections share destination port 443. Each is unique because the source IP:port differs.</p>
+  </div>
+
+  <div class="note">
+    <strong>Theoretical limit:</strong> Per destination IP:port, the number of concurrent connections from a single source IP is limited by the ephemeral port range (~28,000 on Linux). Across different source IPs, there's no practical limit from the port namespace — the real limits are file descriptors, memory, and CPU.
+  </div>
+
+  <!-- ===== SOCKET API ===== -->
+  <h2>Socket API Lifecycle</h2>
+
+  <p>The Berkeley sockets API (BSD sockets) is the universal interface for network programming. Every language wraps it, but the underlying syscalls are the same.</p>
+
+  <h3>TCP Server Lifecycle</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">socket()</div>
+      <div class="desc">Create a socket fd<br>(AF_INET, SOCK_STREAM)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">bind()</div>
+      <div class="desc">Assign local IP:port<br>(0.0.0.0:443)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">listen()</div>
+      <div class="desc">Mark socket as passive<br>(set backlog size)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">accept()</div>
+      <div class="desc">Block until client connects<br>(returns NEW fd)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">read/write</div>
+      <div class="desc">Exchange data on<br>the connection fd</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">close()</div>
+      <div class="desc">Teardown connection<br>(FIN exchange)</div>
+    </div>
+  </div>
+
+  <h3>TCP Client Lifecycle</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">socket()</div>
+      <div class="desc">Create a socket fd</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">connect()</div>
+      <div class="desc">Initiate 3-way handshake<br>(OS auto-binds ephemeral port)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">read/write</div>
+      <div class="desc">Exchange data</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">close()</div>
+      <div class="desc">Teardown connection</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Insight: Two Types of Server Sockets</div>
+    <ul>
+      <li><strong>Listening socket:</strong> Created by <code>socket()</code> + <code>bind()</code> + <code>listen()</code>. It never carries data — it only accepts new connections. There is exactly ONE per port.</li>
+      <li><strong>Connected socket:</strong> Returned by <code>accept()</code>. This is a new file descriptor representing one specific connection (one 5-tuple). Data flows on these. There are MANY per port.</li>
+    </ul>
+  </div>
+
+  <!-- ===== SO_REUSEADDR ===== -->
+  <h2>SO_REUSEADDR</h2>
+
+  <p>Without <code>SO_REUSEADDR</code>, if a server crashes and restarts, <code>bind()</code> fails because the old socket is still in TIME_WAIT. You'll see the dreaded <code>Address already in use</code> error.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without SO_REUSEADDR</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">// Server crashes, restarts...</span>
+<span class="fn">bind</span>(fd, addr, len);
+<span class="cm">// ERROR: EADDRINUSE</span>
+<span class="cm">// Old socket still in TIME_WAIT</span>
+<span class="cm">// Must wait 60s (2xMSL) to restart!</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With SO_REUSEADDR</div>
+      <div class="comp-body">
+        <pre><code><span class="kw">int</span> opt = <span class="num">1</span>;
+<span class="fn">setsockopt</span>(fd, SOL_SOCKET,
+           SO_REUSEADDR,
+           &amp;opt, <span class="kw">sizeof</span>(opt));
+<span class="fn">bind</span>(fd, addr, len);
+<span class="cm">// SUCCESS - bind to TIME_WAIT addr</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Every server should set SO_REUSEADDR.</strong> This is not optional for production services. Without it, server restarts during deployments will fail for up to 60 seconds. Every web server, database, and application framework sets this by default.
+  </div>
+
+  <!-- ===== SO_REUSEPORT ===== -->
+  <h2>SO_REUSEPORT</h2>
+
+  <p><code>SO_REUSEPORT</code> (Linux 3.9+) takes things further: it allows <strong>multiple processes/threads to bind to the same IP:port simultaneously</strong>. The kernel distributes incoming connections across all listeners.</p>
+
+  <div class="panel">
+    <div class="panel-title">How SO_REUSEPORT Works</div>
+    <ul>
+      <li>Multiple processes call <code>bind()</code> + <code>listen()</code> on the same port</li>
+      <li>The kernel load-balances incoming connections across all listening sockets (consistent hashing by source IP:port since Linux 4.6)</li>
+      <li>Each process has its own accept queue — no thundering herd problem</li>
+      <li>If a process dies, only its connections are affected; others continue serving</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Traditional: Single Listener + Worker Threads</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">// One process binds + listens</span>
+<span class="cm">// accept() returns fd</span>
+<span class="cm">// Hand fd to worker thread/process</span>
+<span class="cm">//</span>
+<span class="cm">// Problem: accept() is a bottleneck</span>
+<span class="cm">// Thundering herd with fork()</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Modern: SO_REUSEPORT</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">// N processes all bind + listen</span>
+<span class="cm">// on the same port</span>
+<span class="cm">// Kernel distributes connections</span>
+<span class="cm">//</span>
+<span class="cm">// No bottleneck, no thundering herd</span>
+<span class="cm">// Used by Nginx, Envoy, HAProxy</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>In Kubernetes:</strong> When you run multiple replicas of a pod and they bind to the same port, each gets its own network namespace — so <code>SO_REUSEPORT</code> isn't needed for inter-pod distribution (that's kube-proxy/iptables/eBPF). But within a single pod, multi-process servers (like Nginx with <code>worker_processes auto</code>) use <code>SO_REUSEPORT</code> to distribute across workers.
+  </div>
+
+  <!-- ===== LISTEN BACKLOG ===== -->
+  <h2>Listen Backlog & Connection Queues</h2>
+
+  <p>When a server calls <code>listen(fd, backlog)</code>, the <code>backlog</code> parameter controls the maximum number of pending connections. But the kernel actually uses a <strong>two-queue model</strong>.</p>
+
+  <h3>The Two-Queue Model</h3>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label" style="color: #fbbf24;">SYN Queue</div>
+      <div class="desc">Half-open connections<br>(SYN received, SYN-ACK sent,<br>waiting for final ACK)</div>
+    </div>
+    <div class="arrow">→ recv ACK →</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label" style="color: #34d399;">Accept Queue</div>
+      <div class="desc">Fully established connections<br>waiting for application<br>to call accept()</div>
+    </div>
+    <div class="arrow">→ accept() →</div>
+    <div class="flow-step" style="border-color: #60a5fa;">
+      <div class="label" style="color: #60a5fa;">Application</div>
+      <div class="desc">Connection handed<br>to the application<br>as a new fd</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Queue Parameters</div>
+    <table>
+      <thead>
+        <tr><th>Queue</th><th>Controlled By</th><th>Overflow Behavior</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>SYN Queue</strong></td>
+          <td><code>tcp_max_syn_backlog</code> (default: 128-1024)</td>
+          <td>Drop the SYN (client retries) or use SYN cookies if enabled</td>
+        </tr>
+        <tr>
+          <td><strong>Accept Queue</strong></td>
+          <td><code>min(backlog, somaxconn)</code> where <code>backlog</code> is the <code>listen()</code> argument and <code>somaxconn</code> is the sysctl</td>
+          <td>Drop the final ACK (connection silently fails) or send RST</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Check and tune queue limits<br>
+    <span class="prompt">$ </span>sysctl net.core.somaxconn<br>
+    <span class="output">net.core.somaxconn = 4096</span><br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_max_syn_backlog<br>
+    <span class="output">net.ipv4.tcp_max_syn_backlog = 4096</span><br><br>
+    <span class="prompt"># </span>Check current queue state for a listening socket<br>
+    <span class="prompt">$ </span>ss -tlnp<br>
+    <span class="output">State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process</span><br>
+    <span class="output">LISTEN  0       4096    0.0.0.0:443         0.0.0.0:*          users:(("nginx",pid=1234,fd=6))</span><br>
+    <span class="output">LISTEN  0       4096    0.0.0.0:80          0.0.0.0:*          users:(("nginx",pid=1234,fd=7))</span><br>
+    <span class="output">LISTEN  0       128     127.0.0.1:5432      0.0.0.0:*          users:(("postgres",pid=5678,fd=3))</span>
+  </div>
+
+  <div class="note">
+    <strong>Reading <code>ss -tln</code> output for LISTEN sockets:</strong><br>
+    <code>Recv-Q</code> = current number of connections waiting in the accept queue<br>
+    <code>Send-Q</code> = maximum accept queue size (the backlog)<br>
+    If <code>Recv-Q</code> approaches <code>Send-Q</code>, the application is not calling <code>accept()</code> fast enough.
+  </div>
+
+  <div class="warn">
+    <strong>Common misconfiguration:</strong> Many applications pass <code>listen(fd, 128)</code> as the backlog. On a busy server, 128 is far too low. But even if the application passes 65535, the kernel caps it at <code>somaxconn</code>. Both must be tuned. Modern defaults (kernel 5.4+) set <code>somaxconn=4096</code>, but older kernels default to 128.
+  </div>
+
+  <!-- ===== INSPECTING SOCKETS ===== -->
+  <h2>Inspecting Sockets in Practice</h2>
+
+  <div class="terminal">
+    <span class="prompt"># </span>List all listening TCP sockets with process info<br>
+    <span class="prompt">$ </span>ss -tlnp<br>
+    <span class="output">State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process</span><br>
+    <span class="output">LISTEN  0       4096    0.0.0.0:443         0.0.0.0:*          users:(("envoy",pid=1001,fd=25))</span><br>
+    <span class="output">LISTEN  0       4096    0.0.0.0:80          0.0.0.0:*          users:(("envoy",pid=1001,fd=24))</span><br>
+    <span class="output">LISTEN  0       4096    127.0.0.1:15000     0.0.0.0:*          users:(("envoy",pid=1001,fd=18))</span><br>
+    <span class="output">LISTEN  0       128     0.0.0.0:22          0.0.0.0:*          users:(("sshd",pid=842,fd=3))</span><br>
+    <span class="output">LISTEN  0       511     127.0.0.1:8080      0.0.0.0:*          users:(("myapp",pid=2345,fd=5))</span><br><br>
+    <span class="prompt"># </span>List all UDP listening sockets<br>
+    <span class="prompt">$ </span>ss -ulnp<br>
+    <span class="output">State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process</span><br>
+    <span class="output">UNCONN  0       0       0.0.0.0:51820       0.0.0.0:*          users:(("wireguard",pid=901))</span><br>
+    <span class="output">UNCONN  0       0       127.0.0.53:53       0.0.0.0:*          users:(("systemd-resolve",pid=610,fd=13))</span><br><br>
+    <span class="prompt"># </span>Find which process is using a specific port<br>
+    <span class="prompt">$ </span>ss -tlnp 'sport = :8080'<br>
+    <span class="output">State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process</span><br>
+    <span class="output">LISTEN  0       511     127.0.0.1:8080      0.0.0.0:*          users:(("myapp",pid=2345,fd=5))</span><br><br>
+    <span class="prompt"># </span>Count connections per state to a destination<br>
+    <span class="prompt">$ </span>ss -tan dst 10.0.1.5 | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn<br>
+    <span class="output">   4201 ESTAB</span><br>
+    <span class="output">    312 TIME-WAIT</span><br>
+    <span class="output">      3 CLOSE-WAIT</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Ephemeral Port Exhaustion</div>
+    <p>If a client opens many connections to the <em>same</em> destination IP:port, it can run out of ephemeral ports. Each connection needs a unique source port from the ephemeral range.</p>
+    <ul>
+      <li><strong>Symptom:</strong> <code>connect()</code> fails with <code>EADDRNOTAVAIL</code> ("Cannot assign requested address")</li>
+      <li><strong>Check:</strong> <code>ss -tan dst TARGET:PORT | wc -l</code> — if it's close to 28,000, you're exhausted</li>
+      <li><strong>Mitigations:</strong>
+        <ul>
+          <li>Widen the range: <code>sysctl -w net.ipv4.ip_local_port_range="1024 65535"</code> (gives ~64,000 ports)</li>
+          <li>Connection pooling (reuse connections instead of creating new ones)</li>
+          <li>Use multiple destination IPs (load balancer VIPs)</li>
+          <li>Enable <code>tcp_tw_reuse</code> to reclaim TIME_WAIT ports</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Check ephemeral port range<br>
+    <span class="prompt">$ </span>sysctl net.ipv4.ip_local_port_range<br>
+    <span class="output">net.ipv4.ip_local_port_range = 32768	60999</span><br><br>
+    <span class="prompt"># </span>Check file descriptor limits (also constrains max connections)<br>
+    <span class="prompt">$ </span>ulimit -n<br>
+    <span class="output">1048576</span><br>
+    <span class="prompt">$ </span>sysctl fs.file-max<br>
+    <span class="output">fs.file-max = 9223372036854775807</span>
+  </div>
+
+  <div class="tip">
+    <strong>K8s troubleshooting:</strong> In Kubernetes, ephemeral port exhaustion often manifests when a sidecar proxy (Envoy/Istio) makes many outbound connections to the same service. The symptoms are intermittent connection failures under load. Check with <code>ss -s</code> inside the pod and look at the TIME_WAIT count.
+  </div>
+
+</body>
+</html>

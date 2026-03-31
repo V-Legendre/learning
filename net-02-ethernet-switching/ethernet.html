@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 02 — Ethernet</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 02 — Ethernet</h1>
+  <p class="subtitle">Layer 2 — the protocol that connects everything on a LAN</p>
+
+  <!-- ===== ETHERNET FRAME STRUCTURE ===== -->
+  <h2>Ethernet Frame Structure</h2>
+
+  <p>Every piece of data that moves across a local network is wrapped in an <strong>Ethernet frame</strong>. The frame provides addressing (who sent this, who should receive it), payload carriage, and error detection. Understanding the byte-level layout is essential for packet captures and debugging network issues.</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field flag" style="flex: 7;">
+      <span class="field-name">Preamble</span>
+      <span class="field-size">7 bytes</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">SFD</span>
+      <span class="field-size">1 byte</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 6;">
+      <span class="field-name">Dest MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field src" style="flex: 6;">
+      <span class="field-name">Source MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 2;">
+      <span class="field-name">EtherType / Length</span>
+      <span class="field-size">2 bytes</span>
+    </div>
+    <div class="pkt-field data" style="flex: 15;">
+      <span class="field-name">Payload</span>
+      <span class="field-size">46 – 1500 bytes</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">FCS (CRC-32)</span>
+      <span class="field-size">4 bytes</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Field-by-Field Breakdown</div>
+    <ul>
+      <li><strong>Preamble (7 bytes)</strong> — An alternating pattern of <code>10101010</code> repeated 7 times. Allows the receiving NIC's clock to synchronize with the sender's bit timing. Not part of the frame proper — it's a physical-layer artifact.</li>
+      <li><strong>SFD — Start Frame Delimiter (1 byte)</strong> — The pattern <code>10101011</code>. The final <code>11</code> signals "the real frame starts now." Together with the preamble, that's 8 bytes of synchronization overhead.</li>
+      <li><strong>Destination MAC (6 bytes)</strong> — The intended recipient. Can be unicast (one host), multicast (group), or broadcast (<code>FF:FF:FF:FF:FF:FF</code>).</li>
+      <li><strong>Source MAC (6 bytes)</strong> — The sender's hardware address. Always unicast — a broadcast source makes no sense.</li>
+      <li><strong>EtherType / Length (2 bytes)</strong> — If the value is <code>&ge; 0x0600</code> (1536), it's an EtherType identifying the upper-layer protocol. If <code>&le; 0x05DC</code> (1500), it's a length field (IEEE 802.3 format). In practice, you'll almost always see EtherType values.</li>
+      <li><strong>Payload (46–1500 bytes)</strong> — The encapsulated data (typically an IP packet). Minimum 46 bytes — if the actual data is shorter, the frame is padded to meet the minimum frame size of 64 bytes (required for collision detection in half-duplex Ethernet).</li>
+      <li><strong>FCS — Frame Check Sequence (4 bytes)</strong> — A CRC-32 checksum computed over the destination MAC, source MAC, EtherType, and payload. The receiver recalculates and silently drops frames with mismatched FCS. No retransmission at Layer 2 — that's TCP's job.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Wire vs. Wireshark:</strong> You won't see the Preamble, SFD, or FCS in a typical Wireshark capture. The NIC strips those before handing the frame to the OS. What Wireshark shows you is the 14-byte header (Dest MAC + Src MAC + EtherType) plus the payload. Keep this in mind when calculating frame sizes on the wire vs. in captures.
+  </div>
+
+  <!-- ===== MAC ADDRESSES ===== -->
+  <h2>MAC Addresses</h2>
+
+  <p>A MAC (Media Access Control) address is the Layer 2 hardware address burned into every network interface. It's what switches use to forward frames — IP addresses are irrelevant at this layer.</p>
+
+  <div class="panel">
+    <div class="panel-title">MAC Address Structure — 48 bits (6 bytes)</div>
+    <div class="packet-diagram">
+      <div class="pkt-field proto" style="flex: 3;">
+        <span class="field-name">OUI (Vendor)</span>
+        <span class="field-size">3 bytes (24 bits)</span>
+      </div>
+      <div class="pkt-field src" style="flex: 3;">
+        <span class="field-name">Device ID (NIC)</span>
+        <span class="field-size">3 bytes (24 bits)</span>
+      </div>
+    </div>
+    <ul>
+      <li><strong>OUI (Organizationally Unique Identifier)</strong> — Assigned by IEEE to manufacturers. The first 3 bytes identify the vendor. Example: <code>00:50:56</code> = VMware, <code>DC:A6:32</code> = Raspberry Pi.</li>
+      <li><strong>Device ID</strong> — Assigned by the manufacturer to uniquely identify each NIC within that OUI.</li>
+      <li><strong>Notation</strong> — Written as six hex pairs. Colon-separated <code>AA:BB:CC:DD:EE:FF</code> (Linux/Wireshark), dash-separated <code>AA-BB-CC-DD-EE-FF</code> (Windows), or dot-separated <code>AABB.CCDD.EEFF</code> (Cisco).</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>Special bits in the first byte:</strong> Bit 0 (least significant) of the first octet is the <strong>I/G bit</strong> — 0 = unicast, 1 = multicast. Bit 1 is the <strong>U/L bit</strong> — 0 = globally unique (BIA), 1 = locally administered. A MAC starting with <code>02:xx:xx</code> is locally administered, which is what Docker, VMs, and container runtimes commonly generate.
+  </div>
+
+  <!-- ===== ADDRESSING TYPES ===== -->
+  <h2>Broadcast vs. Unicast vs. Multicast</h2>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Unicast</div>
+      <p>One sender, one receiver. The destination MAC identifies exactly one NIC on the LAN.</p>
+      <p style="margin-top: 10px; font-size: 13px; color: #888;">I/G bit = 0</p>
+      <p><code>00:1A:2B:3C:4D:5E</code></p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Broadcast</div>
+      <p>One sender, all receivers on the LAN segment. The switch floods the frame out every port (except the source port).</p>
+      <p style="margin-top: 10px; font-size: 13px; color: #888;">All bits = 1</p>
+      <p><code>FF:FF:FF:FF:FF:FF</code></p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Multicast</div>
+      <p>One sender, a subscribed group. Switches flood multicast by default unless IGMP snooping is enabled.</p>
+      <p style="margin-top: 10px; font-size: 13px; color: #888;">I/G bit = 1, not all-1s</p>
+      <p><code>01:00:5E:xx:xx:xx</code></p>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Broadcast domains are a scaling problem.</strong> Every broadcast frame consumes CPU on every host in the broadcast domain. A flat L2 network with 500+ hosts will drown in ARP, DHCP, and mDNS broadcast traffic. This is why VLANs exist — they segment broadcast domains at Layer 2. If you've ever seen a Kubernetes node's CPU spike from excessive ARP traffic in a large flat network, this is the root cause.
+  </div>
+
+  <!-- ===== ETHERTYPE VALUES ===== -->
+  <h2>EtherType Values</h2>
+
+  <p>The 2-byte EtherType field tells the receiving NIC which upper-layer protocol handler should process the payload. These are the values you'll encounter constantly in packet captures.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>EtherType</th>
+        <th>Protocol</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>0x0800</code></td>
+        <td>IPv4</td>
+        <td>The workhorse — the vast majority of frames carry this.</td>
+      </tr>
+      <tr>
+        <td><code>0x0806</code></td>
+        <td>ARP</td>
+        <td>Address Resolution Protocol — maps IP to MAC. Critical for L2/L3 interaction.</td>
+      </tr>
+      <tr>
+        <td><code>0x86DD</code></td>
+        <td>IPv6</td>
+        <td>IPv6 payload. Increasingly common in dual-stack environments.</td>
+      </tr>
+      <tr>
+        <td><code>0x8100</code></td>
+        <td>802.1Q VLAN Tag</td>
+        <td>Signals a VLAN-tagged frame. Inserts a 4-byte tag between Source MAC and the original EtherType.</td>
+      </tr>
+      <tr>
+        <td><code>0x88CC</code></td>
+        <td>LLDP</td>
+        <td>Link Layer Discovery Protocol — neighbor discovery between switches/routers.</td>
+      </tr>
+      <tr>
+        <td><code>0x8906</code></td>
+        <td>FCoE</td>
+        <td>Fibre Channel over Ethernet — storage traffic on Ethernet (data center convergence).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Wireshark filter tip:</strong> Use <code>eth.type == 0x0806</code> to isolate ARP traffic, or <code>eth.type == 0x8100</code> to find VLAN-tagged frames on a trunk port mirror.
+  </div>
+
+  <!-- ===== MTU ===== -->
+  <h2>MTU — Maximum Transmission Unit</h2>
+
+  <p>MTU defines the largest payload (in bytes) a frame can carry. It does <em>not</em> include the Ethernet header or FCS — only the payload portion.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l2">Standard Ethernet</div>
+      <div class="comp-body">
+        <p><strong>MTU: 1500 bytes</strong></p>
+        <p style="margin-top: 8px;">Max frame on wire: 1518 bytes (14-byte header + 1500 payload + 4-byte FCS).</p>
+        <p style="margin-top: 8px;">With 802.1Q tag: 1522 bytes ("baby giant").</p>
+        <p style="margin-top: 8px;">This is the universal default. Every switch, router, and host assumes 1500 unless configured otherwise.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">Jumbo Frames</div>
+      <div class="comp-body">
+        <p><strong>MTU: up to 9000 bytes</strong></p>
+        <p style="margin-top: 8px;">Max frame on wire: ~9018 bytes.</p>
+        <p style="margin-top: 8px;">Common in storage networks (iSCSI, NFS), HPC, and east-west data center traffic.</p>
+        <p style="margin-top: 8px;">Requires end-to-end configuration — every link in the path must support the larger MTU. A single 1500-byte link causes fragmentation or drops.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>MTU mismatches are silent killers.</strong> If the path MTU drops below the sender's MTU and ICMP "Fragmentation Needed" (type 3, code 4) is blocked by a firewall, you get a black hole — connections hang on large packets while small ones (SSH handshake, DNS queries) work fine. This is the classic "I can ping but can't transfer files" symptom. In Kubernetes, watch for this when overlay networks (VXLAN, Geneve) add encapsulation headers that reduce the effective MTU by 50–100 bytes.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why MTU Matters — The Math</div>
+    <ul>
+      <li><strong>IP fragmentation</strong> — When an IP packet exceeds the link MTU, the router fragments it. Fragmentation is CPU-intensive, causes reassembly overhead at the destination, and a single lost fragment means retransmitting the entire original packet.</li>
+      <li><strong>Don't Fragment (DF) bit</strong> — Most modern stacks set the DF bit in the IP header. With DF set, an oversized packet is dropped (not fragmented) and the router sends an ICMP "Fragmentation Needed" message. This is the basis of Path MTU Discovery (PMTUD).</li>
+      <li><strong>Overlay overhead</strong> — VXLAN adds 50 bytes, Geneve adds 50+ bytes, GRE adds 24+ bytes. If the underlay MTU is 1500, your overlay effective MTU is ~1450. Set the inner MTU accordingly or increase the underlay MTU to 9000.</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>Quick test:</strong> <code>ping -M do -s 1472 &lt;target&gt;</code> on Linux sends a 1500-byte packet (1472 payload + 20 IP header + 8 ICMP header) with DF set. If it fails, you have an MTU issue on the path. Decrease <code>-s</code> until you find the working size.
+  </div>
+
+  <!-- ===== ETHERNET EVOLUTION ===== -->
+  <h2>Ethernet Evolution</h2>
+
+  <p>Ethernet has scaled from 10 Mbps over coax to 400 Gbps over fiber while maintaining the same frame format. That backward compatibility is remarkable — a 10 Gbps switch still speaks the same frame structure as the original 1980s Ethernet.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Standard</th>
+        <th>Speed</th>
+        <th>Medium</th>
+        <th>Max Distance</th>
+        <th>Year</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>10BASE-T</code></td>
+        <td>10 Mbps</td>
+        <td>Cat 3+ UTP</td>
+        <td>100 m</td>
+        <td>1990</td>
+      </tr>
+      <tr>
+        <td><code>100BASE-TX</code></td>
+        <td>100 Mbps</td>
+        <td>Cat 5 UTP</td>
+        <td>100 m</td>
+        <td>1995</td>
+      </tr>
+      <tr>
+        <td><code>1000BASE-T</code></td>
+        <td>1 Gbps</td>
+        <td>Cat 5e/6 UTP</td>
+        <td>100 m</td>
+        <td>1999</td>
+      </tr>
+      <tr>
+        <td><code>10GBASE-T</code></td>
+        <td>10 Gbps</td>
+        <td>Cat 6a/7 UTP</td>
+        <td>100 m</td>
+        <td>2006</td>
+      </tr>
+      <tr>
+        <td><code>10GBASE-SR</code></td>
+        <td>10 Gbps</td>
+        <td>Multimode fiber</td>
+        <td>300 m</td>
+        <td>2002</td>
+      </tr>
+      <tr>
+        <td><code>25GBASE-SR</code></td>
+        <td>25 Gbps</td>
+        <td>Multimode fiber</td>
+        <td>100 m</td>
+        <td>2016</td>
+      </tr>
+      <tr>
+        <td><code>100GBASE-SR4</code></td>
+        <td>100 Gbps</td>
+        <td>Multimode fiber (4x)</td>
+        <td>100 m</td>
+        <td>2015</td>
+      </tr>
+      <tr>
+        <td><code>400GBASE-SR8</code></td>
+        <td>400 Gbps</td>
+        <td>Multimode fiber (8x)</td>
+        <td>100 m</td>
+        <td>2018</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Naming Convention Decoder</div>
+    <p>Ethernet standards follow the pattern <code>[speed]BASE-[encoding/medium]</code>:</p>
+    <ul>
+      <li><strong>Number</strong> — Speed in Mbps (10, 100) or Gbps (1000, 10G, 25G, 100G, 400G)</li>
+      <li><strong>BASE</strong> — Baseband signaling (as opposed to broadband)</li>
+      <li><strong>T</strong> — Twisted pair copper</li>
+      <li><strong>SR</strong> — Short-reach fiber (multimode)</li>
+      <li><strong>LR</strong> — Long-reach fiber (single-mode, ~10 km)</li>
+      <li><strong>ER</strong> — Extended-reach fiber (single-mode, ~40 km)</li>
+      <li><strong>CR</strong> — Direct-attach copper (DAC cables in racks)</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Data center relevance:</strong> Modern data centers typically run <strong>25G to servers</strong> (replacing 10G), <strong>100G for leaf-spine links</strong>, and are transitioning to <strong>400G for spine-to-spine and core</strong>. If you're managing K8s clusters on bare metal, understanding these speeds and the cabling constraints (fiber type, distance limits, SFP compatibility) directly impacts your network design and procurement decisions.
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">10 Mbps</div>
+      <div class="desc">1990 — 10BASE-T</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">100 Mbps</div>
+      <div class="desc">1995 — Fast Ethernet</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">1 Gbps</div>
+      <div class="desc">1999 — Gigabit</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">10 Gbps</div>
+      <div class="desc">2002–2006</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">25/100 Gbps</div>
+      <div class="desc">2015–2016</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">400 Gbps</div>
+      <div class="desc">2018+</div>
+    </div>
+  </div>
+
+</body>
+</html>

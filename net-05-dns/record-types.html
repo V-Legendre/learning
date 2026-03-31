@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 05 — DNS Record Types</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 05 — DNS Record Types</h1>
+  <p class="subtitle">A, AAAA, CNAME, MX, TXT, SRV, and more</p>
+
+  <!-- ===== OVERVIEW TABLE ===== -->
+  <h2>Record Type Reference</h2>
+
+  <p>DNS is more than name-to-IP mapping. Each record type serves a specific purpose in the DNS ecosystem. Here is a comprehensive reference.</p>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>Name</th>
+      <th>Purpose</th>
+      <th>Example Value</th>
+    </tr>
+    <tr>
+      <td><code>A</code></td>
+      <td>Address</td>
+      <td>Maps name to IPv4 address</td>
+      <td><code>93.184.216.34</code></td>
+    </tr>
+    <tr>
+      <td><code>AAAA</code></td>
+      <td>IPv6 Address</td>
+      <td>Maps name to IPv6 address</td>
+      <td><code>2606:2800:220:1:248:1893:25c8:1946</code></td>
+    </tr>
+    <tr>
+      <td><code>CNAME</code></td>
+      <td>Canonical Name</td>
+      <td>Alias one name to another</td>
+      <td><code>www.example.com -> example.com</code></td>
+    </tr>
+    <tr>
+      <td><code>MX</code></td>
+      <td>Mail Exchange</td>
+      <td>Mail routing (priority + hostname)</td>
+      <td><code>10 mail.example.com</code></td>
+    </tr>
+    <tr>
+      <td><code>TXT</code></td>
+      <td>Text</td>
+      <td>Arbitrary text data</td>
+      <td><code>"v=spf1 include:_spf.google.com ~all"</code></td>
+    </tr>
+    <tr>
+      <td><code>SRV</code></td>
+      <td>Service</td>
+      <td>Service discovery (priority, weight, port, target)</td>
+      <td><code>10 60 5060 sip.example.com</code></td>
+    </tr>
+    <tr>
+      <td><code>NS</code></td>
+      <td>Name Server</td>
+      <td>Delegates zone to nameservers</td>
+      <td><code>ns1.example.com</code></td>
+    </tr>
+    <tr>
+      <td><code>SOA</code></td>
+      <td>Start of Authority</td>
+      <td>Zone metadata (primary NS, serial, timers)</td>
+      <td><code>ns1.example.com admin.example.com 2024010101 ...</code></td>
+    </tr>
+    <tr>
+      <td><code>PTR</code></td>
+      <td>Pointer</td>
+      <td>Reverse DNS (IP to name)</td>
+      <td><code>34.216.184.93.in-addr.arpa -> example.com</code></td>
+    </tr>
+    <tr>
+      <td><code>CAA</code></td>
+      <td>Certificate Authority Authorization</td>
+      <td>Which CAs may issue certs for domain</td>
+      <td><code>0 issue "letsencrypt.org"</code></td>
+    </tr>
+  </table>
+
+  <!-- ===== A AND AAAA ===== -->
+  <h2>A and AAAA Records</h2>
+
+  <p>The most fundamental record types. <code>A</code> maps a name to an IPv4 address; <code>AAAA</code> maps to IPv6. A single name can have multiple A/AAAA records (round-robin DNS for basic load distribution).</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com A +short</span><br>
+    <span class="output">93.184.216.34</span><br>
+    <br>
+    <span class="prompt">$ dig example.com AAAA +short</span><br>
+    <span class="output">2606:2800:220:1:248:1893:25c8:1946</span><br>
+    <br>
+    <span class="prompt">$ dig example.com A</span><br>
+    <br>
+    <span class="output">;; QUESTION SECTION:</span><br>
+    <span class="output">;example.com.                   IN      A</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">example.com.            86400   IN      A       93.184.216.34</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Multiple A Records (Round-Robin)</div>
+    <p>Multiple A records for the same name are returned in varying order. The client typically uses the first one. This provides basic load distribution but is <strong>not</strong> a load balancer — it has no health checking, session persistence, or weighted distribution.</p>
+<pre><code>api.example.com.  300  IN  A  10.0.1.10
+api.example.com.  300  IN  A  10.0.1.11
+api.example.com.  300  IN  A  10.0.1.12</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>Happy Eyeballs (RFC 8305):</strong> Modern clients (browsers, curl) resolve both A and AAAA simultaneously and race the connections. If IPv6 connects faster, it wins. This is why you should publish both record types when IPv6 is available.
+  </div>
+
+  <!-- ===== CNAME ===== -->
+  <h2>CNAME Records</h2>
+
+  <p><code>CNAME</code> (Canonical Name) creates an alias from one domain name to another. The resolver follows the CNAME chain to find the final A/AAAA record.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig www.example.com</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">www.example.com.     3600  IN  CNAME  example.com.</span><br>
+    <span class="output">example.com.         86400 IN  A      93.184.216.34</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">CNAME Rules and Restrictions</div>
+    <ul>
+      <li><strong>Exclusive:</strong> A CNAME record cannot coexist with any other record type at the same name. If <code>www.example.com</code> is a CNAME, you cannot also have an A, MX, or TXT record there.</li>
+      <li><strong>No CNAME at zone apex:</strong> <code>example.com</code> (the bare domain) <strong>must</strong> have NS and SOA records. Since CNAME is exclusive, you cannot put a CNAME at the apex. This is a hard constraint in the DNS spec.</li>
+      <li><strong>CNAME targets should be FQDNs:</strong> Always use the fully qualified domain name (ending with <code>.</code>) to avoid ambiguity.</li>
+      <li><strong>CNAME chains:</strong> A CNAME can point to another CNAME, but avoid long chains — each hop adds latency. Most resolvers limit chain depth (typically 8-16).</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Zone apex CNAME — the #1 DNS gotcha:</strong> You cannot put a CNAME on <code>example.com</code> (bare domain) per RFC. Many DNS providers offer proprietary workarounds: <code>ALIAS</code> (Route 53, DNSimple), <code>ANAME</code> (Azure DNS), or <code>CNAME flattening</code> (Cloudflare). These resolve the CNAME server-side and return an A record to the client. If your DNS provider doesn't support this, you must use A records at the apex.
+  </div>
+
+  <h3>Common CNAME Pattern: CDN Integration</h3>
+
+<pre><code><span class="cm"># Point www to your CDN</span>
+www.example.com.   300  IN  CNAME  d1234.cloudfront.net.
+<span class="cm"># Or to a load balancer</span>
+api.example.com.   300  IN  CNAME  my-alb-123456.us-east-1.elb.amazonaws.com.</code></pre>
+
+  <div class="tip">
+    <strong>AWS ALB/NLB:</strong> AWS load balancers provide a DNS name, not a static IP. You must use a CNAME (or ALIAS at apex). The ALB's IP addresses change over time, so hardcoding them in A records will eventually break.
+  </div>
+
+  <!-- ===== MX ===== -->
+  <h2>MX Records</h2>
+
+  <p><code>MX</code> (Mail Exchange) records tell mail servers where to deliver email for a domain. They include a <strong>priority</strong> (lower = preferred) and a <strong>mail server hostname</strong>.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com MX +short</span><br>
+    <span class="output">10 mail1.example.com.</span><br>
+    <span class="output">20 mail2.example.com.</span><br>
+    <span class="output">30 mail3.backup-mx.com.</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">MX Priority and Failover</div>
+    <ul>
+      <li><strong>Priority 10</strong> — primary mail server. All mail tries here first.</li>
+      <li><strong>Priority 20</strong> — secondary. Used if priority 10 is unreachable.</li>
+      <li><strong>Priority 30</strong> — tertiary. Could be an external backup MX service.</li>
+      <li>Equal priorities = mail is distributed (load sharing). The sending MTA picks randomly among equal-priority servers.</li>
+      <li><strong>MX targets must be hostnames, not IPs.</strong> The target must itself have an A/AAAA record. MX targets <strong>must not</strong> be CNAMEs (per RFC 2181).</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Google Workspace / O365 MX:</strong> When using hosted email, you set MX records to the provider's mail servers (e.g., <code>1 aspmx.l.google.com</code> for Google Workspace). The provider then handles routing, spam filtering, etc.
+  </div>
+
+  <!-- ===== TXT ===== -->
+  <h2>TXT Records</h2>
+
+  <p><code>TXT</code> records hold arbitrary text strings. Originally for human-readable notes, they are now critical infrastructure for <strong>email authentication</strong> and <strong>domain verification</strong>.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com TXT +short</span><br>
+    <span class="output">"v=spf1 include:_spf.google.com ~all"</span><br>
+    <span class="output">"google-site-verification=abc123..."</span><br>
+    <span class="output">"MS=ms12345678"</span>
+  </div>
+
+  <h3>Email Authentication via TXT Records</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">SPF (Sender Policy Framework)</div>
+      <p>Declares which IP addresses/servers are authorized to send email for your domain.</p>
+<pre><code>example.com. 3600 IN TXT
+  "v=spf1
+   include:_spf.google.com
+   include:amazonses.com
+   ip4:203.0.113.0/24
+   -all"</code></pre>
+      <ul>
+        <li><code>include:</code> — allow the included domain's SPF servers</li>
+        <li><code>ip4:</code> / <code>ip6:</code> — allow specific IPs</li>
+        <li><code>-all</code> — hard fail everything else (<code>~all</code> = soft fail)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">DKIM (DomainKeys Identified Mail)</div>
+      <p>Published as a TXT record at <code>selector._domainkey.example.com</code>. Contains a public key used to verify email signatures.</p>
+<pre><code>google._domainkey.example.com. TXT
+  "v=DKIM1; k=rsa; p=MIGfMA0GCS..."</code></pre>
+      <ul>
+        <li>The sending mail server signs the message with a private key</li>
+        <li>The receiving server looks up the DKIM TXT record to get the public key and verify the signature</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">DMARC (Domain-based Message Authentication)</div>
+    <p>Published at <code>_dmarc.example.com</code>. Tells receiving mail servers what to do when SPF and DKIM checks fail.</p>
+<pre><code>_dmarc.example.com. TXT "v=DMARC1;
+  p=reject;           <span class="cm">// reject emails that fail both SPF and DKIM</span>
+  rua=mailto:dmarc-reports@example.com;  <span class="cm">// aggregate reports</span>
+  ruf=mailto:dmarc-forensics@example.com; <span class="cm">// forensic reports</span>
+  pct=100"</code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>SPF lookup limit:</strong> SPF evaluation is limited to 10 DNS lookups (including nested <code>include:</code> lookups). Exceeding this causes a permanent error (<code>permerror</code>), which many receivers treat as a fail. Common when using multiple SaaS services that each require their own <code>include:</code>. Solution: SPF flattening tools, or consolidating sends through fewer services.
+  </div>
+
+  <h3>Domain Verification via TXT Records</h3>
+
+  <p>Services like Google Search Console, AWS SES, Stripe, and many SaaS platforms verify domain ownership by asking you to create a specific TXT record. This proves you control the domain's DNS.</p>
+
+<pre><code><span class="cm"># Google verification</span>
+example.com. TXT "google-site-verification=dEvXyZaBcDeFgHiJkLmNoPq..."
+
+<span class="cm"># AWS SES domain verification</span>
+_amazonses.example.com. TXT "abc123def456..."
+
+<span class="cm"># Let's Encrypt DNS-01 challenge</span>
+_acme-challenge.example.com. TXT "gfj9Xq...Rg85nM"</code></pre>
+
+  <!-- ===== SRV ===== -->
+  <h2>SRV Records</h2>
+
+  <p><code>SRV</code> records enable <strong>service discovery</strong> via DNS. They specify the host and port for a given service, with priority and weight for load balancing and failover.</p>
+
+  <div class="panel">
+    <div class="panel-title">SRV Record Format</div>
+<pre><code>_service._proto.name.  TTL  IN  SRV  priority  weight  port  target
+
+<span class="cm"># Example: SIP service over TCP</span>
+_sip._tcp.example.com.  3600  IN  SRV  10  60  5060  sip1.example.com.
+_sip._tcp.example.com.  3600  IN  SRV  10  40  5060  sip2.example.com.
+_sip._tcp.example.com.  3600  IN  SRV  20  0   5060  sip-backup.example.com.</code></pre>
+    <ul>
+      <li><strong>Priority:</strong> Lower = preferred (like MX). Priority 10 servers are tried before priority 20.</li>
+      <li><strong>Weight:</strong> Among records with the same priority, higher weight gets more traffic. 60/40 split means ~60% to sip1, ~40% to sip2.</li>
+      <li><strong>Port:</strong> The TCP/UDP port the service runs on. This is what makes SRV powerful — you don't need well-known ports.</li>
+      <li><strong>Target:</strong> The hostname providing the service (must have A/AAAA records).</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ dig _sip._tcp.example.com SRV +short</span><br>
+    <span class="output">10 60 5060 sip1.example.com.</span><br>
+    <span class="output">10 40 5060 sip2.example.com.</span><br>
+    <span class="output">20 0  5060 sip-backup.example.com.</span>
+  </div>
+
+  <h3>SRV in Kubernetes and Service Meshes</h3>
+
+  <div class="panel">
+    <div class="panel-title">Kubernetes Headless Services</div>
+    <p>When you create a headless Service (<code>clusterIP: None</code>), CoreDNS creates SRV records for pod discovery:</p>
+<pre><code><span class="cm"># SRV record for a headless service</span>
+_http._tcp.my-service.default.svc.cluster.local. SRV 0 33 8080 pod-abc.my-service.default.svc.cluster.local.
+_http._tcp.my-service.default.svc.cluster.local. SRV 0 33 8080 pod-def.my-service.default.svc.cluster.local.
+_http._tcp.my-service.default.svc.cluster.local. SRV 0 33 8080 pod-ghi.my-service.default.svc.cluster.local.</code></pre>
+    <p>Clients (like gRPC) can use SRV records for client-side load balancing across all pod endpoints, bypassing the kube-proxy iptables/IPVS layer.</p>
+  </div>
+
+  <div class="note">
+    <strong>Also used by:</strong> Consul (service discovery), LDAP/Active Directory (<code>_ldap._tcp.dc._msdcs.example.com</code>), XMPP, Minecraft (game server discovery), and CalDAV/CardDAV (<code>_caldavs._tcp.example.com</code>).
+  </div>
+
+  <!-- ===== NS ===== -->
+  <h2>NS Records</h2>
+
+  <p><code>NS</code> (Name Server) records delegate authority for a zone to specific nameservers. They appear at every delegation point in the DNS hierarchy.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com NS +short</span><br>
+    <span class="output">ns1.example.com.</span><br>
+    <span class="output">ns2.example.com.</span><br>
+    <br>
+    <span class="prompt">$ dig example.com NS</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">example.com.   172800  IN  NS  ns1.example.com.</span><br>
+    <span class="output">example.com.   172800  IN  NS  ns2.example.com.</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">NS Record Details</div>
+    <ul>
+      <li><strong>Minimum 2 NS records:</strong> For redundancy. Most registrars require at least 2 nameservers on different networks.</li>
+      <li><strong>Delegation:</strong> NS records at the parent zone (e.g., <code>.com</code>) tell resolvers where to find the authoritative servers. NS records at the child zone (e.g., <code>example.com</code>) are the "authoritative" copy.</li>
+      <li><strong>Subdomain delegation:</strong> You can delegate subdomains to different nameservers: <code>internal.example.com. NS ns1.internal-dns.example.com.</code> — useful for splitting DNS management between teams.</li>
+      <li><strong>High TTL:</strong> NS records typically have very long TTLs (172800 = 2 days) since nameserver changes are rare and critical.</li>
+    </ul>
+  </div>
+
+  <!-- ===== SOA ===== -->
+  <h2>SOA Records</h2>
+
+  <p>Every DNS zone has exactly one <code>SOA</code> (Start of Authority) record. It contains zone metadata essential for DNS operations, especially zone transfers between primary and secondary nameservers.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com SOA</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">example.com.  3600  IN  SOA  ns1.example.com. admin.example.com. (</span><br>
+    <span class="output">                              2024031501  ; serial number</span><br>
+    <span class="output">                              7200        ; refresh (2 hours)</span><br>
+    <span class="output">                              3600        ; retry (1 hour)</span><br>
+    <span class="output">                              1209600     ; expire (14 days)</span><br>
+    <span class="output">                              300         ; minimum TTL (5 min) )</span>
+  </div>
+
+  <table>
+    <tr>
+      <th>Field</th>
+      <th>Example</th>
+      <th>Meaning</th>
+    </tr>
+    <tr>
+      <td>Primary NS</td>
+      <td><code>ns1.example.com.</code></td>
+      <td>The primary nameserver (MNAME)</td>
+    </tr>
+    <tr>
+      <td>Admin email</td>
+      <td><code>admin.example.com.</code></td>
+      <td>Contact email (<code>admin@example.com</code> — first dot replaces @)</td>
+    </tr>
+    <tr>
+      <td>Serial</td>
+      <td><code>2024031501</code></td>
+      <td>Version number. Secondaries compare this to decide if they need a zone transfer. Convention: <code>YYYYMMDDNN</code></td>
+    </tr>
+    <tr>
+      <td>Refresh</td>
+      <td><code>7200</code></td>
+      <td>How often secondaries check for updates</td>
+    </tr>
+    <tr>
+      <td>Retry</td>
+      <td><code>3600</code></td>
+      <td>Retry interval if refresh fails</td>
+    </tr>
+    <tr>
+      <td>Expire</td>
+      <td><code>1209600</code></td>
+      <td>If secondary can't reach primary for this long, stop serving the zone</td>
+    </tr>
+    <tr>
+      <td>Minimum TTL</td>
+      <td><code>300</code></td>
+      <td>TTL for negative responses (NXDOMAIN caching)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Serial number discipline:</strong> If you manage DNS zones via configuration files (BIND zone files), always increment the serial number when making changes. Forgetting to increment means secondaries won't pick up the change. Managed DNS providers (Route 53, Cloudflare) handle this automatically.
+  </div>
+
+  <!-- ===== PTR ===== -->
+  <h2>PTR Records (Reverse DNS)</h2>
+
+  <p><code>PTR</code> records provide <strong>reverse DNS</strong> — mapping an IP address back to a hostname. The lookup is done in special reverse zones.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ipv4">IPv4 Reverse (in-addr.arpa)</div>
+      <div class="comp-body">
+        <p>Octets are <strong>reversed</strong> and appended to <code>.in-addr.arpa</code>:</p>
+<pre><code><span class="cm"># IP: 93.184.216.34</span>
+<span class="cm"># Reverse zone: 34.216.184.93.in-addr.arpa</span>
+
+$ dig -x 93.184.216.34 +short
+example.com.</code></pre>
+        <p>The <code>-x</code> flag is shorthand that constructs the reverse query automatically.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ipv6">IPv6 Reverse (ip6.arpa)</div>
+      <div class="comp-body">
+        <p>Each hex nibble is reversed and separated by dots:</p>
+<pre><code><span class="cm"># IP: 2001:db8::1</span>
+<span class="cm"># Expanded: 2001:0db8:0000:...0001</span>
+<span class="cm"># Reverse:</span>
+1.0.0.0.0.0.0.0...8.b.d.0.1.0.0.2
+  .ip6.arpa
+
+$ dig -x 2001:db8::1 +short</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why Reverse DNS Matters</div>
+    <ul>
+      <li><strong>Email delivery:</strong> Many mail servers reject email from IPs without valid PTR records (or where PTR doesn't match the sending domain). Critical for email reputation.</li>
+      <li><strong>Logging:</strong> Tools like <code>tcpdump</code>, web server logs, and SIEM systems use reverse DNS to annotate IPs with hostnames.</li>
+      <li><strong>SSH:</strong> <code>UseDNS yes</code> in sshd_config triggers PTR lookups, causing slow logins if reverse DNS isn't configured.</li>
+      <li><strong>Cloud providers:</strong> AWS, GCP, Azure all provide mechanisms to set PTR records for your public IPs. For EC2 Elastic IPs, use the <code>ec2:CreateTags</code> API or request via support.</li>
+    </ul>
+  </div>
+
+  <!-- ===== CAA ===== -->
+  <h2>CAA Records</h2>
+
+  <p><code>CAA</code> (Certificate Authority Authorization) records specify which Certificate Authorities are allowed to issue TLS certificates for your domain. CAs are required to check CAA records before issuance (since September 2017).</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com CAA +short</span><br>
+    <span class="output">0 issue "letsencrypt.org"</span><br>
+    <span class="output">0 issuewild "letsencrypt.org"</span><br>
+    <span class="output">0 iodef "mailto:security@example.com"</span>
+  </div>
+
+  <table>
+    <tr>
+      <th>Tag</th>
+      <th>Meaning</th>
+      <th>Example</th>
+    </tr>
+    <tr>
+      <td><code>issue</code></td>
+      <td>Authorize a CA to issue certs for this domain</td>
+      <td><code>0 issue "letsencrypt.org"</code></td>
+    </tr>
+    <tr>
+      <td><code>issuewild</code></td>
+      <td>Authorize a CA to issue wildcard certs</td>
+      <td><code>0 issuewild "digicert.com"</code></td>
+    </tr>
+    <tr>
+      <td><code>iodef</code></td>
+      <td>Report violations to this email/URL</td>
+      <td><code>0 iodef "mailto:security@example.com"</code></td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Defense in depth:</strong> CAA records prevent unauthorized certificate issuance (e.g., if an attacker gains control of DNS validation for a different CA). Combined with Certificate Transparency (CT) log monitoring, CAA provides strong protection against mis-issuance.
+  </div>
+
+  <div class="note">
+    <strong>Inheritance:</strong> CAA records are inherited by subdomains. If <code>example.com</code> has CAA records but <code>api.example.com</code> doesn't, the parent's CAA policy applies. To override for a subdomain, add CAA records directly on it.
+  </div>
+
+  <!-- ===== PRACTICAL PATTERNS ===== -->
+  <h2>Practical DNS Patterns</h2>
+
+  <h3>Pattern 1: CNAME for CDN</h3>
+
+  <div class="panel">
+    <div class="panel-title">Routing traffic through a CDN</div>
+<pre><code><span class="cm"># Point www to CloudFront distribution</span>
+www.example.com.       300  IN  CNAME  d1234abcd.cloudfront.net.
+
+<span class="cm"># Apex uses ALIAS/ANAME (provider-specific, not standard DNS)</span>
+example.com.           60   IN  ALIAS  d1234abcd.cloudfront.net.
+
+<span class="cm"># Static assets subdomain to S3 via CloudFront</span>
+assets.example.com.    3600 IN  CNAME  d5678efgh.cloudfront.net.</code></pre>
+  </div>
+
+  <h3>Pattern 2: Email Authentication Stack</h3>
+
+  <div class="panel">
+    <div class="panel-title">Complete SPF + DKIM + DMARC setup</div>
+<pre><code><span class="cm"># SPF: authorize Google Workspace + SES to send</span>
+example.com.                    TXT  "v=spf1 include:_spf.google.com include:amazonses.com -all"
+
+<span class="cm"># DKIM: Google Workspace selector</span>
+google._domainkey.example.com.  TXT  "v=DKIM1; k=rsa; p=MIGfMA0GCS..."
+
+<span class="cm"># DKIM: Amazon SES selector</span>
+abcdef._domainkey.example.com.  CNAME abcdef.dkim.amazonses.com.
+
+<span class="cm"># DMARC: reject unauthenticated mail, send reports</span>
+_dmarc.example.com.             TXT  "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"</code></pre>
+  </div>
+
+  <h3>Pattern 3: SRV for Service Discovery</h3>
+
+  <div class="panel">
+    <div class="panel-title">Consul, K8s, and LDAP service discovery</div>
+<pre><code><span class="cm"># Consul service discovery</span>
+_web._tcp.service.consul. SRV 1 1 8080 web-01.node.dc1.consul.
+_web._tcp.service.consul. SRV 1 1 8080 web-02.node.dc1.consul.
+
+<span class="cm"># K8s headless service (created automatically by CoreDNS)</span>
+_http._tcp.my-svc.default.svc.cluster.local. SRV 0 50 80 10-244-0-5.my-svc.default.svc.cluster.local.
+
+<span class="cm"># Active Directory domain controller discovery</span>
+_ldap._tcp.dc._msdcs.example.com. SRV 0 100 389 dc1.example.com.</code></pre>
+  </div>
+
+  <h3>Pattern 4: CAA for Certificate Policy</h3>
+
+  <div class="panel">
+    <div class="panel-title">Restricting certificate issuance</div>
+<pre><code><span class="cm"># Only Let's Encrypt can issue certs</span>
+example.com.  CAA  0 issue "letsencrypt.org"
+example.com.  CAA  0 issuewild "letsencrypt.org"
+example.com.  CAA  0 iodef "mailto:security@example.com"
+
+<span class="cm"># Allow Let's Encrypt for regular certs, DigiCert for wildcards</span>
+example.com.  CAA  0 issue "letsencrypt.org"
+example.com.  CAA  0 issuewild "digicert.com"
+
+<span class="cm"># Block ALL certificate issuance (paranoid mode)</span>
+example.com.  CAA  0 issue ";"</code></pre>
+  </div>
+
+  <!-- ===== COMMON GOTCHAS ===== -->
+  <h2>Common DNS Gotchas</h2>
+
+  <div class="warn">
+    <strong>CNAME at zone apex:</strong> You cannot put a CNAME on <code>example.com</code> (the bare domain). NS and SOA records must exist there, and CNAME is exclusive. Use your provider's ALIAS/ANAME feature, or use A records with your load balancer's static IPs.
+  </div>
+
+  <div class="warn">
+    <strong>TTL planning for migrations:</strong> If you're migrating DNS records (e.g., changing the A record for <code>api.example.com</code>), lower the TTL days in advance. If the current TTL is 3600 (1 hour), clients may use stale cached records for up to 1 hour after the change. Pre-lower to 60s well before the cutover.
+  </div>
+
+  <div class="warn">
+    <strong>CNAME + other records:</strong> You cannot have a CNAME and any other record at the same name. Common mistake: adding a TXT record (for domain verification) at a name that already has a CNAME. The CNAME must be removed, or the verification TXT must go at a different name.
+  </div>
+
+  <div class="warn">
+    <strong>MX targets must not be CNAMEs:</strong> Per RFC 2181, MX records must point to A/AAAA names, not CNAMEs. While some implementations tolerate this, it's non-compliant and can cause delivery failures.
+  </div>
+
+  <div class="tip">
+    <strong>Testing changes:</strong> Always verify DNS changes with <code>dig @ns1.your-provider.com example.com A</code> (query the authoritative server directly) before waiting for propagation. This confirms the change is live at the source, independent of caching.
+  </div>
+
+</body>
+</html>

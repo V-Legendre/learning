@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 03 — IPv6</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 03 — IPv6</h1>
+  <p class="subtitle">128-bit addresses — solving exhaustion and simplifying the protocol</p>
+
+  <!-- ===== WHY IPv6 ===== -->
+  <h2>Why IPv6 Exists</h2>
+
+  <div class="panel">
+    <div class="panel-title">The IPv4 Exhaustion Problem</div>
+    <p>IPv4 provides 2<sup>32</sup> = <strong>4,294,967,296</strong> addresses. That sounds like a lot until you consider:</p>
+    <ul>
+      <li>IANA exhausted its free pool of /8 blocks on <strong>February 3, 2011</strong></li>
+      <li>APNIC (Asia-Pacific) ran out first; RIPE (Europe) followed in 2012</li>
+      <li>ARIN (North America) exhausted its free pool in September 2015</li>
+      <li>Large chunks are reserved (private, multicast, loopback, etc.), leaving ~3.7 billion routable addresses</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">NAT: The Band-Aid</div>
+      <div class="comp-body">
+        <ul>
+          <li>NAT (Network Address Translation) allows many private hosts to share one public IP</li>
+          <li>Breaks end-to-end connectivity (peer-to-peer, VoIP, gaming)</li>
+          <li>Requires connection tracking state (memory, CPU)</li>
+          <li>Makes protocols that embed IP addresses in payloads painful (SIP, FTP active mode)</li>
+          <li>Carrier-grade NAT (CGNAT) stacks NAT on NAT — debugging nightmares</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">IPv6: The Real Fix</div>
+      <div class="comp-body">
+        <ul>
+          <li>2<sup>128</sup> = <strong>340 undecillion</strong> addresses (~3.4 x 10<sup>38</sup>)</li>
+          <li>Every device gets a globally unique address — NAT becomes unnecessary</li>
+          <li>Restores true end-to-end connectivity</li>
+          <li>Simplified header (fixed 40 bytes, no checksum, no fragmentation fields)</li>
+          <li>Built-in autoconfiguration (SLAAC)</li>
+          <li>Mandatory IPsec support in the spec (though not always enforced)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ADDRESS NOTATION ===== -->
+  <h2>128-bit Address Notation</h2>
+
+  <p>IPv6 addresses are written as <strong>8 groups of 4 hexadecimal digits</strong>, separated by colons.</p>
+
+  <div class="panel">
+    <div class="panel-title">Full vs Abbreviated Notation</div>
+    <pre><code><span class="cm"># Full notation (all 32 hex digits)</span>
+2001:0db8:0000:0000:0000:0000:0000:0001
+
+<span class="cm"># Rule 1: Leading zeros in each group can be dropped</span>
+2001:db8:0:0:0:0:0:1
+
+<span class="cm"># Rule 2: One consecutive run of all-zero groups → "::" (once per address)</span>
+2001:db8::1</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Abbreviation Rules</div>
+    <table>
+      <tr>
+        <th>Rule</th>
+        <th>Description</th>
+        <th>Example</th>
+      </tr>
+      <tr>
+        <td><strong>Leading zero suppression</strong></td>
+        <td>Remove leading zeros in each 16-bit group</td>
+        <td><code>0db8</code> becomes <code>db8</code>, <code>0001</code> becomes <code>1</code></td>
+      </tr>
+      <tr>
+        <td><strong>:: (double colon)</strong></td>
+        <td>Replace <strong>one</strong> longest consecutive run of all-zero groups</td>
+        <td><code>fe80:0:0:0:0:0:0:1</code> becomes <code>fe80::1</code></td>
+      </tr>
+      <tr>
+        <td><strong>:: used only once</strong></td>
+        <td>Using :: twice would be ambiguous (can't tell how many zero groups each replaces)</td>
+        <td><code>2001:db8::1::2</code> is <strong>INVALID</strong></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Expansion Practice</div>
+    <table>
+      <tr>
+        <th>Abbreviated</th>
+        <th>Expanded</th>
+      </tr>
+      <tr>
+        <td><code>::1</code></td>
+        <td><code>0000:0000:0000:0000:0000:0000:0000:0001</code> (loopback)</td>
+      </tr>
+      <tr>
+        <td><code>::</code></td>
+        <td><code>0000:0000:0000:0000:0000:0000:0000:0000</code> (unspecified)</td>
+      </tr>
+      <tr>
+        <td><code>fe80::1</code></td>
+        <td><code>fe80:0000:0000:0000:0000:0000:0000:0001</code></td>
+      </tr>
+      <tr>
+        <td><code>2001:db8:85a3::8a2e:370:7334</code></td>
+        <td><code>2001:0db8:85a3:0000:0000:8a2e:0370:7334</code></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>URLs with IPv6:</strong> Because colons conflict with port notation, wrap the address in brackets: <code>http://[2001:db8::1]:8080/path</code>
+  </div>
+
+  <!-- ===== ADDRESS TYPES ===== -->
+  <h2>IPv6 Address Types</h2>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>Prefix</th>
+      <th>Scope</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td><strong>Link-Local</strong></td>
+      <td><code>fe80::/10</code></td>
+      <td>Single link only</td>
+      <td>Auto-assigned on every interface. Not routable. Used for NDP, routing protocol adjacencies. Equivalent to IPv4 169.254.x.x but <strong>always present and required</strong>.</td>
+    </tr>
+    <tr>
+      <td><strong>Global Unicast (GUA)</strong></td>
+      <td><code>2000::/3</code></td>
+      <td>Global (internet-routable)</td>
+      <td>The equivalent of public IPv4 addresses. Currently most allocations are from <code>2001::/16</code> (IANA) and <code>2400::/6</code> through <code>2c00::/6</code> (RIRs).</td>
+    </tr>
+    <tr>
+      <td><strong>Unique Local (ULA)</strong></td>
+      <td><code>fc00::/7</code> (in practice <code>fd00::/8</code>)</td>
+      <td>Private (not internet-routable)</td>
+      <td>Like RFC 1918 for IPv6. Use <code>fd</code> + 40 random bits as the prefix. Suitable for internal services that should never be publicly reachable.</td>
+    </tr>
+    <tr>
+      <td><strong>Multicast</strong></td>
+      <td><code>ff00::/8</code></td>
+      <td>Varies by scope</td>
+      <td>Replaces IPv4 broadcast (no broadcast in IPv6). Examples: <code>ff02::1</code> (all nodes on link), <code>ff02::2</code> (all routers on link), <code>ff02::1:ff00:0/104</code> (solicited-node multicast).</td>
+    </tr>
+    <tr>
+      <td><strong>Loopback</strong></td>
+      <td><code>::1/128</code></td>
+      <td>Host-only</td>
+      <td>Single address, equivalent to <code>127.0.0.1</code>.</td>
+    </tr>
+    <tr>
+      <td><strong>Unspecified</strong></td>
+      <td><code>::/128</code></td>
+      <td>N/A</td>
+      <td>Equivalent to <code>0.0.0.0</code>. Used as source before address assignment.</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>K8s dual-stack:</strong> When running dual-stack K8s, pods get both a <code>10.x.x.x</code> (or similar) IPv4 and a GUA or ULA IPv6 address. Services can have both <code>ClusterIP</code> families. Cilium and Calico both support dual-stack natively.
+  </div>
+
+  <!-- ===== IPv6 HEADER ===== -->
+  <h2>IPv6 Header Format</h2>
+
+  <p>The IPv6 header is a <strong>fixed 40 bytes</strong> — no options field, no header length field needed. Simpler than IPv4, faster to process.</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Version</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 2;">
+      <span class="field-name">Traffic Class</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 5;">
+      <span class="field-name">Flow Label</span>
+      <span class="field-size">20 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 4;">
+      <span class="field-name">Payload Length</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 2;">
+      <span class="field-name">Next Header</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field check" style="flex: 2;">
+      <span class="field-name">Hop Limit</span>
+      <span class="field-size">8 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Source Address</span>
+      <span class="field-size">128 bits (16 bytes)</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Destination Address</span>
+      <span class="field-size">128 bits (16 bytes)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">IPv6 Header Fields Explained</div>
+    <table>
+      <tr>
+        <th>Field</th>
+        <th>Purpose</th>
+      </tr>
+      <tr>
+        <td><strong>Version</strong></td>
+        <td>Always <code>6</code>. Same position/size as IPv4's version field — this is how the stack knows which header to parse.</td>
+      </tr>
+      <tr>
+        <td><strong>Traffic Class</strong></td>
+        <td>Equivalent to IPv4's DSCP + ECN. Used for QoS differentiation.</td>
+      </tr>
+      <tr>
+        <td><strong>Flow Label</strong></td>
+        <td>Identifies a flow of packets. Routers can use it for fast-path forwarding without inspecting upper-layer headers. Set to 0 if unused.</td>
+      </tr>
+      <tr>
+        <td><strong>Payload Length</strong></td>
+        <td>Length of everything after the 40-byte header (extension headers + data). Unlike IPv4's Total Length, which includes the header.</td>
+      </tr>
+      <tr>
+        <td><strong>Next Header</strong></td>
+        <td>Replaces IPv4's Protocol field. Identifies the next header: could be TCP (6), UDP (17), ICMPv6 (58), or an extension header (e.g., 0 = Hop-by-Hop, 43 = Routing, 44 = Fragment).</td>
+      </tr>
+      <tr>
+        <td><strong>Hop Limit</strong></td>
+        <td>Equivalent to IPv4's TTL. Decremented by 1 at each hop. Packet discarded at 0.</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ===== IPv4 vs IPv6 HEADER COMPARISON ===== -->
+  <h2>IPv4 vs IPv6 Header Comparison</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ipv4">IPv4 Header</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Variable size:</strong> 20-60 bytes (IHL field encodes length)</li>
+          <li><strong>Header checksum:</strong> present, recomputed at every hop</li>
+          <li><strong>Fragmentation:</strong> built into the header (ID, Flags, Fragment Offset)</li>
+          <li><strong>Options:</strong> variable-length, in the main header</li>
+          <li><strong>13 fields</strong> in the base header</li>
+          <li><strong>Protocol field:</strong> identifies upper layer</li>
+          <li><strong>TTL:</strong> hop counter</li>
+          <li>Broadcast addresses exist</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header ipv6">IPv6 Header</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Fixed 40 bytes:</strong> no IHL field needed, simpler parsing</li>
+          <li><strong>No header checksum:</strong> relies on L2 (Ethernet CRC) and L4 (TCP/UDP checksum) — faster forwarding</li>
+          <li><strong>No fragmentation in header:</strong> uses Fragment extension header; only the <strong>source</strong> fragments (not routers)</li>
+          <li><strong>Extension headers:</strong> daisy-chained via Next Header, not in the base header</li>
+          <li><strong>8 fields</strong> in the base header</li>
+          <li><strong>Next Header:</strong> identifies upper layer <em>or</em> extension header</li>
+          <li><strong>Hop Limit:</strong> renamed TTL (same behavior)</li>
+          <li>No broadcast — uses multicast instead</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>IPv4</th>
+      <th>IPv6</th>
+    </tr>
+    <tr>
+      <td>Address size</td>
+      <td>32 bits (4 bytes)</td>
+      <td>128 bits (16 bytes)</td>
+    </tr>
+    <tr>
+      <td>Address count</td>
+      <td>~4.3 billion</td>
+      <td>~3.4 x 10<sup>38</sup></td>
+    </tr>
+    <tr>
+      <td>Header size</td>
+      <td>20-60 bytes (variable)</td>
+      <td>40 bytes (fixed)</td>
+    </tr>
+    <tr>
+      <td>Checksum</td>
+      <td>Yes (recalculated per hop)</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Fragmentation</td>
+      <td>By routers or source</td>
+      <td>Source only (extension header)</td>
+    </tr>
+    <tr>
+      <td>ARP</td>
+      <td>Separate protocol (L2)</td>
+      <td>Replaced by NDP (ICMPv6)</td>
+    </tr>
+    <tr>
+      <td>Autoconfiguration</td>
+      <td>DHCP (optional APIPA)</td>
+      <td>SLAAC (built-in) + optional DHCPv6</td>
+    </tr>
+    <tr>
+      <td>NAT</td>
+      <td>Ubiquitous</td>
+      <td>Generally unnecessary (but NAT66 exists)</td>
+    </tr>
+    <tr>
+      <td>IPsec</td>
+      <td>Optional</td>
+      <td>Mandatory in spec (optional in practice)</td>
+    </tr>
+  </table>
+
+  <!-- ===== NDP ===== -->
+  <h2>NDP: Neighbor Discovery Protocol</h2>
+
+  <p>NDP replaces ARP, ICMP Router Discovery, and ICMP Redirect from IPv4. It runs over <strong>ICMPv6</strong> and handles address resolution, router discovery, duplicate address detection, and autoconfiguration.</p>
+
+  <div class="panel">
+    <div class="panel-title">NDP Message Types</div>
+    <table>
+      <tr>
+        <th>Message</th>
+        <th>ICMPv6 Type</th>
+        <th>Direction</th>
+        <th>Purpose</th>
+      </tr>
+      <tr>
+        <td><strong>Router Solicitation (RS)</strong></td>
+        <td>133</td>
+        <td>Host --> Routers</td>
+        <td>Host asks "any routers on this link?" Sent to <code>ff02::2</code> (all-routers multicast)</td>
+      </tr>
+      <tr>
+        <td><strong>Router Advertisement (RA)</strong></td>
+        <td>134</td>
+        <td>Router --> Hosts</td>
+        <td>Router announces prefix, default gateway, MTU, flags (M/O for DHCPv6). Sent periodically and in response to RS, to <code>ff02::1</code> (all-nodes multicast)</td>
+      </tr>
+      <tr>
+        <td><strong>Neighbor Solicitation (NS)</strong></td>
+        <td>135</td>
+        <td>Host --> Target</td>
+        <td>Like ARP Request. "What is the MAC for this IPv6 address?" Sent to the target's solicited-node multicast address. Also used for Duplicate Address Detection (DAD).</td>
+      </tr>
+      <tr>
+        <td><strong>Neighbor Advertisement (NA)</strong></td>
+        <td>136</td>
+        <td>Target --> Host</td>
+        <td>Like ARP Reply. "Here is my MAC address." Can be solicited or unsolicited (gratuitous).</td>
+      </tr>
+      <tr>
+        <td><strong>Redirect</strong></td>
+        <td>137</td>
+        <td>Router --> Host</td>
+        <td>Router tells host a better first-hop for a specific destination.</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>SLAAC (Stateless Address Autoconfiguration)</h3>
+
+  <p>A host can configure its own globally routable IPv6 address <strong>without any DHCP server</strong>.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Generate link-local</div>
+      <div class="desc">fe80:: + interface ID (EUI-64 or random)</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">DAD</div>
+      <div class="desc">Send NS for own address — check no one else has it</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Send RS</div>
+      <div class="desc">Solicit router advertisement</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Receive RA</div>
+      <div class="desc">Get prefix (e.g., 2001:db8::/64)</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Form GUA</div>
+      <div class="desc">prefix + interface ID = full address</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Privacy extensions (RFC 4941):</strong> Using a MAC-based EUI-64 interface ID allows tracking devices across networks. Modern OSes generate <strong>random</strong> interface IDs by default (the "privacy extension"). Linux: <code>net.ipv6.conf.all.use_tempaddr=2</code>.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">SLAAC vs DHCPv6</div>
+    <table>
+      <tr>
+        <th>Feature</th>
+        <th>SLAAC</th>
+        <th>Stateless DHCPv6</th>
+        <th>Stateful DHCPv6</th>
+      </tr>
+      <tr>
+        <td>Address assignment</td>
+        <td>Yes (from RA prefix)</td>
+        <td>No (SLAAC does it)</td>
+        <td>Yes (server assigns)</td>
+      </tr>
+      <tr>
+        <td>DNS servers</td>
+        <td>RDNSS in RA (limited support)</td>
+        <td>Yes</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Other options (NTP, search domain)</td>
+        <td>No</td>
+        <td>Yes</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Address tracking on server</td>
+        <td>No (stateless)</td>
+        <td>No (stateless)</td>
+        <td>Yes (lease table)</td>
+      </tr>
+      <tr>
+        <td>RA flags</td>
+        <td>M=0, O=0</td>
+        <td>M=0, O=1</td>
+        <td>M=1</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ===== DUAL STACK ===== -->
+  <h2>Dual-Stack</h2>
+
+  <p>The simplest transition mechanism: <strong>run both IPv4 and IPv6 simultaneously</strong> on every device and network. Each interface has both an IPv4 and an IPv6 address. DNS returns both A (IPv4) and AAAA (IPv6) records; the client chooses which to use.</p>
+
+  <div class="panel">
+    <div class="panel-title">Dual-Stack in Practice</div>
+    <pre><code><span class="cm"># A dual-stack interface on Linux</span>
+$ ip addr show eth0
+2: eth0: &lt;BROADCAST,MULTICAST,UP&gt; mtu 1500
+    inet <span class="val">10.0.1.5/24</span> brd 10.0.1.255 scope global eth0
+    inet6 <span class="val">2001:db8:1::5/64</span> scope global
+    inet6 <span class="val">fe80::a00:27ff:fe3c:1234/64</span> scope link
+
+<span class="cm"># DNS returns both record types</span>
+$ dig example.com A +short
+93.184.216.34
+$ dig example.com AAAA +short
+2606:2800:220:1:248:1893:25c8:1946</code></pre>
+    <p><strong>Happy Eyeballs (RFC 8305):</strong> Modern clients try IPv6 and IPv4 in parallel, preferring IPv6 but falling back to IPv4 if the IPv6 connection is slow or fails. Avoids the latency penalty of serial attempts.</p>
+  </div>
+
+  <div class="tip">
+    <strong>AWS/GCP/Azure:</strong> All major clouds support dual-stack VPCs. AWS added dual-stack support for ELB, EC2, and EKS. In K8s, dual-stack is GA since v1.23 — pods can get both IPv4 and IPv6 addresses, and Services can expose both families.
+  </div>
+
+  <!-- ===== TRANSITION MECHANISMS ===== -->
+  <h2>Transition Mechanisms</h2>
+
+  <p>Not all networks support IPv6. These mechanisms bridge the gap during the transition period.</p>
+
+  <div class="panel">
+    <div class="panel-title">Tunneling: IPv6 over IPv4</div>
+    <table>
+      <tr>
+        <th>Mechanism</th>
+        <th>How It Works</th>
+        <th>Status</th>
+      </tr>
+      <tr>
+        <td><strong>6to4</strong> (RFC 3056)</td>
+        <td>Encapsulates IPv6 in IPv4 using protocol 41. Auto-derives a 2002::/16 IPv6 prefix from the public IPv4 address. Uses anycast relay routers.</td>
+        <td>Deprecated (RFC 7526). Unreliable — depends on relay routers out of your control, no guarantee of reachability.</td>
+      </tr>
+      <tr>
+        <td><strong>Teredo</strong> (RFC 4380)</td>
+        <td>Tunnels IPv6 over UDP/IPv4. Designed to work behind NAT. Uses Teredo servers for setup and Teredo relays for communication.</td>
+        <td>Legacy. Windows supported it for years. Being phased out as native IPv6 adoption grows.</td>
+      </tr>
+      <tr>
+        <td><strong>ISATAP</strong></td>
+        <td>Intra-Site Automatic Tunnel Addressing Protocol. IPv6-in-IPv4 tunnel within a single site.</td>
+        <td>Rarely used. Not suitable for internet connectivity.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Translation: NAT64 / DNS64</div>
+    <p>For IPv6-only networks that need to reach IPv4 servers:</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>DNS64:</strong> The DNS resolver synthesizes AAAA records for IPv4-only destinations. If a domain only has an A record (e.g., <code>93.184.216.34</code>), DNS64 returns <code>64:ff9b::5db8:d822</code> (the IPv4 address embedded in a well-known IPv6 prefix).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>NAT64:</strong> A NAT64 gateway translates between IPv6 and IPv4 packets. The IPv6 client sends to the synthesized address; the gateway extracts the IPv4 address and forwards natively.</div>
+      </div>
+    </div>
+    <p style="margin-top: 12px;">This is the <strong>dominant approach for mobile carriers</strong> (T-Mobile, many Asian carriers) running IPv6-only on mobile devices. It works transparently for most apps.</p>
+  </div>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">IPv6-only client sends to 64:ff9b::5db8:d822</div>
+    <div class="encap-layer ip">NAT64 Gateway: translates IPv6 <--> IPv4</div>
+    <div class="encap-layer eth">IPv4-only server receives packet from NAT64 public IPv4</div>
+  </div>
+
+  <div class="warn">
+    <strong>NAT64 limitations:</strong> Breaks protocols that embed literal IPv4 addresses in payloads (same problem as NAT44). Application-layer gateways (ALGs) are needed for some protocols. Also, you need DNSSEC-aware DNS64 to avoid validation failures.
+  </div>
+
+</body>
+</html>

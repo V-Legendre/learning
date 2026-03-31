@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 05 — Advanced DNS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 05 — Advanced DNS</h1>
+  <p class="subtitle">Split-horizon, anycast, DNSSEC, and encrypted DNS</p>
+
+  <!-- ===== SPLIT-HORIZON DNS ===== -->
+  <h2>Split-Horizon DNS</h2>
+
+  <p>Split-horizon (also called "split-brain" or "views") is a DNS configuration where the same domain name resolves to <strong>different addresses depending on who is asking</strong>. The DNS server examines the source IP of the query and returns different answers for internal vs external clients.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header request">External Client (Public Internet)</div>
+      <div class="comp-body">
+<pre><code>$ dig api.example.com @8.8.8.8
+;; ANSWER SECTION:
+api.example.com. 300 IN A <strong>203.0.113.50</strong>
+<span class="cm"># Public load balancer IP</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header response">Internal Client (VPC / Office)</div>
+      <div class="comp-body">
+<pre><code>$ dig api.example.com @10.0.0.2
+;; ANSWER SECTION:
+api.example.com. 60 IN A <strong>10.0.1.15</strong>
+<span class="cm"># Private IP — bypasses LB, NAT</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Use Cases</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Internal Service Discovery</div>
+      <ul>
+        <li>Internal microservices resolve to private IPs</li>
+        <li>Avoids hairpin NAT through the public load balancer</li>
+        <li>Lower latency, reduced attack surface</li>
+        <li>Example: <code>db.example.com</code> resolves to <code>10.0.2.5</code> internally, NXDOMAIN externally</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">VPN/Office Access</div>
+      <ul>
+        <li>Office users resolve internal tools to private IPs</li>
+        <li>Remote users on VPN get the same internal view</li>
+        <li>Public users get the external (or no) answer</li>
+        <li>Common with Active Directory environments</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Implementation Approaches</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>BIND views:</strong> Classic approach. Define ACLs for internal/external networks, and provide different zone files per view. One BIND instance serves both views.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>AWS Route 53 Private Hosted Zones:</strong> Create a private hosted zone associated with your VPC(s) and a public hosted zone with the same domain name. VPC resolvers use the private zone; public DNS uses the public zone.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>CoreDNS with conditional forwarding:</strong> In K8s, CoreDNS can forward specific zones to internal DNS servers for private resolution, while forwarding everything else upstream.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Route 53 Split-Horizon Example</div>
+<pre><code><span class="cm"># Public hosted zone (zone ID: Z1234PUBLIC)</span>
+api.example.com.  A  203.0.113.50   <span class="cm"># ALB public IP</span>
+
+<span class="cm"># Private hosted zone (zone ID: Z5678PRIVATE, associated with vpc-abc123)</span>
+api.example.com.  A  10.0.1.15      <span class="cm"># Internal NLB IP</span>
+db.example.com.   A  10.0.2.5       <span class="cm"># RDS private endpoint</span>
+cache.example.com. CNAME my-redis.abc123.cache.amazonaws.com.</code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Debugging split-horizon:</strong> When troubleshooting DNS, always note <em>where</em> you're resolving from. <code>dig api.example.com</code> from your laptop may give a different answer than from inside a pod. Use <code>dig @specific-server</code> to explicitly control which resolver you're querying.
+  </div>
+
+  <!-- ===== GEODNS ===== -->
+  <h2>GeoDNS</h2>
+
+  <p>GeoDNS returns different DNS answers based on the <strong>geographic location</strong> of the querying resolver's IP address (determined via GeoIP databases). This enables routing users to their nearest datacenter or CDN edge.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">User in Tokyo</div>
+      <div class="desc">Queries recursive resolver</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">GeoDNS Server</div>
+      <div class="desc">Checks resolver IP geolocation</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Returns ap-northeast-1</div>
+      <div class="desc">Nearest datacenter IP</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">GeoDNS Behavior</div>
+    <ul>
+      <li><strong>User in US-East</strong> -> <code>api.example.com</code> resolves to <code>52.1.2.3</code> (us-east-1)</li>
+      <li><strong>User in Europe</strong> -> <code>api.example.com</code> resolves to <code>34.5.6.7</code> (eu-west-1)</li>
+      <li><strong>User in Asia</strong> -> <code>api.example.com</code> resolves to <code>13.8.9.10</code> (ap-northeast-1)</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>EDNS Client Subnet (ECS):</strong> Traditional GeoDNS uses the recursive resolver's IP for geolocation, which can be inaccurate (e.g., Google's <code>8.8.8.8</code> anycast resolvers are globally distributed). <a href="https://www.rfc-editor.org/rfc/rfc7871">RFC 7871 (ECS)</a> allows the recursive resolver to send a truncated version of the client's IP to the authoritative server, enabling more accurate geolocation.
+  </div>
+
+  <h3>Route 53 Geolocation Routing</h3>
+
+<pre><code><span class="cm"># Route 53 geolocation routing policy</span>
+api.example.com.  A  52.1.2.3     <span class="cm"># Geolocation: North America</span>
+api.example.com.  A  34.5.6.7     <span class="cm"># Geolocation: Europe</span>
+api.example.com.  A  13.8.9.10    <span class="cm"># Geolocation: Asia Pacific</span>
+api.example.com.  A  52.1.2.3     <span class="cm"># Geolocation: Default (fallback)</span></code></pre>
+
+  <div class="tip">
+    <strong>CDN routing:</strong> CDN providers like Cloudflare, Akamai, and CloudFront use GeoDNS (or anycast) to route users to the nearest edge server. When you CNAME to a CDN, the CDN's GeoDNS handles the geographic routing transparently.
+  </div>
+
+  <!-- ===== ANYCAST DNS ===== -->
+  <h2>Anycast DNS</h2>
+
+  <p>Anycast is a network addressing and routing methodology where <strong>multiple servers share the same IP address</strong>. BGP routing directs each client to the topologically nearest instance. This is the backbone of how the DNS root server system and major public resolvers operate.</p>
+
+  <div class="panel">
+    <div class="panel-title">How Anycast Works</div>
+    <ul>
+      <li>Multiple physical servers in different locations are configured with the <strong>same IP address</strong>.</li>
+      <li>Each server announces the same IP prefix via <strong>BGP</strong> to its upstream providers.</li>
+      <li>Internet routing naturally directs packets to the <strong>closest announcement</strong> (shortest AS path, lowest metric).</li>
+      <li>The client has no idea there are multiple servers — it just sees one IP.</li>
+    </ul>
+  </div>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">User</div>
+      <div class="topo-label">Client</div>
+      <div class="topo-detail">Queries 1.1.1.1</div>
+    </div>
+    <div class="topo-link">--></div>
+    <div class="topo-node router">
+      <div class="topo-icon">BGP</div>
+      <div class="topo-label">Internet Routing</div>
+      <div class="topo-detail">Shortest path wins</div>
+    </div>
+    <div class="topo-link">--></div>
+    <div class="topo-node server">
+      <div class="topo-icon">DC</div>
+      <div class="topo-label">Nearest Instance</div>
+      <div class="topo-detail">Same IP, closest server</div>
+    </div>
+  </div>
+
+  <h3>DNS Root Servers and Anycast</h3>
+
+  <div class="panel">
+    <div class="panel-title">The Root Server Myth: "Only 13 Root Servers"</div>
+    <p>There are 13 root server <strong>addresses</strong> (a.root-servers.net through m.root-servers.net), but well over <strong>1,700 physical instances</strong> worldwide. The 13-address limit exists because all root server NS records and their glue records must fit in a single 512-byte UDP response (the original DNS limit).</p>
+    <table>
+      <tr>
+        <th>Root Server</th>
+        <th>Operator</th>
+        <th>Instances (approx.)</th>
+      </tr>
+      <tr>
+        <td><code>a.root-servers.net</code></td>
+        <td>Verisign</td>
+        <td>~50+ sites</td>
+      </tr>
+      <tr>
+        <td><code>f.root-servers.net</code></td>
+        <td>ISC (BIND developers)</td>
+        <td>~250+ sites</td>
+      </tr>
+      <tr>
+        <td><code>k.root-servers.net</code></td>
+        <td>RIPE NCC</td>
+        <td>~80+ sites</td>
+      </tr>
+      <tr>
+        <td><code>l.root-servers.net</code></td>
+        <td>ICANN</td>
+        <td>~200+ sites</td>
+      </tr>
+    </table>
+    <p>Each "site" is a full copy of the root zone, deployed at an IXP or datacenter, announcing the same anycast IP via BGP.</p>
+  </div>
+
+  <h3>Public Resolver Anycast</h3>
+
+  <table>
+    <tr>
+      <th>Service</th>
+      <th>IP Addresses</th>
+      <th>Anycast PoPs</th>
+    </tr>
+    <tr>
+      <td>Cloudflare DNS</td>
+      <td><code>1.1.1.1</code>, <code>1.0.0.1</code></td>
+      <td>300+ cities worldwide</td>
+    </tr>
+    <tr>
+      <td>Google Public DNS</td>
+      <td><code>8.8.8.8</code>, <code>8.8.4.4</code></td>
+      <td>20+ locations</td>
+    </tr>
+    <tr>
+      <td>Quad9</td>
+      <td><code>9.9.9.9</code></td>
+      <td>200+ locations</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Anycast + UDP = natural fit:</strong> Anycast works perfectly with DNS-over-UDP because each query is a single stateless packet. TCP-based protocols are trickier — if BGP routing changes mid-connection, packets may reach a different anycast instance that has no knowledge of the TCP state, causing a reset. This is why anycast is primarily used for UDP services.
+  </div>
+
+  <!-- ===== ENCRYPTED DNS ===== -->
+  <h2>Encrypted DNS</h2>
+
+  <p>Traditional DNS queries are sent in <strong>plaintext over UDP</strong>. Anyone on the network path (ISP, coffee shop WiFi, corporate proxy) can see every domain you query. Encrypted DNS protocols solve this.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header tcp">DNS over TLS (DoT)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Port 853</strong> (dedicated)</li>
+          <li>DNS queries wrapped in a TLS session</li>
+          <li>Easy to identify and block (distinct port)</li>
+          <li>Easy for network operators to allow/deny</li>
+          <li>Supported by: Android (Private DNS), systemd-resolved, Unbound, Knot Resolver</li>
+          <li>Defined in <a href="https://www.rfc-editor.org/rfc/rfc7858">RFC 7858</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l7">DNS over HTTPS (DoH)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Port 443</strong> (same as regular HTTPS)</li>
+          <li>DNS queries sent as HTTPS requests</li>
+          <li>Indistinguishable from normal HTTPS traffic</li>
+          <li>Very hard to block without blocking all HTTPS</li>
+          <li>Supported by: browsers (Chrome, Firefox, Safari), curl, cloudflared</li>
+          <li>Defined in <a href="https://www.rfc-editor.org/rfc/rfc8484">RFC 8484</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># DoH query using curl</span><br>
+    <span class="output">$ curl -s -H 'accept: application/dns-json' \</span><br>
+    <span class="output">&nbsp;&nbsp;'https://1.1.1.1/dns-query?name=example.com&type=A' | jq</span><br>
+    <span class="output">{</span><br>
+    <span class="output">&nbsp;&nbsp;"Status": 0,</span><br>
+    <span class="output">&nbsp;&nbsp;"Answer": [</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;{ "name": "example.com", "type": 1, "TTL": 86400, "data": "93.184.216.34" }</span><br>
+    <span class="output">&nbsp;&nbsp;]</span><br>
+    <span class="output">}</span><br>
+    <br>
+    <span class="prompt"># DoT using kdig (knot-dns utility)</span><br>
+    <span class="output">$ kdig +tls @1.1.1.1 example.com A</span>
+  </div>
+
+  <h3>Tradeoffs: Privacy vs Network Visibility</h3>
+
+  <div class="panel">
+    <div class="panel-title">The Operator's Dilemma</div>
+    <table>
+      <tr>
+        <th>Perspective</th>
+        <th>Encrypted DNS Benefit</th>
+        <th>Encrypted DNS Problem</th>
+      </tr>
+      <tr>
+        <td><strong>End User</strong></td>
+        <td>ISP/network can't see queries. Privacy from surveillance.</td>
+        <td>Bypasses local DNS filtering (parental controls, corporate policy).</td>
+      </tr>
+      <tr>
+        <td><strong>Network Operator</strong></td>
+        <td>Users trust your network more.</td>
+        <td>Lose visibility for security monitoring, logging, threat detection.</td>
+      </tr>
+      <tr>
+        <td><strong>Security Team</strong></td>
+        <td>Prevents DNS spoofing on the wire.</td>
+        <td>Malware can use DoH to bypass DNS-based threat blocking. C2 channels over DoH are hard to detect.</td>
+      </tr>
+      <tr>
+        <td><strong>Enterprise IT</strong></td>
+        <td>Protects remote workers on untrusted networks.</td>
+        <td>Browsers using DoH bypass corporate DNS policies (content filtering, split-horizon).</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Enterprise concern:</strong> Firefox and Chrome enable DoH by default in some regions, bypassing your corporate DNS resolver (and its split-horizon, logging, and security filtering). Enterprises can disable this via Group Policy (Chrome), canary domain detection (Firefox checks for <code>use-application-dns.net</code> — if it resolves, DoH is disabled), or network-level policies.
+  </div>
+
+  <div class="note">
+    <strong>DNS over QUIC (DoQ):</strong> A newer protocol (<a href="https://www.rfc-editor.org/rfc/rfc9250">RFC 9250</a>) that uses QUIC transport (UDP-based, encrypted, multiplexed). Combines the privacy of DoT/DoH with lower latency (0-RTT connection establishment). Still early in adoption.
+  </div>
+
+  <!-- ===== DNSSEC ===== -->
+  <h2>DNSSEC (DNS Security Extensions)</h2>
+
+  <p>DNS was designed in the 1980s with <strong>no authentication</strong>. Any response that arrives with the correct transaction ID is accepted. DNSSEC adds <strong>cryptographic signatures</strong> to DNS records, allowing resolvers to verify that responses haven't been tampered with.</p>
+
+  <h3>The Problem: DNS Spoofing</h3>
+
+  <div class="panel">
+    <div class="panel-title">The Kaminsky Attack (2008)</div>
+    <p>Dan Kaminsky discovered that an attacker can flood a recursive resolver with forged responses for a target domain. The attack exploits the weak entropy of DNS transaction IDs (16 bits = 65,536 possibilities) and the race between legitimate and forged responses.</p>
+    <ul>
+      <li>Attacker triggers a query for <code>random123.example.com</code> (guaranteed cache miss)</li>
+      <li>Simultaneously floods the resolver with forged responses claiming to be from <code>example.com</code>'s authoritative NS</li>
+      <li>The forged responses include a <strong>spoofed authority section</strong> pointing to the attacker's nameserver</li>
+      <li>If the forged response arrives first with the right transaction ID, the resolver caches it</li>
+      <li>Result: the entire <code>example.com</code> zone is poisoned in the resolver's cache</li>
+    </ul>
+    <p>Mitigations (source port randomization) made this harder but not impossible. DNSSEC is the proper fix.</p>
+  </div>
+
+  <h3>Chain of Trust</h3>
+
+  <p>DNSSEC builds a <strong>chain of trust</strong> from the DNS root zone down to the record you're querying. Each level cryptographically vouches for the next.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Root Zone</div>
+      <div class="desc">Signs .com DS record with root KSK</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">.com TLD</div>
+      <div class="desc">Signs example.com DS with .com KSK</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">example.com</div>
+      <div class="desc">Signs A record with zone ZSK</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Validating Resolver</div>
+      <div class="desc">Verifies entire chain</div>
+    </div>
+  </div>
+
+  <h3>DNSSEC Record Types</h3>
+
+  <table>
+    <tr>
+      <th>Record</th>
+      <th>Name</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>DNSKEY</code></td>
+      <td>DNS Public Key</td>
+      <td>Contains the public key for a zone. Two types: <strong>KSK</strong> (Key Signing Key, signs DNSKEY RRset) and <strong>ZSK</strong> (Zone Signing Key, signs all other records).</td>
+    </tr>
+    <tr>
+      <td><code>RRSIG</code></td>
+      <td>Resource Record Signature</td>
+      <td>Cryptographic signature over a record set (RRset). Each signed RRset has a corresponding RRSIG. Contains: algorithm, signer name, signature expiry, and the signature itself.</td>
+    </tr>
+    <tr>
+      <td><code>DS</code></td>
+      <td>Delegation Signer</td>
+      <td>Hash of the child zone's KSK, stored in the <strong>parent zone</strong>. This is the link in the chain of trust: the parent signs the DS record, vouching for the child's key.</td>
+    </tr>
+    <tr>
+      <td><code>NSEC</code></td>
+      <td>Next Secure</td>
+      <td>Authenticated denial of existence. Proves that a name does not exist by showing the "gap" between existing names in the zone (sorted alphabetically). Drawback: allows zone enumeration (walking).</td>
+    </tr>
+    <tr>
+      <td><code>NSEC3</code></td>
+      <td>Next Secure v3</td>
+      <td>Same as NSEC but uses hashed names to prevent zone enumeration. More complex but standard practice.</td>
+    </tr>
+  </table>
+
+  <h3>DNSSEC Validation Process</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Trust anchor:</strong> The validating resolver has the root zone's public key (KSK) built in. This is the trust anchor — the starting point for all validation.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Verify root -> TLD delegation:</strong> The root zone's DNSKEY signs the DS record for <code>.com</code>. The resolver verifies the RRSIG on the DS record using the root's DNSKEY.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Verify TLD DNSKEY:</strong> The DS record contains a hash of <code>.com</code>'s KSK. The resolver fetches <code>.com</code>'s DNSKEY records and verifies the KSK matches the DS hash.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Verify TLD -> domain delegation:</strong> <code>.com</code>'s ZSK signs the DS record for <code>example.com</code>. Resolver verifies.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Verify domain DNSKEY:</strong> The DS record hashes to <code>example.com</code>'s KSK. Resolver fetches and verifies DNSKEY records.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div><strong>Verify the answer:</strong> <code>example.com</code>'s ZSK signs the A record's RRSIG. Resolver verifies the signature, confirming the record is authentic and unmodified.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">KSK vs ZSK: Why Two Keys?</div>
+    <ul>
+      <li><strong>KSK (Key Signing Key):</strong> Long-lived, strong key (2048+ bit RSA or equivalent). Signs only the DNSKEY record set. Its hash (DS record) is registered in the parent zone. Changing the KSK requires updating the parent (registrar coordination).</li>
+      <li><strong>ZSK (Zone Signing Key):</strong> Shorter-lived, rotated more frequently (every 1-3 months). Signs all other record sets. Can be rotated without touching the parent zone — only the DNSKEY RRset (signed by KSK) needs updating.</li>
+      <li><strong>Separation of concerns:</strong> Frequent ZSK rotation limits exposure from key compromise. KSK rotation is rare and more operationally complex.</li>
+    </ul>
+  </div>
+
+  <h3>Why DNSSEC Adoption Is Slow</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Operational Complexity</div>
+      <ul>
+        <li>Key generation, rotation, and rollover procedures</li>
+        <li>Signature expiry — if RRSIG records expire and aren't re-signed, the zone becomes <strong>BOGUS</strong> (validation fails, treated as SERVFAIL)</li>
+        <li>Zone signing increases response sizes (4-6x typical), increasing bandwidth and causing UDP truncation more often</li>
+        <li>DS record management at the registrar adds a dependency</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Risk of Breaking Resolution</div>
+      <ul>
+        <li>A misconfigured DNSSEC zone is <strong>worse than unsigned</strong> — it returns SERVFAIL instead of answers</li>
+        <li>DNSSEC failures are hard to diagnose for end users and even for many operators</li>
+        <li>Some firewalls/middleboxes strip DNSSEC records or block large UDP responses</li>
+        <li>Many zones are signed but few resolvers actually validate (chicken-and-egg problem)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>DNSSEC outage example:</strong> If you enable DNSSEC and then forget to re-sign the zone before RRSIG expiry (e.g., your automated signing pipeline breaks), validating resolvers will return SERVFAIL for your entire domain. This is a complete outage for all validating clients. Some high-profile domains (including NASA, Comcast, and various government sites) have experienced DNSSEC-related outages.
+  </div>
+
+  <div class="tip">
+    <strong>Managed DNSSEC:</strong> If you use Route 53, Cloudflare, or Google Cloud DNS, they handle zone signing and key rotation automatically. You only need to add the DS record at your registrar (and some registrars, like Cloudflare Registrar, automate even that). This dramatically reduces operational risk.
+  </div>
+
+  <!-- ===== TOOLS DEEP DIVE ===== -->
+  <h2>Tools Deep Dive: <code>dig</code></h2>
+
+  <p><code>dig</code> (Domain Information Groper) is the standard CLI tool for DNS queries. It's part of the BIND utilities package (<code>bind-utils</code> on RHEL/CentOS, <code>dnsutils</code> on Debian/Ubuntu).</p>
+
+  <h3>Basic Queries</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Basic A record lookup</span><br>
+    <span class="output">$ dig example.com</span><br>
+    <br>
+    <span class="prompt"># Query a specific record type</span><br>
+    <span class="output">$ dig example.com MX</span><br>
+    <span class="output">$ dig example.com AAAA</span><br>
+    <span class="output">$ dig example.com TXT</span><br>
+    <span class="output">$ dig example.com NS</span><br>
+    <span class="output">$ dig example.com SOA</span><br>
+    <span class="output">$ dig example.com CAA</span><br>
+    <br>
+    <span class="prompt"># Short output (just the answer)</span><br>
+    <span class="output">$ dig example.com +short</span><br>
+    <span class="output">93.184.216.34</span><br>
+    <br>
+    <span class="prompt"># Query a specific nameserver</span><br>
+    <span class="output">$ dig example.com @8.8.8.8</span><br>
+    <span class="output">$ dig example.com @ns1.example.com</span><br>
+    <br>
+    <span class="prompt"># Query ALL record types</span><br>
+    <span class="output">$ dig example.com ANY</span><br>
+    <span class="cm"># Note: many servers now refuse ANY queries (RFC 8482) for DDoS mitigation</span>
+  </div>
+
+  <h3>Reverse DNS Lookup</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Reverse lookup (IP -> hostname)</span><br>
+    <span class="output">$ dig -x 93.184.216.34</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">34.216.184.93.in-addr.arpa. 86400 IN PTR example.com.</span><br>
+    <br>
+    <span class="prompt"># Short form</span><br>
+    <span class="output">$ dig -x 93.184.216.34 +short</span><br>
+    <span class="output">example.com.</span>
+  </div>
+
+  <h3><code>dig +trace</code> — Follow the Delegation Chain</h3>
+
+  <p>The most powerful diagnostic: <code>+trace</code> makes dig perform iterative resolution from the root, showing every delegation step.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ dig +trace api.example.com</span><br>
+    <br>
+    <span class="output">; <<>> DiG 9.18.18 <<>> +trace api.example.com</span><br>
+    <span class="output">;; global options: +cmd</span><br>
+    <br>
+    <span class="output"><strong>.                       518400  IN  NS  a.root-servers.net.</strong></span><br>
+    <span class="output">.                       518400  IN  NS  b.root-servers.net.</span><br>
+    <span class="output">.                       518400  IN  NS  c.root-servers.net.</span><br>
+    <span class="output"><span class="cm">;; ... (13 root servers)</span></span><br>
+    <span class="output">;; Received 239 bytes from 127.0.0.53#53 in 0 ms</span><br>
+    <br>
+    <span class="output"><strong>com.                    172800  IN  NS  a.gtld-servers.net.</strong></span><br>
+    <span class="output">com.                    172800  IN  NS  b.gtld-servers.net.</span><br>
+    <span class="output"><span class="cm">;; ... (referral from root to .com TLD)</span></span><br>
+    <span class="output">;; Received 836 bytes from <strong>198.41.0.4#53(a.root-servers.net)</strong> in 24 ms</span><br>
+    <br>
+    <span class="output"><strong>example.com.            172800  IN  NS  ns1.example.com.</strong></span><br>
+    <span class="output">example.com.            172800  IN  NS  ns2.example.com.</span><br>
+    <span class="output"><span class="cm">;; ... (referral from .com TLD to authoritative)</span></span><br>
+    <span class="output">;; Received 460 bytes from <strong>192.5.6.30#53(a.gtld-servers.net)</strong> in 32 ms</span><br>
+    <br>
+    <span class="output"><strong>api.example.com.        300     IN  A   93.184.216.34</strong></span><br>
+    <span class="output">;; Received 62 bytes from <strong>198.51.100.1#53(ns1.example.com)</strong> in 15 ms</span>
+  </div>
+
+  <div class="tip">
+    <strong>When to use <code>+trace</code>:</strong> When you need to verify that delegation is correct, diagnose where in the chain a resolution fails, confirm authoritative answers (bypassing caching), or debug DNSSEC chain-of-trust issues.
+  </div>
+
+  <h3><code>dig +dnssec</code> — Request DNSSEC Records</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ dig example.com +dnssec</span><br>
+    <br>
+    <span class="output">;; flags: qr rd ra <strong>ad</strong>; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1</span><br>
+    <span class="cm">;; ad flag = Authenticated Data (DNSSEC validation passed)</span><br>
+    <br>
+    <span class="output">;; ANSWER SECTION:</span><br>
+    <span class="output">example.com.        86400  IN  A     93.184.216.34</span><br>
+    <span class="output">example.com.        86400  IN  RRSIG A 13 2 86400 (</span><br>
+    <span class="output">                    20240415120000 20240401120000 12345 example.com.</span><br>
+    <span class="output">                    aB3cD4eF5gH6iJ7kL8mN9oP0qR... )</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">DNSSEC Flags in dig Output</div>
+    <table>
+      <tr>
+        <th>Flag</th>
+        <th>Meaning</th>
+      </tr>
+      <tr>
+        <td><code>ad</code> (Authenticated Data)</td>
+        <td>The recursive resolver validated the DNSSEC chain successfully. The answer is authentic.</td>
+      </tr>
+      <tr>
+        <td><code>cd</code> (Checking Disabled)</td>
+        <td>The client asked the resolver to skip DNSSEC validation (used for debugging).</td>
+      </tr>
+      <tr>
+        <td><code>do</code> (DNSSEC OK)</td>
+        <td>EDNS0 flag indicating the client wants DNSSEC records in the response.</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Useful dig Combinations</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Check NS delegation at the TLD level</span><br>
+    <span class="output">$ dig example.com NS @a.gtld-servers.net +norecurse</span><br>
+    <br>
+    <span class="prompt"># Get all records at a name (with caveats)</span><br>
+    <span class="output">$ dig example.com ANY +noall +answer</span><br>
+    <br>
+    <span class="prompt"># Show only answer section, clean output</span><br>
+    <span class="output">$ dig example.com +noall +answer</span><br>
+    <span class="output">example.com.    86400   IN      A       93.184.216.34</span><br>
+    <br>
+    <span class="prompt"># Check if DNSSEC is configured (look for DS at parent)</span><br>
+    <span class="output">$ dig example.com DS @a.gtld-servers.net +short</span><br>
+    <span class="output">12345 13 2 aB3cD4eF5gH6iJ7kL8mN9oP0qR...</span><br>
+    <br>
+    <span class="prompt"># Measure query time</span><br>
+    <span class="output">$ dig example.com | grep "Query time"</span><br>
+    <span class="output">;; Query time: 12 msec</span><br>
+    <br>
+    <span class="prompt"># CNAME chain following</span><br>
+    <span class="output">$ dig www.example.com +trace +nodnssec</span><br>
+    <br>
+    <span class="prompt"># Check zone transfer (if allowed)</span><br>
+    <span class="output">$ dig example.com AXFR @ns1.example.com</span><br>
+    <span class="cm"># Usually refused: Transfer failed.</span>
+  </div>
+
+  <h3>Other Useful DNS Tools</h3>
+
+  <table>
+    <tr>
+      <th>Tool</th>
+      <th>Package</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>dig</code></td>
+      <td><code>bind-utils</code> / <code>dnsutils</code></td>
+      <td>Full-featured DNS query tool (the standard)</td>
+    </tr>
+    <tr>
+      <td><code>nslookup</code></td>
+      <td><code>bind-utils</code> / <code>dnsutils</code></td>
+      <td>Simpler DNS queries. Works on Windows. Less output than dig.</td>
+    </tr>
+    <tr>
+      <td><code>host</code></td>
+      <td><code>bind-utils</code> / <code>dnsutils</code></td>
+      <td>Quick lookups. <code>host example.com</code> gives clean output.</td>
+    </tr>
+    <tr>
+      <td><code>kdig</code></td>
+      <td><code>knot-dnsutils</code></td>
+      <td>Like dig, but supports DoT and DoH natively. <code>kdig +tls @1.1.1.1</code></td>
+    </tr>
+    <tr>
+      <td><code>drill</code></td>
+      <td><code>ldns-utils</code></td>
+      <td>DNSSEC-focused dig alternative. Good chain validation output.</td>
+    </tr>
+    <tr>
+      <td><code>dog</code></td>
+      <td>Rust (<code>cargo install dog</code>)</td>
+      <td>Modern, colorized DNS client. DoT and DoH support.</td>
+    </tr>
+    <tr>
+      <td><code>resolvectl</code></td>
+      <td>systemd</td>
+      <td>Query systemd-resolved cache, stats, and configuration.</td>
+    </tr>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Quick Diagnostic Workflow</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><code>dig example.com +short</code> — Does it resolve at all? What IP do I get?</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><code>dig example.com @8.8.8.8</code> — Is this a local resolver issue or global?</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><code>dig example.com @ns1.example.com</code> — Is the authoritative server returning the right answer?</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><code>dig +trace example.com</code> — Walk the delegation chain. Where does it break?</div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div><code>dig example.com +dnssec</code> — Is DNSSEC causing validation failures (SERVFAIL)?</div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div><code>dig example.com +cd</code> — Checking Disabled: if this works but step 5 doesn't, DNSSEC is broken.</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

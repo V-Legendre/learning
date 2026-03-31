@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 08 — Tailscale Architecture</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 08 — Tailscale Architecture</h1>
+  <p class="subtitle">How Tailscale achieves direct, encrypted connections through NATs</p>
+
+  <!-- ===== ARCHITECTURE OVERVIEW ===== -->
+  <h2>Architecture Overview</h2>
+
+  <p>Tailscale's architecture is split into two completely separate planes: a <strong>control plane</strong> (coordination server) that handles identity, key distribution, and policy — and a <strong>data plane</strong> (WireGuard mesh) that carries actual traffic peer-to-peer. The coordination server never sees your data.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Node A</div>
+      <div class="topo-detail">WireGuard peer</div>
+    </div>
+    <div class="topo-link">&#x2194;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Node B</div>
+      <div class="topo-detail">WireGuard peer</div>
+    </div>
+    <div class="topo-link">&#x2194;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Node C</div>
+      <div class="topo-detail">WireGuard peer</div>
+    </div>
+  </div>
+  <div class="topology">
+    <div class="topo-node server">
+      <div class="topo-label">Coordination Server</div>
+      <div class="topo-detail">Control plane only</div>
+    </div>
+    <div class="topo-link" style="flex-direction: column;">&#x2195;</div>
+    <div class="topo-node cloud">
+      <div class="topo-label">DERP Relays</div>
+      <div class="topo-detail">Fallback data plane</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Key Architectural Decision</div>
+    <p>Traditional VPNs (OpenVPN, IPsec concentrators) route <em>all</em> traffic through a central server. This creates a bandwidth bottleneck, a single point of failure, and adds latency for every packet. Tailscale inverts this model:</p>
+    <ul>
+      <li><strong>Control plane:</strong> Centralized (coordination server). Handles authentication, key exchange, ACL distribution, endpoint discovery. Low-bandwidth, stateless for data.</li>
+      <li><strong>Data plane:</strong> Fully decentralized (WireGuard mesh). Every node connects directly to every other node it needs to communicate with. No central server in the data path.</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Traditional VPN</div>
+      <div class="comp-body">
+        <ul>
+          <li>All traffic through VPN concentrator</li>
+          <li>Bandwidth bottleneck at server</li>
+          <li>Latency: A &rarr; Server &rarr; B (extra hop always)</li>
+          <li>Server failure = total outage</li>
+          <li>Server sees all traffic (even if encrypted)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Tailscale (WireGuard Mesh)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Traffic goes directly A &rarr; B</li>
+          <li>No central bandwidth bottleneck</li>
+          <li>Optimal latency (shortest path)</li>
+          <li>Coord server down = existing connections persist</li>
+          <li>Coordination server never sees data traffic</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Resilience under control plane outage:</strong> If the coordination server goes down, existing WireGuard tunnels continue working because they already have each other's keys and endpoints. You can't add new nodes or update ACLs, but existing connectivity is unaffected. This is a direct benefit of separating control and data planes.
+  </div>
+
+  <!-- ===== NODE REGISTRATION ===== -->
+  <h2>Node Registration &amp; Key Distribution</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Key generation:</strong> On first run, the Tailscale client generates a WireGuard keypair (Curve25519). The private key never leaves the device.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Authentication:</strong> The user authenticates via an OAuth/OIDC provider (Google, Microsoft, GitHub, Okta, etc.). This binds the device to a user identity in the tailnet.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Registration:</strong> The client sends its WireGuard public key, and endpoint information to the coordination server. The server stores this and assigns the node a stable 100.x.y.z IP address.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Peer distribution:</strong> The coordination server pushes authorized peer information (public keys, endpoints, allowed IPs) to each node based on ACL policy. Each node only receives info about peers it's allowed to communicate with.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>WireGuard configuration:</strong> The Tailscale client dynamically configures the local WireGuard interface with the received peer information. No manual WireGuard config files needed.</div>
+    </div>
+  </div>
+
+  <div class="seq-diagram" style="max-width: 700px;">
+    <div class="seq-header">
+      <div class="seq-entity">New Node</div>
+      <div class="seq-entity">Coordination Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">OAuth login + WireGuard pubkey</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">Assigned IP: 100.64.0.15</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">Peer list: [pubkey, endpoints, IPs]...</span></div>
+      </div>
+    </div>
+    <div style="padding: 6px 20px; color: #888; font-size: 12px; text-align: center;">
+      Coordination server also notifies existing nodes about the new peer
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>No manual key management:</strong> Compare this to raw WireGuard, where you manually exchange public keys between every pair of peers and update config files. Tailscale automates this entirely — the coordination server is essentially a WireGuard key distribution service paired with an identity provider.
+  </div>
+
+  <!-- ===== CONNECTION ESTABLISHMENT ===== -->
+  <h2>Connection Establishment Flow</h2>
+
+  <p>When Node A needs to reach Node B, Tailscale's connection engine (<code>derp/derphttp</code>, <code>wgengine</code>, <code>magicsock</code>) executes a multi-stage process to find the best path.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Key Lookup</div>
+      <div class="desc">Get B's WireGuard pubkey from coordination server</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">STUN Discovery</div>
+      <div class="desc">Both peers discover their public endpoints</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Endpoint Exchange</div>
+      <div class="desc">Share endpoints via coordination server</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Direct Attempt</div>
+      <div class="desc">UDP hole punch to each other's endpoints</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Fallback: DERP</div>
+      <div class="desc">If direct fails, relay via DERP</div>
+    </div>
+  </div>
+
+  <h3>Detailed Connection Sequence</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Both nodes know each other's WireGuard public keys</strong> (distributed by coordination server at registration time). They don't need to fetch keys on-demand — they already have them.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>STUN discovery:</strong> Both nodes periodically send STUN Binding Requests to Tailscale's STUN servers (co-located with DERP servers) to discover their public <code>IP:port</code>. These results are sent to the coordination server.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Endpoint exchange:</strong> The coordination server shares each node's discovered endpoints (possibly multiple — one per interface, IPv4 and IPv6) with authorized peers.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Direct connection attempt:</strong> Both nodes simultaneously send WireGuard handshake packets to each other's public endpoints. This is UDP hole punching — the outbound packets create NAT mappings that allow the peer's packets through.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Path optimization:</strong> Tailscale also tries UPnP, NAT-PMP, and PCP to request explicit port mappings from the NAT gateway. If the gateway supports these, it can allocate a stable mapping without relying on hole punching.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div><strong>DERP fallback:</strong> If direct connectivity fails after a timeout (a few seconds), traffic immediately starts flowing via the nearest DERP relay while direct path attempts continue in the background. Many connections start on DERP and upgrade to direct seconds later.</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The "magicsock" abstraction:</strong> Tailscale's <code>magicsock</code> package wraps the WireGuard socket and transparently switches between direct UDP, UPnP-mapped paths, and DERP relay without the upper layers (WireGuard) knowing. From WireGuard's perspective, it's always talking to a single UDP socket — <code>magicsock</code> handles all the NAT traversal complexity underneath.
+  </div>
+
+  <!-- ===== DERP ===== -->
+  <h2>DERP (Designated Encrypted Relay for Packets)</h2>
+
+  <p>DERP is Tailscale's answer to TURN. But it's designed very differently from traditional TURN servers, with several architectural decisions that make it more practical for a WireGuard-based mesh.</p>
+
+  <div class="panel">
+    <div class="panel-title">DERP vs Traditional TURN</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>TURN</th>
+          <th>DERP</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Transport</strong></td>
+          <td>UDP primary, TCP/TLS optional</td>
+          <td>HTTPS (TCP/TLS on port 443) primary</td>
+        </tr>
+        <tr>
+          <td><strong>Protocol</strong></td>
+          <td>TURN protocol (complex, stateful allocations)</td>
+          <td>Simple custom protocol over WebSocket-like framing</td>
+        </tr>
+        <tr>
+          <td><strong>Encryption</strong></td>
+          <td>Relay can see payloads (unless DTLS/SRTP)</td>
+          <td>Payloads are WireGuard-encrypted end-to-end; DERP relays opaque ciphertext</td>
+        </tr>
+        <tr>
+          <td><strong>Firewall traversal</strong></td>
+          <td>UDP often blocked; TCP fallback available</td>
+          <td>Always HTTPS — works through virtually any firewall/proxy</td>
+        </tr>
+        <tr>
+          <td><strong>Authentication</strong></td>
+          <td>Credentials-based (TURN username/password)</td>
+          <td>Tailscale node key (tied to identity)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Critical point:</strong> DERP is <strong>not</strong> a VPN concentrator. It cannot decrypt or inspect your traffic. All data passing through DERP is WireGuard-encrypted with keys that only the two communicating peers possess. DERP is a dumb packet forwarder — it sees opaque encrypted blobs and routes them by destination node key.
+  </div>
+
+  <h3>DERP Architecture</h3>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Node A</div>
+      <div class="topo-detail">WireGuard encrypted</div>
+    </div>
+    <div class="topo-link">&rarr; HTTPS</div>
+    <div class="topo-node server">
+      <div class="topo-label">DERP Relay</div>
+      <div class="topo-detail">Opaque ciphertext relay</div>
+    </div>
+    <div class="topo-link">HTTPS &rarr;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Node B</div>
+      <div class="topo-detail">WireGuard encrypted</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why HTTPS on Port 443?</div>
+    <p>This is a deliberately pragmatic design choice. Almost every network on earth allows outbound HTTPS (TCP 443). Corporate proxies, hotel WiFi captive portals, airplane WiFi, restrictive firewalls — they all pass HTTPS. By running DERP over HTTPS:</p>
+    <ul>
+      <li>Works behind HTTP proxies (CONNECT method)</li>
+      <li>Passes DPI (deep packet inspection) that blocks VPN protocols</li>
+      <li>No special firewall rules needed — looks like normal web traffic</li>
+      <li>Survives networks that block all UDP (DERP is TCP-only)</li>
+    </ul>
+  </div>
+
+  <h3>Global DERP Map</h3>
+
+  <p>Tailscale operates DERP servers worldwide. Each node connects to its nearest DERP server, and DERP servers can relay to each other if two nodes are closest to different DERP regions.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale netcheck<br>
+    <br>
+    <span class="output">Report:</span><br>
+    <span class="output">    * UDP: true</span><br>
+    <span class="output">    * IPv4: yes, 203.0.113.50:41641</span><br>
+    <span class="output">    * IPv6: yes</span><br>
+    <span class="output">    * MappingVariesByDestIP: false</span><br>
+    <span class="output">    * Nearest DERP: San Francisco</span><br>
+    <span class="output">    * DERP latency:</span><br>
+    <span class="output">        - sf:      2.1ms  (San Francisco)</span><br>
+    <span class="output">        - lax:     5.3ms  (Los Angeles)</span><br>
+    <span class="output">        - sea:    12.1ms  (Seattle)</span><br>
+    <span class="output">        - chi:    32.4ms  (Chicago)</span><br>
+    <span class="output">        - nyc:    61.2ms  (New York)</span><br>
+    <span class="output">        - fra:   142.5ms  (Frankfurt)</span><br>
+    <span class="output">        - sin:   168.3ms  (Singapore)</span><br>
+    <span class="output">        - syd:   179.8ms  (Sydney)</span><br>
+  </div>
+
+  <div class="tip">
+    <strong>Self-hosted DERP:</strong> You can run your own DERP server (<code>cmd/derper</code> in the Tailscale repo) and add it to your tailnet's DERP map. Useful if you want relay traffic to stay on your infrastructure, or if your nodes are in a region far from Tailscale's DERP servers.
+  </div>
+
+  <h3>Direct vs Relayed — Checking Connection Status</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale status<br>
+    <br>
+    <span class="output">100.64.0.1   myphone         user@   linux   active; direct 203.0.113.50:41641, tx 15424 rx 9872</span><br>
+    <span class="output">100.64.0.2   workstation     user@   linux   active; direct 198.51.100.5:41641, tx 892341 rx 445123</span><br>
+    <span class="output">100.64.0.3   cloud-vm        user@   linux   active; relay "sf", tx 4521 rx 2341</span><br>
+    <span class="output">100.64.0.4   homeserver      user@   linux   idle</span><br>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Reading <code>tailscale status</code> Output</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Meaning</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>direct 203.0.113.50:41641</code></td>
+          <td>Direct WireGuard connection established. Traffic goes peer-to-peer via this endpoint. Best case.</td>
+        </tr>
+        <tr>
+          <td><code>relay "sf"</code></td>
+          <td>Traffic is being relayed through the "sf" (San Francisco) DERP server. Direct connection failed — possibly Symmetric NAT or UDP blocked.</td>
+        </tr>
+        <tr>
+          <td><code>idle</code></td>
+          <td>No recent traffic. WireGuard handshake may have expired. Will re-establish on next packet.</td>
+        </tr>
+        <tr>
+          <td><code>tx / rx</code></td>
+          <td>Bytes transmitted and received to/from this peer.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Upgrade in progress:</strong> Connections often start as <code>relay</code> and upgrade to <code>direct</code> within seconds. If you see <code>relay</code> persistently, run <code>tailscale ping &lt;host&gt;</code> to see if direct connectivity eventually succeeds. If it stays on relay, check <code>tailscale netcheck</code> on both ends — one of them likely has a Symmetric NAT or UDP blocking.
+  </div>
+
+  <!-- ===== HOW TAILSCALE COMPARES ===== -->
+  <h2>Tailscale vs Raw WireGuard vs Headscale</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Aspect</th>
+        <th>Raw WireGuard</th>
+        <th>Tailscale</th>
+        <th>Headscale</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Key distribution</strong></td>
+        <td>Manual (copy pubkeys between configs)</td>
+        <td>Automatic (coordination server)</td>
+        <td>Automatic (self-hosted coordination)</td>
+      </tr>
+      <tr>
+        <td><strong>NAT traversal</strong></td>
+        <td>None (need public IP or port forward)</td>
+        <td>Full (STUN + hole punch + DERP relay)</td>
+        <td>Full (uses Tailscale client, same traversal)</td>
+      </tr>
+      <tr>
+        <td><strong>ACLs</strong></td>
+        <td>Manual iptables/nftables</td>
+        <td>Policy-as-code via coordination server</td>
+        <td>Same ACL format, self-managed</td>
+      </tr>
+      <tr>
+        <td><strong>DNS</strong></td>
+        <td>Manual /etc/hosts or DNS server</td>
+        <td>MagicDNS (automatic)</td>
+        <td>MagicDNS (automatic)</td>
+      </tr>
+      <tr>
+        <td><strong>Control plane</strong></td>
+        <td>N/A (no control plane)</td>
+        <td>Tailscale SaaS (proprietary)</td>
+        <td>Self-hosted (open source)</td>
+      </tr>
+      <tr>
+        <td><strong>Scaling</strong></td>
+        <td>O(n&sup2;) config complexity</td>
+        <td>Automatic mesh, scales to thousands</td>
+        <td>Same, limited by self-hosted capacity</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Headscale:</strong> An open-source, self-hosted implementation of the Tailscale coordination server. It implements the same coordination protocol, so standard Tailscale clients can connect to it. You get the same NAT traversal and mesh networking without depending on Tailscale's SaaS. The trade-off is you manage the server, backups, and availability yourself.
+  </div>
+
+</body>
+</html>

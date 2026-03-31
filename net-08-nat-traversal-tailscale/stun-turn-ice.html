@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 08 — STUN, TURN & ICE</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 08 — STUN, TURN &amp; ICE</h1>
+  <p class="subtitle">The protocols that punch through NATs</p>
+
+  <!-- ===== STUN ===== -->
+  <h2>STUN (Session Traversal Utilities for NAT)</h2>
+
+  <p>Defined in RFC 8489 (supersedes RFC 5389 and the original RFC 3489). STUN's core purpose is simple: tell a client what its public <code>IP:port</code> looks like from the outside. It's a lightweight, stateless protocol — just a few UDP packets.</p>
+
+  <div class="panel">
+    <div class="panel-title">How STUN Works</div>
+    <ol>
+      <li>Client sends a <strong>Binding Request</strong> to a STUN server (typically on port 3478)</li>
+      <li>The STUN server sees the source <code>IP:port</code> of the incoming packet — this is the NAT's external mapping</li>
+      <li>Server replies with a <strong>Binding Response</strong> containing <code>XOR-MAPPED-ADDRESS</code> — the client's public <code>IP:port</code></li>
+      <li>Client now knows its own public address as seen by the outside world</li>
+    </ol>
+  </div>
+
+  <h3>STUN Binding Request/Response</h3>
+
+  <div class="seq-diagram" style="max-width: 700px;">
+    <div class="seq-header">
+      <div class="seq-entity">Client<br><code>192.168.1.5:12345</code></div>
+      <div class="seq-entity">STUN Server<br><code>198.51.100.1:3478</code></div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">Binding Request (UDP)</span></div>
+      </div>
+    </div>
+    <div style="padding: 4px 20px; color: #888; font-size: 12px; text-align: center;">
+      NAT translates src to 203.0.113.1:54321
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">Binding Response: XOR-MAPPED-ADDRESS = 203.0.113.1:54321</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Type</span>
+      <span class="field-size">0x0001 (Binding Req) / 0x0101 (Binding Resp)</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Length</span>
+      <span class="field-size">Message body length</span>
+    </div>
+    <div class="pkt-field check" style="flex: 2;">
+      <span class="field-name">Magic Cookie</span>
+      <span class="field-size">0x2112A442 (fixed)</span>
+    </div>
+    <div class="pkt-field data" style="flex: 3;">
+      <span class="field-name">Transaction ID</span>
+      <span class="field-size">96 bits — matches request to response</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Why XOR-MAPPED-ADDRESS instead of plain MAPPED-ADDRESS?</strong> Some middleboxes (ALGs, overzealous firewalls) inspect packet payloads for IP addresses and rewrite them. XOR-ing with the magic cookie prevents these devices from interfering with the address in the response.
+  </div>
+
+  <h3>STUN Limitations</h3>
+
+  <div class="panel">
+    <div class="panel-title">What STUN Cannot Do</div>
+    <ul>
+      <li><strong>Useless with Symmetric NAT (APDM):</strong> The address STUN reports is only valid for that specific STUN server. A different peer will see a different mapping.</li>
+      <li><strong>No relay capability:</strong> STUN only discovers addresses — if direct connectivity fails, STUN can't help.</li>
+      <li><strong>Blocked by strict firewalls:</strong> If outbound UDP is blocked entirely, STUN requests never reach the server.</li>
+      <li><strong>No authentication by default:</strong> Basic Binding requests are unauthenticated (though STUN supports MESSAGE-INTEGRITY for authenticated uses in ICE).</li>
+    </ul>
+  </div>
+
+  <!-- ===== UDP HOLE PUNCHING ===== -->
+  <h2>UDP Hole Punching — Step by Step</h2>
+
+  <p>The fundamental technique for establishing direct UDP connectivity between two hosts behind NAT. Requires both NATs to use Endpoint-Independent Mapping (EIM) for reliable operation.</p>
+
+  <h3>Prerequisites</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">STUN Discovery</div>
+      <div class="desc">Both peers learn their public IP:port</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Signaling Exchange</div>
+      <div class="desc">Peers share addresses via a server</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Simultaneous Send</div>
+      <div class="desc">Both send to each other's public addr</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Direct Connection</div>
+      <div class="desc">NAT mappings now allow bidirectional flow</div>
+    </div>
+  </div>
+
+  <h3>Detailed Sequence</h3>
+
+  <div class="seq-diagram" style="max-width: 800px;">
+    <div class="seq-header">
+      <div class="seq-entity">Peer A<br><code>10.0.0.5:8000</code></div>
+      <div class="seq-entity">NAT A<br><code>203.0.113.1</code></div>
+      <div class="seq-entity">NAT B<br><code>198.51.100.1</code></div>
+      <div class="seq-entity">Peer B<br><code>10.0.0.9:8000</code></div>
+    </div>
+    <div style="padding: 6px 20px; color: #a78bfa; font-size: 12px; font-weight: bold;">Phase 1: STUN Discovery (both peers learn their public addresses)</div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">A discovers: 203.0.113.1:54321</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">B discovers: 198.51.100.1:54987</span></div>
+      </div>
+    </div>
+    <div style="padding: 6px 20px; color: #a78bfa; font-size: 12px; font-weight: bold;">Phase 2: Exchange addresses via signaling/coordination server</div>
+    <div style="padding: 6px 20px; color: #a78bfa; font-size: 12px; font-weight: bold;">Phase 3: Simultaneous send (both peers send to each other's public address)</div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">A sends to 198.51.100.1:54987</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">B sends to 203.0.113.1:54321</span></div>
+      </div>
+    </div>
+    <div style="padding: 6px 20px; color: #34d399; font-size: 12px; font-weight: bold;">Both NATs now have outbound mappings AND accept inbound from each other</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why It Works (with EIM NATs)</div>
+    <ul>
+      <li><strong>EIM guarantees stable mappings:</strong> Peer A's STUN-discovered address <code>203.0.113.1:54321</code> is the same address used when A sends to Peer B. The NAT reuses the mapping.</li>
+      <li><strong>Outbound creates the "hole":</strong> When A sends to B's public address, NAT A creates an outbound mapping that also allows inbound from B's IP (ADF) or B's IP:port (APDF).</li>
+      <li><strong>Timing matters with APDF:</strong> With Address+Port-Dependent Filtering, B's NAT will only accept packets from an IP:port that B has sent to. So B must also send to A's public address, creating the reciprocal hole.</li>
+      <li><strong>Simultaneous = both holes open:</strong> Once both peers have sent packets, both NATs have outbound mappings and will accept the other's packets.</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Why it fails with APDM (Symmetric) NAT:</strong> When Peer A sends to Peer B, the Symmetric NAT creates a <em>new</em> mapping (different from what STUN reported). B is sending to A's STUN-reported address, which is now the wrong port. Neither peer's packets reach the other.
+  </div>
+
+  <!-- ===== TCP HOLE PUNCHING ===== -->
+  <h2>TCP Hole Punching (Simultaneous Open)</h2>
+
+  <p>TCP's three-way handshake (SYN, SYN-ACK, ACK) doesn't seem compatible with hole-punching. But TCP has a rarely-used feature: <strong>simultaneous open</strong> — both sides send SYN at the same time, and the connection establishes via SYN, SYN+ACK, ACK on both sides.</p>
+
+  <div class="state-diagram">
+    <div class="state initial">CLOSED</div>
+    <div class="state-arrow">&rarr; both send SYN</div>
+    <div class="state waiting">SYN-SENT</div>
+    <div class="state-arrow">&rarr; both receive SYN</div>
+    <div class="state special">SYN-RECEIVED</div>
+    <div class="state-arrow">&rarr; both send SYN+ACK</div>
+    <div class="state active">ESTABLISHED</div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">UDP Hole Punching</div>
+      <div class="comp-body">
+        <ul>
+          <li>Stateless — just send packets</li>
+          <li>Timing is forgiving (seconds window)</li>
+          <li>Well-understood, high success rate</li>
+          <li>Works with most EIM NATs</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">TCP Hole Punching</div>
+      <div class="comp-body">
+        <ul>
+          <li>Requires simultaneous SYN (tight timing)</li>
+          <li>Many NATs don't handle TCP simultaneous open correctly</li>
+          <li>OS-level quirks: some stacks reset on unexpected SYN</li>
+          <li>Firewalls often statefully track TCP and block this</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Practical reality:</strong> TCP hole punching works maybe 60% of the time vs 90%+ for UDP. It's used as a fallback when UDP is blocked (e.g., some corporate firewalls block all UDP except DNS). Tailscale primarily uses UDP (WireGuard) but can fall back to TCP via DERP relay over HTTPS.
+  </div>
+
+  <!-- ===== TURN ===== -->
+  <h2>TURN (Traversal Using Relays around NAT)</h2>
+
+  <p>Defined in RFC 8656. TURN is the "if all else fails" protocol. When direct connectivity is impossible (both sides behind Symmetric NAT, UDP blocked, etc.), traffic is relayed through a TURN server. Every packet goes: Client A &rarr; TURN server &rarr; Client B.</p>
+
+  <h3>How TURN Works</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Allocate:</strong> Client sends an Allocate request to the TURN server. Server allocates a relay address (a public IP:port on the TURN server) and returns it to the client.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Permission:</strong> Client creates permissions on the TURN server specifying which peers can send to its relay address.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Channel Bind:</strong> Optionally, client binds a channel number (2 bytes) to a specific peer for reduced overhead (4-byte channel header vs 36-byte TURN header).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Relay:</strong> Data from the peer arrives at the relay address, and the TURN server forwards it to the client. Bidirectional.</div>
+    </div>
+  </div>
+
+  <h3>TURN Relay Topology</h3>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Peer A</div>
+      <div class="topo-detail">Behind Symmetric NAT</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node firewall">
+      <div class="topo-label">NAT A</div>
+      <div class="topo-detail">APDM + APDF</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node server">
+      <div class="topo-label">TURN Server</div>
+      <div class="topo-detail">Relays all traffic</div>
+    </div>
+    <div class="topo-link">&larr;</div>
+    <div class="topo-node firewall">
+      <div class="topo-label">NAT B</div>
+      <div class="topo-detail">APDM + APDF</div>
+    </div>
+    <div class="topo-link">&larr;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Peer B</div>
+      <div class="topo-detail">Behind Symmetric NAT</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">TURN Costs &amp; Trade-offs</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Bandwidth</strong></td>
+          <td>TURN server carries ALL data — doubles bandwidth cost (ingress + egress). Expensive at scale.</td>
+        </tr>
+        <tr>
+          <td><strong>Latency</strong></td>
+          <td>Extra hop through the relay. Path: A &rarr; TURN &rarr; B instead of A &rarr; B. Can add 10-100ms+ RTT.</td>
+        </tr>
+        <tr>
+          <td><strong>Reliability</strong></td>
+          <td>TURN server is a single point of failure and a bottleneck. Must be highly available.</td>
+        </tr>
+        <tr>
+          <td><strong>Privacy</strong></td>
+          <td>The relay sees unencrypted metadata (source/dest IPs). Payload can be encrypted (DTLS/SRTP), but the relay knows who's talking to whom.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>TURN transport options:</strong> The client-to-TURN-server connection can use UDP, TCP, or TLS-over-TCP. The TLS option is important because some networks block all UDP — TLS over TCP on port 443 looks like HTTPS and passes through most firewalls. The TURN-server-to-peer leg is typically UDP.
+  </div>
+
+  <!-- ===== ICE ===== -->
+  <h2>ICE (Interactive Connectivity Establishment)</h2>
+
+  <p>Defined in RFC 8445. ICE is not a single protocol — it's a <strong>framework</strong> that orchestrates STUN, TURN, and direct connectivity into a systematic candidate gathering and connectivity checking process. If STUN is "discover your address" and TURN is "relay traffic," ICE is "try everything and pick the best working path."</p>
+
+  <h3>Candidate Types</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Candidate Type</th>
+        <th>Source</th>
+        <th>Priority</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Host</strong></td>
+        <td>Local interface</td>
+        <td style="color: #34d399;">Highest</td>
+        <td>Direct local IP addresses (e.g., <code>192.168.1.5:8000</code>). Works if peers are on the same LAN.</td>
+      </tr>
+      <tr>
+        <td><strong>Server Reflexive (srflx)</strong></td>
+        <td>STUN</td>
+        <td style="color: #fbbf24;">Medium</td>
+        <td>Public IP:port discovered via STUN. Enables hole-punching for NAT traversal.</td>
+      </tr>
+      <tr>
+        <td><strong>Peer Reflexive (prflx)</strong></td>
+        <td>Connectivity check</td>
+        <td style="color: #fbbf24;">Medium</td>
+        <td>Discovered during ICE checks — a mapping that wasn't known during gathering. Happens with some NATs.</td>
+      </tr>
+      <tr>
+        <td><strong>Relay</strong></td>
+        <td>TURN</td>
+        <td style="color: #ef4444;">Lowest</td>
+        <td>TURN relay address. Last resort — guaranteed to work but adds latency and cost.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>ICE Process Flow</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Gather Candidates</div>
+      <div class="desc">Host, STUN (srflx), TURN (relay)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Exchange via Signaling</div>
+      <div class="desc">SDP offer/answer carries candidates</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Pair Candidates</div>
+      <div class="desc">Every local candidate paired with every remote</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Connectivity Checks</div>
+      <div class="desc">STUN Binding on each pair, ordered by priority</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Nominate Best Pair</div>
+      <div class="desc">Highest-priority working pair wins</div>
+    </div>
+  </div>
+
+  <h3>Candidate Pairing &amp; Priority</h3>
+
+  <div class="panel">
+    <div class="panel-title">How ICE Selects the Best Path</div>
+    <p>ICE creates a <strong>checklist</strong> of candidate pairs, ordered by priority. Priority formula favors:</p>
+    <ol>
+      <li><strong>Host-to-Host</strong> — both peers on the same LAN (direct, zero NAT traversal)</li>
+      <li><strong>Host-to-srflx / srflx-to-Host</strong> — one peer on public IP, other behind NAT</li>
+      <li><strong>srflx-to-srflx</strong> — both behind NAT, hole-punching</li>
+      <li><strong>Any-to-relay / relay-to-Any</strong> — TURN relay, last resort</li>
+    </ol>
+    <p>Connectivity checks use STUN Binding requests on each pair. The check succeeds if both peers can exchange STUN messages on that candidate pair. Failed checks are pruned, and the highest-priority surviving pair is <strong>nominated</strong> for data transfer.</p>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Gathering phase:</strong> Agent collects all candidates (host IPs, STUN-derived reflexive addresses, TURN allocations). This happens in parallel — STUN and TURN requests fire simultaneously.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Exchange phase:</strong> Candidates are sent to the remote peer via the signaling channel (WebRTC uses SDP in offer/answer; Tailscale uses the coordination server).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Checking phase:</strong> Both agents perform STUN connectivity checks on each candidate pair in priority order. Checks happen from both sides simultaneously (ICE is symmetric).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Nomination:</strong> The controlling agent picks the best valid pair. In <em>regular nomination</em>, it re-checks with a USE-CANDIDATE flag. In <em>aggressive nomination</em>, every check includes USE-CANDIDATE and the first success wins.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Completed:</strong> Data flows over the nominated pair. ICE can perform periodic keep-alive checks and switch paths if the nominated pair fails (ICE restart).</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>ICE-Lite:</strong> Servers with public IPs don't need the full ICE state machine. ICE-Lite is a minimal implementation for hosts that aren't behind NAT — they only respond to checks, never initiate them. Common for SFUs (Selective Forwarding Units) and media servers.
+  </div>
+
+  <!-- ===== TRICKLE ICE ===== -->
+  <h3>Trickle ICE</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Regular ICE</div>
+      <div class="comp-body">
+        <ul>
+          <li>Gather ALL candidates first</li>
+          <li>Then exchange them</li>
+          <li>Then start checking</li>
+          <li>Slow: must wait for TURN allocation (can take seconds)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Trickle ICE</div>
+      <div class="comp-body">
+        <ul>
+          <li>Start exchanging candidates as they're discovered</li>
+          <li>Connectivity checks begin immediately</li>
+          <li>New candidates added to the checklist incrementally</li>
+          <li>Much faster: host candidates checked while STUN/TURN still gathering</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BIG PICTURE ===== -->
+  <h2>How It All Fits Together</h2>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">ICE — Framework / Orchestrator</div>
+    <div class="encap-layer tcp">STUN — Address Discovery &amp; Connectivity Checks</div>
+    <div class="encap-layer ip">TURN — Relay (last resort)</div>
+    <div class="encap-layer eth">UDP / TCP / TLS Transport</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Decision Tree</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Same LAN?</div>
+        <div class="desc">Use host candidate</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">EIM NAT?</div>
+        <div class="desc">STUN + hole punch</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Symmetric NAT?</div>
+        <div class="desc">Port prediction (maybe)</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">All else fails</div>
+        <div class="desc">TURN relay</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The cost of TURN at scale:</strong> WebRTC services (video calls, etc.) pay heavily for TURN bandwidth. A 1:1 video call at 2 Mbps through TURN costs the provider 2 Mbps ingress + 2 Mbps egress per stream direction. This is why optimizing NAT traversal to avoid relay is critical — and why Tailscale invested so heavily in DERP (their TURN equivalent) optimization.
+  </div>
+
+</body>
+</html>

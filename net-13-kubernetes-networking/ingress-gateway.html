@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 13 — Ingress & Gateway API</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 13 — Ingress & Gateway API</h1>
+  <p class="subtitle">L7 routing — exposing services to the outside world</p>
+
+  <!-- ===== INGRESS RESOURCE ===== -->
+  <h2>The Ingress Resource</h2>
+
+  <p>Ingress provides L7 (HTTP/HTTPS) routing into the cluster. Instead of one LoadBalancer per Service (expensive, wasteful), a single Ingress controller handles routing for many services based on hostname and path.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Internet</div>
+      <div class="desc">Client request</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Cloud LB / NodePort</div>
+      <div class="desc">L4 entry point</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Ingress Controller</div>
+      <div class="desc">L7 routing (nginx, envoy, etc.)</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">ClusterIP Service</div>
+      <div class="desc">Backend service</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Pod</div>
+      <div class="desc">App container</div>
+    </div>
+  </div>
+
+  <h3>Host-Based and Path-Based Routing</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: Ingress
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">my-ingress</span>
+  <span class="attr">annotations</span>:
+    <span class="attr">nginx.ingress.kubernetes.io/rewrite-target</span>: <span class="str">/</span>
+<span class="kw">spec</span>:
+  <span class="attr">ingressClassName</span>: <span class="str">nginx</span>
+  <span class="attr">tls</span>:
+    - <span class="attr">hosts</span>:
+        - <span class="str">app.example.com</span>
+      <span class="attr">secretName</span>: <span class="str">app-tls-cert</span>       <span class="cm"># K8s Secret with tls.crt + tls.key</span>
+  <span class="attr">rules</span>:
+    <span class="cm"># Host-based routing</span>
+    - <span class="attr">host</span>: <span class="str">app.example.com</span>
+      <span class="attr">http</span>:
+        <span class="attr">paths</span>:
+          <span class="cm"># Path-based routing</span>
+          - <span class="attr">path</span>: <span class="str">/api</span>
+            <span class="attr">pathType</span>: <span class="str">Prefix</span>
+            <span class="attr">backend</span>:
+              <span class="attr">service</span>:
+                <span class="attr">name</span>: <span class="str">api-service</span>
+                <span class="attr">port</span>:
+                  <span class="attr">number</span>: <span class="num">80</span>
+          - <span class="attr">path</span>: <span class="str">/</span>
+            <span class="attr">pathType</span>: <span class="str">Prefix</span>
+            <span class="attr">backend</span>:
+              <span class="attr">service</span>:
+                <span class="attr">name</span>: <span class="str">frontend-service</span>
+                <span class="attr">port</span>:
+                  <span class="attr">number</span>: <span class="num">80</span>
+    - <span class="attr">host</span>: <span class="str">admin.example.com</span>
+      <span class="attr">http</span>:
+        <span class="attr">paths</span>:
+          - <span class="attr">path</span>: <span class="str">/</span>
+            <span class="attr">pathType</span>: <span class="str">Prefix</span>
+            <span class="attr">backend</span>:
+              <span class="attr">service</span>:
+                <span class="attr">name</span>: <span class="str">admin-service</span>
+                <span class="attr">port</span>:
+                  <span class="attr">number</span>: <span class="num">80</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">pathType Values</div>
+    <table>
+      <thead>
+        <tr>
+          <th>pathType</th>
+          <th>Behavior</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>Exact</code></td>
+          <td>URL path must match exactly</td>
+          <td><code>/api</code> matches only <code>/api</code>, not <code>/api/v1</code></td>
+        </tr>
+        <tr>
+          <td><code>Prefix</code></td>
+          <td>Matches URL path prefix split by <code>/</code></td>
+          <td><code>/api</code> matches <code>/api</code>, <code>/api/v1</code>, <code>/api/v1/users</code></td>
+        </tr>
+        <tr>
+          <td><code>ImplementationSpecific</code></td>
+          <td>Up to the IngressClass</td>
+          <td>Regex matching in nginx, etc.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== INGRESS CONTROLLERS ===== -->
+  <h2>Ingress Controllers</h2>
+
+  <div class="warn">
+    <strong>Critical:</strong> The Ingress resource does <strong>nothing</strong> without an Ingress controller. It's just a spec stored in etcd. You must deploy a controller that watches Ingress resources and configures the actual proxy.
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Controller</th>
+        <th>Proxy</th>
+        <th>Key Strengths</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>ingress-nginx</strong></td>
+        <td>NGINX</td>
+        <td>Most popular, rich annotation set, battle-tested</td>
+        <td>Community-maintained; different from NGINX Inc's controller</td>
+      </tr>
+      <tr>
+        <td><strong>Traefik</strong></td>
+        <td>Traefik</td>
+        <td>Auto-discovery, built-in Let's Encrypt, dashboard</td>
+        <td>Popular in smaller clusters; CRD-based config too</td>
+      </tr>
+      <tr>
+        <td><strong>Contour</strong></td>
+        <td>Envoy</td>
+        <td>HTTPProxy CRD for advanced routing, multi-team support</td>
+        <td>VMware/Tanzu project</td>
+      </tr>
+      <tr>
+        <td><strong>Emissary (Ambassador)</strong></td>
+        <td>Envoy</td>
+        <td>API gateway features, rate limiting, auth, gRPC</td>
+        <td>CRD-based; Ingress support is secondary</td>
+      </tr>
+      <tr>
+        <td><strong>AWS ALB Controller</strong></td>
+        <td>AWS ALB</td>
+        <td>Native ALB integration, WAF, Cognito auth</td>
+        <td>Provisions actual AWS ALBs from Ingress resources</td>
+      </tr>
+      <tr>
+        <td><strong>GCE Ingress</strong></td>
+        <td>Google Cloud LB</td>
+        <td>Native GCP LB, Cloud CDN, Cloud Armor</td>
+        <td>Default in GKE</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== TLS / CERT-MANAGER ===== -->
+  <h2>TLS Termination with cert-manager</h2>
+
+  <p>cert-manager automates certificate provisioning. It watches Ingress resources for annotations and automatically provisions TLS certificates.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Ingress created</div>
+      <div class="desc">Has cert-manager annotation</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">cert-manager sees it</div>
+      <div class="desc">Creates Certificate CR</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">ACME challenge</div>
+      <div class="desc">HTTP-01 or DNS-01</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Cert issued</div>
+      <div class="desc">Stored in K8s Secret</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Ingress uses cert</div>
+      <div class="desc">TLS termination active</div>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># ClusterIssuer — cluster-wide certificate authority</span>
+<span class="kw">apiVersion</span>: cert-manager.io/v1
+<span class="kw">kind</span>: ClusterIssuer
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">letsencrypt-prod</span>
+<span class="kw">spec</span>:
+  <span class="attr">acme</span>:
+    <span class="attr">server</span>: <span class="str">https://acme-v02.api.letsencrypt.org/directory</span>
+    <span class="attr">email</span>: <span class="str">ops@example.com</span>
+    <span class="attr">privateKeySecretRef</span>:
+      <span class="attr">name</span>: <span class="str">letsencrypt-prod-key</span>
+    <span class="attr">solvers</span>:
+      - <span class="attr">http01</span>:
+          <span class="attr">ingress</span>:
+            <span class="attr">class</span>: <span class="str">nginx</span>
+
+<span class="cm">---</span>
+<span class="cm"># Ingress with cert-manager annotation</span>
+<span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: Ingress
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">app-ingress</span>
+  <span class="attr">annotations</span>:
+    <span class="attr">cert-manager.io/cluster-issuer</span>: <span class="str">letsencrypt-prod</span>
+<span class="kw">spec</span>:
+  <span class="attr">ingressClassName</span>: <span class="str">nginx</span>
+  <span class="attr">tls</span>:
+    - <span class="attr">hosts</span>:
+        - <span class="str">app.example.com</span>
+      <span class="attr">secretName</span>: <span class="str">app-tls</span>            <span class="cm"># cert-manager creates this Secret</span>
+  <span class="attr">rules</span>:
+    - <span class="attr">host</span>: <span class="str">app.example.com</span>
+      <span class="attr">http</span>:
+        <span class="attr">paths</span>:
+          - <span class="attr">path</span>: <span class="str">/</span>
+            <span class="attr">pathType</span>: <span class="str">Prefix</span>
+            <span class="attr">backend</span>:
+              <span class="attr">service</span>:
+                <span class="attr">name</span>: <span class="str">app-service</span>
+                <span class="attr">port</span>:
+                  <span class="attr">number</span>: <span class="num">80</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">cert-manager Issuers</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Issuer Type</th>
+          <th>Source</th>
+          <th>Use Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>ACME (Let's Encrypt)</strong></td>
+          <td>Let's Encrypt, ZeroSSL</td>
+          <td>Public-facing services, free certs, auto-renewal</td>
+        </tr>
+        <tr>
+          <td><strong>Vault</strong></td>
+          <td>HashiCorp Vault PKI</td>
+          <td>Internal PKI, enterprise CA</td>
+        </tr>
+        <tr>
+          <td><strong>SelfSigned</strong></td>
+          <td>Self-signed</td>
+          <td>Dev/testing, bootstrapping internal CA</td>
+        </tr>
+        <tr>
+          <td><strong>CA</strong></td>
+          <td>K8s Secret with CA cert/key</td>
+          <td>Internal services, mTLS</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== GATEWAY API ===== -->
+  <h2>Gateway API — The Ingress Successor</h2>
+
+  <h3>Why Replace Ingress?</h3>
+
+  <p>The Ingress resource has fundamental design problems that annotations cannot fix:</p>
+
+  <div class="panel">
+    <div class="panel-title">Ingress Limitations</div>
+    <ul>
+      <li><strong>Too simple:</strong> Only supports host + path matching. Need header-based routing? Annotation. Need traffic splitting? Annotation. Need redirects? Annotation.</li>
+      <li><strong>Annotation hell:</strong> Every advanced feature is a controller-specific annotation. <code>nginx.ingress.kubernetes.io/...</code> won't work on Traefik, and vice versa. Zero portability.</li>
+      <li><strong>Single resource does too much:</strong> Infrastructure config (TLS, listeners) and routing rules (paths, backends) are mixed in one Ingress object. Infra team and app team both edit it.</li>
+      <li><strong>No role separation:</strong> There's no way to give the app team control over their routes while restricting who manages the gateway/TLS config.</li>
+      <li><strong>L4 is bolted on:</strong> TCP/UDP routing requires controller-specific CRDs. Ingress is HTTP-only.</li>
+    </ul>
+  </div>
+
+  <h3>Gateway API: Role-Oriented Design</h3>
+
+  <div class="topology">
+    <div style="display: flex; flex-direction: column; gap: 20px; width: 100%; align-items: center;">
+      <div style="display: flex; gap: 40px; flex-wrap: wrap; justify-content: center;">
+        <!-- Infrastructure Provider -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #a78bfa; border-radius: 12px;">
+          <div style="color: #a78bfa; font-weight: bold; font-size: 14px;">Infrastructure Provider</div>
+          <div class="topo-node server">
+            <div class="topo-label">GatewayClass</div>
+            <div class="topo-detail">Which controller?</div>
+            <div class="topo-detail">(e.g., istio, envoy, nginx)</div>
+          </div>
+        </div>
+
+        <!-- Platform Team -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #fbbf24; border-radius: 12px;">
+          <div style="color: #fbbf24; font-weight: bold; font-size: 14px;">Platform / Infra Team</div>
+          <div class="topo-node switch">
+            <div class="topo-label">Gateway</div>
+            <div class="topo-detail">Listeners, ports, TLS</div>
+            <div class="topo-detail">Shared across teams</div>
+          </div>
+        </div>
+
+        <!-- App Team -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #34d399; border-radius: 12px;">
+          <div style="color: #34d399; font-weight: bold; font-size: 14px;">Application Team</div>
+          <div class="topo-node host">
+            <div class="topo-label">HTTPRoute</div>
+            <div class="topo-detail">Routing rules</div>
+            <div class="topo-detail">Host, path, headers</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>GatewayClass</h3>
+
+  <p>Defines which controller implements the Gateway. Like StorageClass for volumes or IngressClass for Ingress.</p>
+
+  <pre><code><span class="kw">apiVersion</span>: gateway.networking.k8s.io/v1
+<span class="kw">kind</span>: GatewayClass
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">istio</span>
+<span class="kw">spec</span>:
+  <span class="attr">controllerName</span>: <span class="str">istio.io/gateway-controller</span></code></pre>
+
+  <h3>Gateway</h3>
+
+  <p>Declares the actual infrastructure: listeners, ports, TLS config. Managed by the platform team.</p>
+
+  <pre><code><span class="kw">apiVersion</span>: gateway.networking.k8s.io/v1
+<span class="kw">kind</span>: Gateway
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">production-gateway</span>
+  <span class="attr">namespace</span>: <span class="str">infra</span>
+<span class="kw">spec</span>:
+  <span class="attr">gatewayClassName</span>: <span class="str">istio</span>
+  <span class="attr">listeners</span>:
+    - <span class="attr">name</span>: <span class="str">https</span>
+      <span class="attr">protocol</span>: <span class="str">HTTPS</span>
+      <span class="attr">port</span>: <span class="num">443</span>
+      <span class="attr">tls</span>:
+        <span class="attr">mode</span>: <span class="str">Terminate</span>
+        <span class="attr">certificateRefs</span>:
+          - <span class="attr">name</span>: <span class="str">wildcard-cert</span>
+      <span class="attr">allowedRoutes</span>:
+        <span class="attr">namespaces</span>:
+          <span class="attr">from</span>: <span class="str">All</span>          <span class="cm"># or Selector / Same</span>
+    - <span class="attr">name</span>: <span class="str">http</span>
+      <span class="attr">protocol</span>: <span class="str">HTTP</span>
+      <span class="attr">port</span>: <span class="num">80</span></code></pre>
+
+  <h3>HTTPRoute</h3>
+
+  <p>Defines L7 routing rules. Created by application teams, attached to a Gateway.</p>
+
+  <pre><code><span class="kw">apiVersion</span>: gateway.networking.k8s.io/v1
+<span class="kw">kind</span>: HTTPRoute
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">app-routes</span>
+  <span class="attr">namespace</span>: <span class="str">my-app</span>
+<span class="kw">spec</span>:
+  <span class="attr">parentRefs</span>:
+    - <span class="attr">name</span>: <span class="str">production-gateway</span>
+      <span class="attr">namespace</span>: <span class="str">infra</span>
+  <span class="attr">hostnames</span>:
+    - <span class="str">app.example.com</span>
+  <span class="attr">rules</span>:
+    <span class="cm"># Header-based routing (not possible with Ingress!)</span>
+    - <span class="attr">matches</span>:
+        - <span class="attr">headers</span>:
+            - <span class="attr">name</span>: <span class="str">x-canary</span>
+              <span class="attr">value</span>: <span class="str">true</span>
+      <span class="attr">backendRefs</span>:
+        - <span class="attr">name</span>: <span class="str">app-v2</span>
+          <span class="attr">port</span>: <span class="num">80</span>
+
+    <span class="cm"># Traffic splitting — built-in canary!</span>
+    - <span class="attr">matches</span>:
+        - <span class="attr">path</span>:
+            <span class="attr">type</span>: <span class="str">PathPrefix</span>
+            <span class="attr">value</span>: <span class="str">/</span>
+      <span class="attr">backendRefs</span>:
+        - <span class="attr">name</span>: <span class="str">app-v1</span>
+          <span class="attr">port</span>: <span class="num">80</span>
+          <span class="attr">weight</span>: <span class="num">90</span>
+        - <span class="attr">name</span>: <span class="str">app-v2</span>
+          <span class="attr">port</span>: <span class="num">80</span>
+          <span class="attr">weight</span>: <span class="num">10</span>
+
+    <span class="cm"># HTTP redirect</span>
+    - <span class="attr">matches</span>:
+        - <span class="attr">path</span>:
+            <span class="attr">type</span>: <span class="str">PathPrefix</span>
+            <span class="attr">value</span>: <span class="str">/old-path</span>
+      <span class="attr">filters</span>:
+        - <span class="attr">type</span>: <span class="str">RequestRedirect</span>
+          <span class="attr">requestRedirect</span>:
+            <span class="attr">path</span>:
+              <span class="attr">type</span>: <span class="str">ReplaceFullPath</span>
+              <span class="attr">replaceFullPath</span>: <span class="str">/new-path</span>
+            <span class="attr">statusCode</span>: <span class="num">301</span></code></pre>
+
+  <h3>Ingress vs Gateway API</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">INGRESS</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Resources:</strong> 1 (Ingress)</li>
+          <li><strong>Matching:</strong> Host + path only</li>
+          <li><strong>Traffic splitting:</strong> Annotation (non-portable)</li>
+          <li><strong>Header routing:</strong> Annotation (non-portable)</li>
+          <li><strong>Redirects/rewrites:</strong> Annotation</li>
+          <li><strong>Protocols:</strong> HTTP/HTTPS only</li>
+          <li><strong>Role separation:</strong> None — one resource</li>
+          <li><strong>Portability:</strong> Basic fields only; annotations break</li>
+          <li><strong>Status:</strong> GA, widely deployed, being superseded</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">GATEWAY API</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Resources:</strong> GatewayClass, Gateway, *Route</li>
+          <li><strong>Matching:</strong> Host, path, headers, query params, method</li>
+          <li><strong>Traffic splitting:</strong> Built-in (weight field)</li>
+          <li><strong>Header routing:</strong> Native (matches.headers)</li>
+          <li><strong>Redirects/rewrites:</strong> Native (filters)</li>
+          <li><strong>Protocols:</strong> HTTP, HTTPS, TCP, gRPC, TLS</li>
+          <li><strong>Role separation:</strong> Infra owns Gateway, apps own Routes</li>
+          <li><strong>Portability:</strong> All features are spec-level, not annotations</li>
+          <li><strong>Status:</strong> GA (v1.0+), the future standard</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Gateway API Route Types</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Route Type</th>
+        <th>Protocol</th>
+        <th>Layer</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>HTTPRoute</code></td>
+        <td>HTTP/HTTPS</td>
+        <td>L7</td>
+        <td>Web apps, APIs, most services</td>
+      </tr>
+      <tr>
+        <td><code>GRPCRoute</code></td>
+        <td>gRPC</td>
+        <td>L7</td>
+        <td>gRPC services with method-level routing</td>
+      </tr>
+      <tr>
+        <td><code>TCPRoute</code></td>
+        <td>TCP</td>
+        <td>L4</td>
+        <td>Databases, message brokers, non-HTTP</td>
+      </tr>
+      <tr>
+        <td><code>TLSRoute</code></td>
+        <td>TLS (SNI)</td>
+        <td>L4+</td>
+        <td>TLS passthrough based on SNI hostname</td>
+      </tr>
+      <tr>
+        <td><code>UDPRoute</code></td>
+        <td>UDP</td>
+        <td>L4</td>
+        <td>DNS, gaming, VoIP</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Migration path:</strong> Gateway API is the clear successor. New projects should use it. Existing Ingress resources continue to work — there's no rush to migrate. Most controllers (nginx, envoy, istio) already support both. The <code>ingress2gateway</code> tool can help convert Ingress YAML to Gateway API resources.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Key Takeaways</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Ingress</div>
+      <ul>
+        <li>L7 routing: host + path -> Service</li>
+        <li>Requires a controller (nginx, traefik, envoy)</li>
+        <li>TLS via Secrets, automated with cert-manager</li>
+        <li>Advanced config trapped in controller-specific annotations</li>
+        <li>Still works, but being superseded</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Gateway API</div>
+      <ul>
+        <li>Role-oriented: GatewayClass -> Gateway -> Routes</li>
+        <li>Native traffic splitting, header matching, redirects</li>
+        <li>Multi-protocol: HTTP, gRPC, TCP, TLS, UDP</li>
+        <li>Portable across implementations</li>
+        <li>GA since v1.0 — the future standard</li>
+      </ul>
+    </div>
+  </div>
+
+</body>
+</html>

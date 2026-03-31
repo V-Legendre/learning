@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 11 — Network Configuration</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 11 — Network Configuration</h1>
+  <p class="subtitle">Configuring networking via cloud-init and Netplan</p>
+
+  <!-- ===== NETWORK CONFIG VIA CLOUD-INIT ===== -->
+  <h2>Network Configuration via Cloud-Init</h2>
+
+  <p>Cloud-init supports two network configuration formats. The format is specified in the network-config data provided by the datasource or by the user (e.g., NoCloud's <code>network-config</code> file).</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Datasource</div>
+      <div class="desc">Provides network-config (or user overrides it)</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">cloud-init-local</div>
+      <div class="desc">Reads network-config in init-local stage</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Renderer</div>
+      <div class="desc">Converts to Netplan, ENI, or networkd format</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Networking Up</div>
+      <div class="desc">systemd-networkd or NetworkManager applies config</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key distinction:</strong> Cloud-init's network-config format (v1/v2) is <em>separate</em> from Netplan YAML, even though v2 looks nearly identical. Cloud-init's v2 network-config is <strong>rendered into</strong> Netplan YAML (on Ubuntu) or directly into systemd-networkd/ENI files (on other distros). The renderer depends on what the distro uses.
+  </div>
+
+  <!-- ===== V1 vs V2 ===== -->
+  <h2>V1 vs V2 Network Config</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">V1 (ENI-Style, Legacy)</div>
+      <div class="comp-body">
+        <p>Modeled after <code>/etc/network/interfaces</code>. Still supported but <strong>deprecated</strong> in favor of v2.</p>
+        <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">1</span>
+  <span class="attr">config</span>:
+    - <span class="attr">type</span>: <span class="str">physical</span>
+      <span class="attr">name</span>: <span class="str">eth0</span>
+      <span class="attr">mac_address</span>: <span class="str">"aa:bb:cc:dd:ee:f0"</span>
+      <span class="attr">subnets</span>:
+        - <span class="attr">type</span>: <span class="str">static</span>
+          <span class="attr">address</span>: <span class="str">10.0.0.10/24</span>
+          <span class="attr">gateway</span>: <span class="str">10.0.0.1</span>
+          <span class="attr">dns_nameservers</span>:
+            - <span class="str">8.8.8.8</span>
+            - <span class="str">1.1.1.1</span>
+    - <span class="attr">type</span>: <span class="str">nameserver</span>
+      <span class="attr">address</span>:
+        - <span class="str">8.8.8.8</span>
+      <span class="attr">search</span>:
+        - <span class="str">internal.corp</span></code></pre>
+        <ul>
+          <li>Flat list of config entries</li>
+          <li>Each entry has a <code>type</code> (physical, bond, vlan, bridge, nameserver)</li>
+          <li>Subnets are nested under interfaces</li>
+          <li>Verbose and less intuitive</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">V2 (Netplan YAML, Modern)</div>
+      <div class="comp-body">
+        <p>Follows <strong>Netplan's schema</strong>. The recommended format for all new configurations.</p>
+        <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">match</span>:
+        <span class="attr">macaddress</span>: <span class="str">"aa:bb:cc:dd:ee:f0"</span>
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">default</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.1</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">8.8.8.8</span>, <span class="str">1.1.1.1</span>]
+        <span class="attr">search</span>: [<span class="str">internal.corp</span>]</code></pre>
+        <ul>
+          <li>Structured by interface type (ethernets, bonds, vlans, bridges)</li>
+          <li>Cleaner, more readable</li>
+          <li>Direct mapping to Netplan YAML</li>
+          <li>Supports all modern features (routes, routing-policy, etc.)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Always use v2.</strong> V1 exists for backward compatibility with old OpenStack deployments and legacy images. Any new configuration should use v2 — it's more expressive, better documented, and directly maps to Netplan.
+  </div>
+
+  <!-- ===== NETPLAN V2 EXAMPLES ===== -->
+  <h2>Netplan V2 Configuration Examples</h2>
+
+  <!-- --- Static IP --- -->
+  <h3>Static IP</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">default</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.1</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">8.8.8.8</span>, <span class="str">1.1.1.1</span>]
+        <span class="attr">search</span>: [<span class="str">internal.corp</span>, <span class="str">prod.internal.corp</span>]</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> <code>gateway4</code> is <strong>deprecated</strong> in Netplan 0.104+. Use a <code>routes</code> entry with <code>to: default</code> instead. Cloud-init v2 follows the same deprecation — always use the <code>routes</code> syntax.
+  </div>
+
+  <!-- --- DHCP --- -->
+  <h3>DHCP</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">true</span>
+      <span class="attr">dhcp6</span>: <span class="val">false</span>
+      <span class="attr">dhcp4-overrides</span>:
+        <span class="attr">use-dns</span>: <span class="val">false</span>          <span class="cm"># ignore DHCP-provided DNS, use our own</span>
+        <span class="attr">use-routes</span>: <span class="val">true</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">10.0.0.2</span>]  <span class="cm"># internal DNS resolver</span></code></pre>
+
+  <!-- --- Bonds --- -->
+  <h3>Bonds</h3>
+
+  <p>Bonding two interfaces for redundancy or throughput. Common in bare-metal and dedicated host scenarios.</p>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">false</span>
+    <span class="attr">eth1</span>:
+      <span class="attr">dhcp4</span>: <span class="val">false</span>
+  <span class="attr">bonds</span>:
+    <span class="attr">bond0</span>:
+      <span class="attr">interfaces</span>: [<span class="str">eth0</span>, <span class="str">eth1</span>]
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">default</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.1</span>
+      <span class="attr">parameters</span>:
+        <span class="attr">mode</span>: <span class="str">802.3ad</span>           <span class="cm"># LACP</span>
+        <span class="attr">lacp-rate</span>: <span class="str">fast</span>
+        <span class="attr">mii-monitor-interval</span>: <span class="num">100</span>
+        <span class="attr">transmit-hash-policy</span>: <span class="str">layer3+4</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">8.8.8.8</span>]</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Common Bond Modes</div>
+    <table>
+      <tr>
+        <th>Mode</th>
+        <th>Name</th>
+        <th>Use Case</th>
+      </tr>
+      <tr>
+        <td><code>active-backup</code></td>
+        <td>Mode 1</td>
+        <td>Simple failover — one active, one standby. Works without switch support.</td>
+      </tr>
+      <tr>
+        <td><code>802.3ad</code></td>
+        <td>Mode 4 (LACP)</td>
+        <td>Link aggregation. Requires switch LACP support. Best for throughput + redundancy.</td>
+      </tr>
+      <tr>
+        <td><code>balance-alb</code></td>
+        <td>Mode 6</td>
+        <td>Adaptive load balancing. No switch support needed. Good for mixed environments.</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- --- VLANs --- -->
+  <h3>VLANs</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">false</span>
+  <span class="attr">vlans</span>:
+    <span class="attr">eth0.100</span>:
+      <span class="attr">id</span>: <span class="num">100</span>
+      <span class="attr">link</span>: <span class="str">eth0</span>
+      <span class="attr">addresses</span>:
+        - <span class="str">10.100.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">10.100.0.0/16</span>
+          <span class="attr">via</span>: <span class="str">10.100.0.1</span>
+    <span class="attr">eth0.200</span>:
+      <span class="attr">id</span>: <span class="num">200</span>
+      <span class="attr">link</span>: <span class="str">eth0</span>
+      <span class="attr">addresses</span>:
+        - <span class="str">10.200.0.10/24</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">10.200.0.2</span>]</code></pre>
+
+  <!-- --- Bridges --- -->
+  <h3>Bridges</h3>
+
+  <p>Bridge interfaces are essential for hosting VMs (libvirt/QEMU) or containers that need L2 network access.</p>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">false</span>
+  <span class="attr">bridges</span>:
+    <span class="attr">br0</span>:
+      <span class="attr">interfaces</span>: [<span class="str">eth0</span>]
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">default</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.1</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>: [<span class="str">8.8.8.8</span>, <span class="str">1.1.1.1</span>]
+      <span class="attr">parameters</span>:
+        <span class="attr">stp</span>: <span class="val">false</span>              <span class="cm"># disable STP for single-host bridges</span>
+        <span class="attr">forward-delay</span>: <span class="num">0</span>       <span class="cm"># no forwarding delay</span>
+      <span class="attr">mtu</span>: <span class="num">9000</span></code></pre>
+
+  <div class="tip">
+    <strong>Proxmox/libvirt note:</strong> When provisioning a hypervisor via cloud-init, bridged networking is the standard pattern. The physical NIC (<code>eth0</code>) becomes a bridge member with no IP, and the bridge (<code>br0</code>) gets the IP. Guest VMs then attach to <code>br0</code> for direct L2 access to the network.
+  </div>
+
+  <!-- --- Static Routes --- -->
+  <h3>Static Routes</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">default</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.1</span>
+        - <span class="attr">to</span>: <span class="str">10.10.0.0/16</span>           <span class="cm"># route to internal network</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.254</span>
+          <span class="attr">metric</span>: <span class="num">100</span>
+        - <span class="attr">to</span>: <span class="str">172.16.0.0/12</span>          <span class="cm"># route to VPN network</span>
+          <span class="attr">via</span>: <span class="str">10.0.0.253</span>
+          <span class="attr">metric</span>: <span class="num">200</span>
+    <span class="attr">eth1</span>:                              <span class="cm"># management interface, separate route table</span>
+      <span class="attr">addresses</span>:
+        - <span class="str">192.168.1.10/24</span>
+      <span class="attr">routes</span>:
+        - <span class="attr">to</span>: <span class="str">192.168.0.0/16</span>
+          <span class="attr">via</span>: <span class="str">192.168.1.1</span>
+          <span class="attr">table</span>: <span class="num">100</span>             <span class="cm"># policy routing table</span>
+      <span class="attr">routing-policy</span>:
+        - <span class="attr">from</span>: <span class="str">192.168.1.10</span>
+          <span class="attr">table</span>: <span class="num">100</span></code></pre>
+
+  <!-- --- DNS --- -->
+  <h3>DNS Configuration</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">true</span>
+      <span class="attr">nameservers</span>:
+        <span class="attr">addresses</span>:
+          - <span class="str">10.0.0.2</span>              <span class="cm"># primary internal DNS</span>
+          - <span class="str">10.0.0.3</span>              <span class="cm"># secondary internal DNS</span>
+          - <span class="str">8.8.8.8</span>               <span class="cm"># fallback public DNS</span>
+        <span class="attr">search</span>:
+          - <span class="str">prod.internal.corp</span>    <span class="cm"># short names resolve here first</span>
+          - <span class="str">internal.corp</span>
+          - <span class="str">corp</span></code></pre>
+
+  <!-- --- MTU --- -->
+  <h3>MTU Configuration</h3>
+
+  <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:                              <span class="cm"># standard internet-facing interface</span>
+      <span class="attr">dhcp4</span>: <span class="val">true</span>
+      <span class="attr">mtu</span>: <span class="num">1500</span>
+    <span class="attr">eth1</span>:                              <span class="cm"># internal network with jumbo frames</span>
+      <span class="attr">addresses</span>:
+        - <span class="str">10.0.0.10/24</span>
+      <span class="attr">mtu</span>: <span class="num">9001</span>                     <span class="cm"># AWS max MTU for placement group / ENA</span></code></pre>
+
+  <div class="note">
+    <strong>AWS MTU:</strong> EC2 instances within the same VPC support up to <strong>9001 bytes</strong> MTU (jumbo frames) when using ENA. Cross-VPC and internet traffic is limited to 1500. Setting MTU 9001 on internal interfaces reduces CPU overhead for high-throughput workloads (fewer packets per byte transferred). Always verify with <code>ping -M do -s 8972 &lt;target&gt;</code> (8972 + 28 bytes IP/ICMP header = 9000).
+  </div>
+
+  <!-- ===== NETPLAN AS UBUNTU'S STANDARD ===== -->
+  <h2>Netplan: Ubuntu's Network Configuration Layer</h2>
+
+  <p>Netplan is not a network daemon — it's a <strong>YAML abstraction layer</strong> that sits between you and the actual networking backend. Understanding this architecture is key.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Netplan YAML</div>
+      <div class="desc">/etc/netplan/*.yaml</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">netplan generate</div>
+      <div class="desc">Renders YAML to backend config</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Backend</div>
+      <div class="desc">systemd-networkd OR NetworkManager</div>
+    </div>
+    <div class="arrow">&#8594;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Network Up</div>
+      <div class="desc">Interfaces configured, routes applied</div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">systemd-networkd (Default on Servers)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Lightweight, headless, no GUI dependencies</li>
+          <li>Default on Ubuntu Server, cloud images</li>
+          <li>Config rendered to <code>/run/systemd/network/</code></li>
+          <li>Managed via <code>networkctl</code></li>
+          <li>Ideal for servers, containers, and VMs</li>
+        </ul>
+        <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">renderer</span>: <span class="str">networkd</span>    <span class="cm"># explicit (default on server)</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">true</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header css">NetworkManager (Default on Desktops)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Feature-rich, GUI integration (GNOME, KDE)</li>
+          <li>Default on Ubuntu Desktop</li>
+          <li>Config rendered to <code>/etc/NetworkManager/system-connections/</code></li>
+          <li>Managed via <code>nmcli</code> / <code>nmtui</code></li>
+          <li>Better for WiFi, VPN, user-switching scenarios</li>
+        </ul>
+        <pre><code><span class="attr">network</span>:
+  <span class="attr">version</span>: <span class="num">2</span>
+  <span class="attr">renderer</span>: <span class="str">NetworkManager</span>
+  <span class="attr">ethernets</span>:
+    <span class="attr">eth0</span>:
+      <span class="attr">dhcp4</span>: <span class="val">true</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Netplan Commands</div>
+    <table>
+      <tr>
+        <th>Command</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>netplan generate</code></td>
+        <td>Render YAML to backend config files (dry-run — does not apply)</td>
+      </tr>
+      <tr>
+        <td><code>netplan apply</code></td>
+        <td>Generate + apply immediately. <strong>Danger:</strong> if config is wrong, you lose connectivity.</td>
+      </tr>
+      <tr>
+        <td><code>netplan try</code></td>
+        <td>Apply temporarily, <strong>auto-revert after 120 seconds</strong> if not confirmed. Safe for remote changes.</td>
+      </tr>
+      <tr>
+        <td><code>netplan get</code></td>
+        <td>Show the merged/active configuration (Netplan 0.106+)</td>
+      </tr>
+      <tr>
+        <td><code>netplan status</code></td>
+        <td>Show interface status with Netplan context (Netplan 0.106+)</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Never use <code>netplan apply</code> over SSH without a fallback.</strong> If your config has an error that kills networking, you're locked out. Always use <code>netplan try</code> — it applies the config and starts a 120-second timer. If you don't press Enter to confirm, it rolls back to the previous config automatically. This is your safety net for remote network changes.
+  </div>
+
+  <!-- ===== CLOUD-INIT NETWORK CONFIG SOURCES ===== -->
+  <h2>Cloud-Init Network Config Sources</h2>
+
+  <p>Where does cloud-init get its network configuration? The source depends on the datasource and can be overridden by the user.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Datasource default</strong> — The cloud provider's metadata service provides a default network config. On AWS, this is DHCP. On OpenStack, it might be static IPs from Neutron. Cloud-init applies this by default if no override exists.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>User override (NoCloud)</strong> — For local VMs, you provide a <code>network-config</code> file alongside <code>user-data</code> and <code>meta-data</code> on the seed ISO or directory. This completely replaces the datasource default.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Drop-in files</strong> — <code>/etc/cloud/cloud.cfg.d/</code> can contain <code>network:</code> configuration that overrides the datasource. Useful for baked images where you want specific network settings regardless of the cloud.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Disabling cloud-init networking</strong> — Create <code>/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg</code> with <code>network: {config: disabled}</code>. Cloud-init will not touch networking at all, and you manage Netplan directly.
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">NoCloud Seed Directory Example</div>
+    <div class="file-tree">
+      <span class="dir">/var/lib/cloud/seed/nocloud/</span><br>
+      &nbsp;&nbsp;<span class="file highlight">meta-data</span> &nbsp;&nbsp;&nbsp;<span style="color:#888"># instance-id, local-hostname</span><br>
+      &nbsp;&nbsp;<span class="file highlight">user-data</span> &nbsp;&nbsp;&nbsp;<span style="color:#888"># #cloud-config YAML or script</span><br>
+      &nbsp;&nbsp;<span class="file highlight">network-config</span> <span style="color:#888"># v2 network YAML</span>
+    </div>
+    <p style="margin-top:10px">Or as a seed ISO (for libvirt/Proxmox):</p>
+    <div class="terminal">
+      <span class="prompt">$ </span>genisoimage -output seed.iso -volid cidata -joliet -rock \<br>
+      <span class="prompt">&nbsp;&nbsp;</span>meta-data user-data network-config<br>
+      <br>
+      <span class="cm"># Or with cloud-localds (from cloud-image-utils package):</span><br>
+      <span class="prompt">$ </span>cloud-localds --network-config=network-config seed.iso user-data meta-data
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Proxmox integration:</strong> Proxmox VE has native cloud-init support. When you add a Cloud-Init Drive to a VM template, Proxmox generates the NoCloud seed ISO automatically from the VM's cloud-init settings (IP config, user, SSH keys, DNS) in the Proxmox UI/API. No manual ISO creation needed.
+  </div>
+
+  <!-- ===== DEBUGGING ===== -->
+  <h2>Debugging Cloud-Init &amp; Networking</h2>
+
+  <p>When cloud-init networking doesn't work as expected, here's your debugging toolkit. These commands should be muscle memory.</p>
+
+  <!-- --- cloud-init query --- -->
+  <h3>cloud-init query: Inspect Resolved Configuration</h3>
+
+  <div class="terminal">
+    <span class="cm"># Show all resolved instance data</span><br>
+    <span class="prompt">$ </span>cloud-init query --all<br>
+    <span class="output">{</span><br>
+    <span class="output">&nbsp;&nbsp;"v1": {</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;"cloud_name": "aws",</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;"instance_id": "i-0abc123def456",</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;"region": "us-east-1",</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;...</span><br>
+    <span class="output">&nbsp;&nbsp;},</span><br>
+    <span class="output">&nbsp;&nbsp;"ds": { ... }</span><br>
+    <span class="output">}</span><br>
+    <br>
+    <span class="cm"># Query specific fields</span><br>
+    <span class="prompt">$ </span>cloud-init query v1.instance_id<br>
+    <span class="output">i-0abc123def456</span><br>
+    <br>
+    <span class="prompt">$ </span>cloud-init query ds.meta_data.network.interfaces<br>
+    <span class="output">{...}</span>
+  </div>
+
+  <!-- --- cloud-init schema --- -->
+  <h3>cloud-init schema: Validate Configuration</h3>
+
+  <div class="terminal">
+    <span class="cm"># Validate the running system's cloud-config</span><br>
+    <span class="prompt">$ </span>cloud-init schema --system<br>
+    <span class="output">Valid schema /var/lib/cloud/instance/cloud-config.txt</span><br>
+    <br>
+    <span class="cm"># Validate a local file before deploying</span><br>
+    <span class="prompt">$ </span>cloud-init schema --config-file my-cloud-config.yaml<br>
+    <span class="output">Valid cloud-config: my-cloud-config.yaml</span><br>
+    <br>
+    <span class="cm"># Check network-config schema</span><br>
+    <span class="prompt">$ </span>cloud-init schema --config-file network-config.yaml --schema-type network-config<br>
+    <span class="output">Valid network-config: network-config.yaml</span>
+  </div>
+
+  <!-- --- cloud-init analyze --- -->
+  <h3>cloud-init analyze: Boot Performance</h3>
+
+  <div class="terminal">
+    <span class="cm"># Show how long each stage took</span><br>
+    <span class="prompt">$ </span>cloud-init analyze show<br>
+    <span class="output">-- Boot Record 01 --</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;00.00000s (timestamp) Starting stage: init-local</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;00.51200s (timestamp) Finished stage: (init-local) 00.51200 seconds</span><br>
+    <span class="output"></span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;01.23400s (timestamp) Starting stage: init-network</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;03.45600s (timestamp) Finished stage: (init-network) 02.22200 seconds</span><br>
+    <span class="output"></span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;03.50000s (timestamp) Starting stage: modules-config</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;15.78900s (timestamp) Finished stage: (modules-config) 12.28900 seconds</span><br>
+    <span class="output"></span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;15.80000s (timestamp) Starting stage: modules-final</span><br>
+    <span class="output">&nbsp;&nbsp;&nbsp;&nbsp;25.12300s (timestamp) Finished stage: (modules-final) 09.32300 seconds</span><br>
+    <span class="output"></span><br>
+    <span class="output">Total Time: 24.35400 seconds</span><br>
+    <br>
+    <span class="cm"># Blame: which modules took the longest</span><br>
+    <span class="prompt">$ </span>cloud-init analyze blame<br>
+    <span class="output">-- Boot Record 01 --</span><br>
+    <span class="output">&nbsp;&nbsp;09.12300s (modules-final/config-scripts-user)</span><br>
+    <span class="output">&nbsp;&nbsp;08.45600s (modules-config/config-apt-configure)</span><br>
+    <span class="output">&nbsp;&nbsp;03.21000s (modules-config/config-package-update-upgrade-install)</span><br>
+    <span class="output">&nbsp;&nbsp;01.02300s (init-network/consume-user-data)</span><br>
+    <span class="output">&nbsp;&nbsp;00.51200s (init-local/search-datasource)</span>
+  </div>
+
+  <div class="note">
+    <strong>Performance insight:</strong> The <code>blame</code> output is invaluable for optimizing boot time. If <code>apt-configure</code> takes 8+ seconds, it's doing <code>apt-get update</code> on every boot (check <code>package_update</code>). If <code>scripts-user</code> takes 9+ seconds, your <code>runcmd</code> is slow — consider moving heavy work to a background systemd service instead.
+  </div>
+
+  <!-- --- cloud-init status --- -->
+  <h3>cloud-init status: Check Current State</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cloud-init status --long<br>
+    <span class="output">status: done</span><br>
+    <span class="output">extended_status: done</span><br>
+    <span class="output">boot_status_code: enabled-by-generator</span><br>
+    <span class="output">last_update: Tue, 25 Mar 2026 14:23:45 +0000</span><br>
+    <span class="output">detail:</span><br>
+    <span class="output">DataSourceEc2Local</span><br>
+    <br>
+    <span class="cm"># Wait for cloud-init to finish (useful in scripts)</span><br>
+    <span class="prompt">$ </span>cloud-init status --wait<br>
+    <span class="output">..............done</span><br>
+    <span class="output">status: done</span>
+  </div>
+
+  <!-- --- Log files --- -->
+  <h3>Log Files</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header request">/var/log/cloud-init.log</div>
+      <div class="comp-body">
+        <p>The <strong>main log</strong>. Contains detailed output from every cloud-init module, including:</p>
+        <ul>
+          <li>Datasource detection and probing</li>
+          <li>Configuration merging and rendering</li>
+          <li>Module execution (start/stop/errors)</li>
+          <li>Network config rendering</li>
+          <li>Schema validation results</li>
+        </ul>
+        <p>This is where you find <em>why</em> something failed.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header response">/var/log/cloud-init-output.log</div>
+      <div class="comp-body">
+        <p>Captures <strong>stdout/stderr</strong> from user scripts and <code>runcmd</code> commands. Contains:</p>
+        <ul>
+          <li>Output from shell scripts in user-data</li>
+          <li>Output from <code>runcmd</code> commands</li>
+          <li>Package installation output</li>
+          <li>Any <code>echo</code> or <code>printf</code> from your scripts</li>
+        </ul>
+        <p>This is where you find <em>what</em> your code printed.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="cm"># Common debugging workflow</span><br>
+    <br>
+    <span class="cm"># 1. Check overall status</span><br>
+    <span class="prompt">$ </span>cloud-init status --long<br>
+    <br>
+    <span class="cm"># 2. If errors, check the main log</span><br>
+    <span class="prompt">$ </span>grep -i "error\|warning\|traceback" /var/log/cloud-init.log | tail -20<br>
+    <br>
+    <span class="cm"># 3. Check script output</span><br>
+    <span class="prompt">$ </span>tail -50 /var/log/cloud-init-output.log<br>
+    <br>
+    <span class="cm"># 4. See what user-data was received</span><br>
+    <span class="prompt">$ </span>cat /var/lib/cloud/instance/user-data.txt<br>
+    <br>
+    <span class="cm"># 5. See the merged cloud-config</span><br>
+    <span class="prompt">$ </span>cat /var/lib/cloud/instance/cloud-config.txt<br>
+    <br>
+    <span class="cm"># 6. See rendered network config (Ubuntu/Netplan)</span><br>
+    <span class="prompt">$ </span>cat /etc/netplan/50-cloud-init.yaml<br>
+    <br>
+    <span class="cm"># 7. See what datasource was detected</span><br>
+    <span class="prompt">$ </span>cat /run/cloud-init/ds-identify.log | tail -5<br>
+    <br>
+    <span class="cm"># 8. Collect everything for support</span><br>
+    <span class="prompt">$ </span>cloud-init collect-logs<br>
+    <span class="output">Wrote /tmp/cloud-init.tar.gz</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Networking-Specific Debugging</div>
+    <div class="terminal">
+      <span class="cm"># Check what Netplan config cloud-init generated</span><br>
+      <span class="prompt">$ </span>cat /etc/netplan/50-cloud-init.yaml<br>
+      <br>
+      <span class="cm"># Verify Netplan can parse it</span><br>
+      <span class="prompt">$ </span>netplan generate 2>&1<br>
+      <br>
+      <span class="cm"># Check if cloud-init is managing networking</span><br>
+      <span class="prompt">$ </span>grep "network:" /etc/cloud/cloud.cfg.d/*.cfg<br>
+      <br>
+      <span class="cm"># Check rendered systemd-networkd config</span><br>
+      <span class="prompt">$ </span>ls /run/systemd/network/<br>
+      <br>
+      <span class="cm"># Check active network state</span><br>
+      <span class="prompt">$ </span>networkctl status eth0<br>
+      <br>
+      <span class="cm"># Check DNS resolution config</span><br>
+      <span class="prompt">$ </span>resolvectl status<br>
+      <br>
+      <span class="cm"># If cloud-init networking is fighting you, disable it:</span><br>
+      <span class="prompt">$ </span>cat > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg &lt;&lt;EOF<br>
+      <span class="output">network: {config: disabled}</span><br>
+      <span class="output">EOF</span>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Common gotcha:</strong> Cloud-init writes <code>/etc/netplan/50-cloud-init.yaml</code> on every boot (by default). If you manually edit a Netplan file, cloud-init will <strong>overwrite your changes</strong> on next boot. To prevent this: either disable cloud-init networking (as shown above) or put your config in a higher-priority file like <code>/etc/netplan/99-custom.yaml</code> (Netplan merges files in lexicographic order, higher wins).
+  </div>
+
+  <!-- ===== QUICK REFERENCE ===== -->
+  <h2>Quick Reference: Debugging Commands</h2>
+
+  <table>
+    <tr>
+      <th>Command</th>
+      <th>Purpose</th>
+    </tr>
+    <tr>
+      <td><code>cloud-init status --long</code></td>
+      <td>Check if cloud-init finished, and if there were errors</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init status --wait</code></td>
+      <td>Block until cloud-init finishes (useful in scripts)</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init query --all</code></td>
+      <td>Dump all resolved instance data (metadata, user-data, etc.)</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init schema --system</code></td>
+      <td>Validate the running instance's cloud-config against schema</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init analyze show</code></td>
+      <td>Show timing for each boot stage</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init analyze blame</code></td>
+      <td>Show slowest modules (like <code>systemd-analyze blame</code>)</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init clean --logs</code></td>
+      <td>Reset cloud-init state — next boot will re-run everything</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init collect-logs</code></td>
+      <td>Bundle all logs/config into a tarball for debugging</td>
+    </tr>
+    <tr>
+      <td><code>cloud-init single --name cc_write_files</code></td>
+      <td>Re-run a single module (for testing)</td>
+    </tr>
+    <tr>
+      <td><code>netplan try</code></td>
+      <td>Apply Netplan config with 120s auto-revert (safe for remote)</td>
+    </tr>
+    <tr>
+      <td><code>netplan generate</code></td>
+      <td>Render Netplan YAML to backend config (dry run)</td>
+    </tr>
+  </table>
+
+</body>
+</html>

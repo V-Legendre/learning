@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 07 — Firewalls</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 07 — Firewalls</h1>
+  <p class="subtitle">Packet filtering — stateless, stateful, and Linux iptables/nftables</p>
+
+  <!-- ===== STATELESS FIREWALLS ===== -->
+  <h2>Stateless Firewalls</h2>
+
+  <p>A stateless firewall evaluates each packet <strong>independently</strong> against a static rule set. It has no memory of previous packets — every packet is matched against the ACL from scratch.</p>
+
+  <div class="panel">
+    <div class="panel-title">What a Stateless Rule Inspects</div>
+    <table>
+      <tr><th>Field</th><th>Example</th><th>Notes</th></tr>
+      <tr><td>Source IP</td><td><code>10.0.0.0/8</code></td><td>Who sent this packet</td></tr>
+      <tr><td>Destination IP</td><td><code>192.168.1.10</code></td><td>Where it's going</td></tr>
+      <tr><td>Protocol</td><td><code>TCP</code>, <code>UDP</code>, <code>ICMP</code></td><td>L4 protocol number</td></tr>
+      <tr><td>Source Port</td><td><code>1024-65535</code></td><td>Ephemeral port range</td></tr>
+      <tr><td>Destination Port</td><td><code>443</code></td><td>Service port (HTTPS)</td></tr>
+    </table>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Source IP</span>
+      <span class="field-size">Checked</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Dest IP</span>
+      <span class="field-size">Checked</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 0.7;">
+      <span class="field-name">Protocol</span>
+      <span class="field-size">Checked</span>
+    </div>
+    <div class="pkt-field src" style="flex: 0.8;">
+      <span class="field-name">Src Port</span>
+      <span class="field-size">Checked</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 0.8;">
+      <span class="field-name">Dst Port</span>
+      <span class="field-size">Checked</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1.5;">
+      <span class="field-name">Payload</span>
+      <span class="field-size">NOT inspected</span>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The return-traffic problem:</strong> Stateless firewalls must have <em>explicit rules for return traffic</em>. If you allow outbound TCP to port 443, you must also allow inbound traffic from port 443 with ephemeral source ports. This makes rule sets complex and error-prone — which is exactly why stateful firewalls exist.
+  </div>
+
+  <div class="note">
+    <strong>Where you still see stateless filtering:</strong> AWS Security Groups are stateful, but NACLs (Network ACLs) are stateless — you must write both inbound and outbound rules. Cloud-native engineers hit this distinction constantly.
+  </div>
+
+  <!-- ===== STATEFUL FIREWALLS ===== -->
+  <h2>Stateful Firewalls</h2>
+
+  <p>A stateful firewall tracks <strong>connection state</strong>. When an outbound connection is allowed, return traffic is <em>automatically</em> permitted because the firewall remembers the connection.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Stateless</div>
+      <div class="comp-body">
+        <ul>
+          <li>Each packet evaluated independently</li>
+          <li>Must write rules for <em>both</em> directions</li>
+          <li>No connection memory</li>
+          <li>Fast but dumb — just pattern matching</li>
+          <li>Example: AWS NACLs, basic router ACLs</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Stateful</div>
+      <div class="comp-body">
+        <ul>
+          <li>Tracks connection state in conntrack table</li>
+          <li>Return traffic allowed automatically</li>
+          <li>Understands NEW, ESTABLISHED, RELATED</li>
+          <li>Simpler rule sets, fewer mistakes</li>
+          <li>Example: iptables, AWS Security Groups, pf</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="state-diagram">
+    <div class="state initial">NEW</div>
+    <div class="state-arrow">--&gt;</div>
+    <div class="state active">ESTABLISHED</div>
+    <div class="state-arrow">--&gt;</div>
+    <div class="state special">RELATED</div>
+    <div class="state-arrow">--&gt;</div>
+    <div class="state closed">INVALID</div>
+  </div>
+  <p style="text-align: center; color: #888; font-size: 13px;">Connection tracking states — packets progress through these as the connection evolves</p>
+
+  <!-- ===== IPTABLES ARCHITECTURE ===== -->
+  <h2>iptables Architecture — In Depth</h2>
+
+  <p>iptables is the userspace tool that configures the Linux kernel's <strong>Netfilter</strong> framework. It organizes rules into <strong>tables</strong>, each containing <strong>chains</strong>. Understanding the table/chain architecture is essential for debugging packet flow on any Linux host — which includes every container, every Kubernetes node, and most load balancers.</p>
+
+  <h3>Tables and Their Chains</h3>
+
+  <table>
+    <tr><th>Table</th><th>Purpose</th><th>Built-in Chains</th></tr>
+    <tr>
+      <td><code>filter</code></td>
+      <td>Default table — accept/drop/reject packets</td>
+      <td><code>INPUT</code>, <code>OUTPUT</code>, <code>FORWARD</code></td>
+    </tr>
+    <tr>
+      <td><code>nat</code></td>
+      <td>Network Address Translation</td>
+      <td><code>PREROUTING</code>, <code>OUTPUT</code>, <code>POSTROUTING</code></td>
+    </tr>
+    <tr>
+      <td><code>mangle</code></td>
+      <td>Modify packet headers (TTL, TOS, MARK)</td>
+      <td><code>PREROUTING</code>, <code>INPUT</code>, <code>FORWARD</code>, <code>OUTPUT</code>, <code>POSTROUTING</code></td>
+    </tr>
+    <tr>
+      <td><code>raw</code></td>
+      <td>Skip connection tracking (NOTRACK)</td>
+      <td><code>PREROUTING</code>, <code>OUTPUT</code></td>
+    </tr>
+  </table>
+
+  <h3>Packet Flow Through iptables Chains</h3>
+
+  <p>This is the critical mental model. Every packet entering a Linux box follows this path:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">PREROUTING</div>
+      <div class="desc">raw &rarr; mangle &rarr; nat<br>(DNAT happens here)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="background: #34d39915; border-color: #34d399;">
+      <div class="num">2</div>
+      <div class="label">Routing Decision</div>
+      <div class="desc">Local delivery? Or forward?</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3a</div>
+      <div class="label">INPUT</div>
+      <div class="desc">mangle &rarr; filter<br>(to local process)</div>
+    </div>
+  </div>
+
+  <div class="flow" style="margin-top: 10px;">
+    <div class="flow-step" style="visibility: hidden;"><div class="label">&nbsp;</div></div>
+    <div class="arrow" style="visibility: hidden;">&rarr;</div>
+    <div class="flow-step" style="background: #34d39915; border-color: #34d399;">
+      <div class="num">2</div>
+      <div class="label">Routing Decision</div>
+      <div class="desc">(packet is for another host)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3b</div>
+      <div class="label">FORWARD</div>
+      <div class="desc">mangle &rarr; filter<br>(transit traffic)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">POSTROUTING</div>
+      <div class="desc">mangle &rarr; nat<br>(SNAT/MASQUERADE here)</div>
+    </div>
+  </div>
+
+  <div class="flow" style="margin-top: 10px;">
+    <div class="flow-step" style="background: #a78bfa15; border-color: #a78bfa;">
+      <div class="label">Local Process</div>
+      <div class="desc">Generates outbound packet</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">OUTPUT</div>
+      <div class="desc">raw &rarr; mangle &rarr; nat &rarr; filter</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">POSTROUTING</div>
+      <div class="desc">mangle &rarr; nat<br>(SNAT/MASQUERADE here)</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>K8s relevance:</strong> kube-proxy uses the <code>nat</code> table's <code>PREROUTING</code> and <code>OUTPUT</code> chains to implement ClusterIP services (DNAT to pod IPs). When <code>kubectl get svc</code> shows a ClusterIP, the actual packet redirection is iptables DNAT rules. This is why <code>iptables -t nat -L</code> is your first debugging tool for Service connectivity issues.
+  </div>
+
+  <h3>Rule Matching: Top-to-Bottom, First Match Wins</h3>
+
+  <div class="panel">
+    <div class="panel-title">Rule Evaluation Logic</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Packet enters a chain (e.g., <code>INPUT</code>)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Rules are evaluated <strong>sequentially</strong> from rule #1 to rule #N</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>First rule that matches the packet determines the action (target)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>If <strong>no rule matches</strong>, the chain's <strong>default policy</strong> applies</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Order matters enormously.</strong> If rule #3 is <code>ACCEPT all from 10.0.0.0/8</code> and rule #7 is <code>DROP from 10.0.0.5</code>, the DROP rule will <em>never</em> fire — 10.0.0.5 already matched rule #3. Always put more specific rules before broader ones.
+  </div>
+
+  <h3>Targets (Actions)</h3>
+
+  <table>
+    <tr><th>Target</th><th>Behavior</th><th>Use Case</th></tr>
+    <tr>
+      <td><code>ACCEPT</code></td>
+      <td>Allow the packet through</td>
+      <td>Whitelisted traffic</td>
+    </tr>
+    <tr>
+      <td><code>DROP</code></td>
+      <td>Silently discard — no response sent</td>
+      <td>Default for untrusted traffic (attacker gets timeout)</td>
+    </tr>
+    <tr>
+      <td><code>REJECT</code></td>
+      <td>Discard + send ICMP unreachable or TCP RST</td>
+      <td>Internal networks (fail fast for legitimate clients)</td>
+    </tr>
+    <tr>
+      <td><code>LOG</code></td>
+      <td>Log to kernel log, then continue to next rule</td>
+      <td>Debugging — non-terminating target</td>
+    </tr>
+    <tr>
+      <td><code>SNAT</code></td>
+      <td>Rewrite source IP (nat table only)</td>
+      <td>Outbound NAT with static IP</td>
+    </tr>
+    <tr>
+      <td><code>DNAT</code></td>
+      <td>Rewrite destination IP/port (nat table only)</td>
+      <td>Port forwarding, load balancing</td>
+    </tr>
+    <tr>
+      <td><code>MASQUERADE</code></td>
+      <td>SNAT that auto-detects outbound interface IP</td>
+      <td>Outbound NAT with DHCP (dynamic IP)</td>
+    </tr>
+    <tr>
+      <td><code>REDIRECT</code></td>
+      <td>DNAT to localhost (same host, different port)</td>
+      <td>Transparent proxies, Istio sidecar interception</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Istio/Envoy connection:</strong> The <code>REDIRECT</code> target is how Istio's init container (<code>istio-init</code>) intercepts all pod traffic. It adds iptables rules that redirect inbound/outbound TCP to Envoy's ports (15001/15006). Run <code>iptables -t nat -L</code> inside an Istio pod to see it.
+  </div>
+
+  <h3>Example iptables Rules</h3>
+
+  <pre><code><span class="cm"># Set default policies — DROP everything by default</span>
+<span class="fn">iptables</span> <span class="kw">-P</span> INPUT <span class="str">DROP</span>
+<span class="fn">iptables</span> <span class="kw">-P</span> FORWARD <span class="str">DROP</span>
+<span class="fn">iptables</span> <span class="kw">-P</span> OUTPUT <span class="str">ACCEPT</span>
+
+<span class="cm"># Allow loopback (always needed — many services talk to localhost)</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-i</span> lo <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Allow established and related connections (stateful rule)</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-m</span> conntrack <span class="kw">--ctstate</span> ESTABLISHED,RELATED <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Allow SSH from management subnet only</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-p</span> tcp <span class="kw">-s</span> <span class="num">10.0.1.0/24</span> <span class="kw">--dport</span> <span class="num">22</span> <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Allow HTTP/HTTPS from anywhere</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">80</span> <span class="kw">-j</span> <span class="str">ACCEPT</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">443</span> <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Allow ICMP (ping) — rate limited</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-p</span> icmp <span class="kw">--icmp-type</span> echo-request <span class="kw">-m</span> limit <span class="kw">--limit</span> <span class="num">1</span>/s <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Log dropped packets (for debugging — watch with dmesg or journalctl)</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-j</span> <span class="str">LOG</span> <span class="kw">--log-prefix</span> <span class="val">"IPT-DROP: "</span>
+
+<span class="cm"># Everything else hits the default DROP policy</span></code></pre>
+
+  <div class="tip">
+    <strong>The golden rule:</strong> The <code>conntrack ESTABLISHED,RELATED</code> rule should <em>always</em> be near the top of your INPUT chain. It's the most-hit rule (all return traffic matches it), so putting it first is both correct and a performance optimization.
+  </div>
+
+  <!-- ===== NFTABLES ===== -->
+  <h2>nftables: The iptables Successor</h2>
+
+  <p><code>nftables</code> replaces <strong>iptables, ip6tables, arptables, and ebtables</strong> with a single unified framework. It's the default on modern distros (Debian 10+, RHEL 8+, Ubuntu 20.04+). Under the hood, both iptables and nftables use Netfilter — but nftables has a cleaner kernel interface (<code>nf_tables</code>) vs iptables' per-protocol modules.</p>
+
+  <div class="panel">
+    <div class="panel-title">Key Improvements Over iptables</div>
+    <ul>
+      <li><strong>Unified framework</strong> — one tool for IPv4, IPv6, ARP, bridge filtering</li>
+      <li><strong>User-defined tables and chains</strong> — no fixed table names required</li>
+      <li><strong>Sets and maps</strong> — efficient matching against large lists (IPs, ports) without per-rule overhead</li>
+      <li><strong>Atomic rule replacement</strong> — load entire ruleset at once, no flicker</li>
+      <li><strong>Better syntax</strong> — more readable, less flag soup</li>
+      <li><strong>No built-in chains</strong> — you create exactly what you need</li>
+    </ul>
+  </div>
+
+  <h3>Syntax Comparison</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">iptables</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Allow SSH</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT \
+  <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">22</span> \
+  <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># DNAT port forward</span>
+<span class="fn">iptables</span> <span class="kw">-t</span> nat <span class="kw">-A</span> PREROUTING \
+  <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">80</span> \
+  <span class="kw">-j</span> DNAT \
+  <span class="kw">--to-destination</span> <span class="num">10.0.0.5:8080</span>
+
+<span class="cm"># Drop a list of IPs (one rule each)</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-s</span> <span class="num">1.2.3.4</span> <span class="kw">-j</span> <span class="str">DROP</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-s</span> <span class="num">5.6.7.8</span> <span class="kw">-j</span> <span class="str">DROP</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> INPUT <span class="kw">-s</span> <span class="num">9.10.11.12</span> <span class="kw">-j</span> <span class="str">DROP</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">nftables</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Allow SSH</span>
+<span class="fn">nft</span> add rule inet filter input \
+  tcp dport <span class="num">22</span> <span class="str">accept</span>
+
+<span class="cm"># DNAT port forward</span>
+<span class="fn">nft</span> add rule ip nat prerouting \
+  tcp dport <span class="num">80</span> \
+  dnat to <span class="num">10.0.0.5:8080</span>
+
+<span class="cm"># Drop a list of IPs (single set)</span>
+<span class="fn">nft</span> add set inet filter blocklist \
+  { type ipv4_addr\; }
+<span class="fn">nft</span> add element inet filter blocklist \
+  { <span class="num">1.2.3.4, 5.6.7.8, 9.10.11.12</span> }
+<span class="fn">nft</span> add rule inet filter input \
+  ip saddr @blocklist <span class="str">drop</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>nftables Sets and Maps</h3>
+
+  <p>Sets are nftables' killer feature for operational use. Instead of O(N) rule-by-rule matching, sets use hash tables or interval trees internally — O(1) or O(log N) lookups regardless of size.</p>
+
+  <pre><code><span class="cm"># Define a named set of allowed ports</span>
+<span class="fn">nft</span> add set inet filter allowed_ports { type inet_service\; }
+<span class="fn">nft</span> add element inet filter allowed_ports { <span class="num">22, 80, 443, 8080</span> }
+
+<span class="cm"># Use the set in a rule</span>
+<span class="fn">nft</span> add rule inet filter input tcp dport @allowed_ports <span class="str">accept</span>
+
+<span class="cm"># Maps: verdict maps (key → action)</span>
+<span class="fn">nft</span> add map inet filter port_policy { type inet_service : verdict\; }
+<span class="fn">nft</span> add element inet filter port_policy { \
+  <span class="num">22</span> : <span class="str">accept</span>, \
+  <span class="num">80</span> : <span class="str">accept</span>, \
+  <span class="num">3306</span> : <span class="str">drop</span> \
+}
+<span class="fn">nft</span> add rule inet filter input tcp dport vmap @port_policy</code></pre>
+
+  <div class="note">
+    <strong>Performance at scale:</strong> If you're blocking 10,000 IPs, iptables evaluates up to 10,000 rules per packet. nftables with a set does a single hash lookup. This matters on high-throughput gateways and DDoS mitigation.
+  </div>
+
+  <!-- ===== DEFAULT POLICIES ===== -->
+  <h2>Default Policies: DROP vs ACCEPT</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Default DROP (Recommended)</div>
+      <div class="comp-body">
+        <p><strong>Principle of least privilege.</strong></p>
+        <ul>
+          <li>Everything is denied unless explicitly allowed</li>
+          <li>New services are blocked until you add a rule</li>
+          <li>Accidental exposure is impossible</li>
+          <li>You must explicitly allow: loopback, established connections, SSH, needed services</li>
+        </ul>
+<pre><code><span class="fn">iptables</span> <span class="kw">-P</span> INPUT <span class="str">DROP</span>
+<span class="fn">iptables</span> <span class="kw">-P</span> FORWARD <span class="str">DROP</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Default ACCEPT (Dangerous)</div>
+      <div class="comp-body">
+        <p><strong>Open by default.</strong></p>
+        <ul>
+          <li>Everything allowed unless explicitly denied</li>
+          <li>New services are immediately exposed</li>
+          <li>Must maintain a deny-list (always incomplete)</li>
+          <li>One forgotten rule = security hole</li>
+        </ul>
+<pre><code><span class="fn">iptables</span> <span class="kw">-P</span> INPUT <span class="str">ACCEPT</span>
+<span class="cm"># You're trusting that your deny</span>
+<span class="cm"># rules are exhaustive. They aren't.</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Production rule:</strong> Always <code>-P INPUT DROP</code> and <code>-P FORWARD DROP</code>. OUTPUT can be ACCEPT in most cases (you trust your own machine's outbound traffic, usually). If you're hardening a bastion host or a high-security environment, consider DROP on OUTPUT too.
+  </div>
+
+  <!-- ===== CONNECTION TRACKING ===== -->
+  <h2>Connection Tracking (conntrack)</h2>
+
+  <p>Conntrack is the kernel subsystem that makes stateful firewalling possible. It tracks every connection (flow) through the host in a hash table, and both iptables and nftables query it to determine whether a packet belongs to a known connection.</p>
+
+  <h3>Connection States</h3>
+
+  <table>
+    <tr><th>State</th><th>Meaning</th><th>Example</th></tr>
+    <tr>
+      <td><code>NEW</code></td>
+      <td>First packet of a connection (SYN for TCP, first UDP packet)</td>
+      <td>Client sends SYN to port 443</td>
+    </tr>
+    <tr>
+      <td><code>ESTABLISHED</code></td>
+      <td>Packets belonging to a connection that has seen traffic in both directions</td>
+      <td>After the SYN-ACK exchange completes</td>
+    </tr>
+    <tr>
+      <td><code>RELATED</code></td>
+      <td>New connection that is <em>related</em> to an existing one (via protocol helpers)</td>
+      <td>ICMP "port unreachable" in response to a blocked UDP packet; FTP data connections</td>
+    </tr>
+    <tr>
+      <td><code>INVALID</code></td>
+      <td>Packet doesn't match any known connection and isn't a valid start of one</td>
+      <td>Malformed packets, ACK without SYN, corrupted state</td>
+    </tr>
+  </table>
+
+  <h3>Inspecting the Conntrack Table</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>conntrack -L<br>
+    <span class="output">tcp   6 431985 ESTABLISHED src=10.0.0.5 dst=93.184.216.34 sport=44820 dport=443 src=93.184.216.34 dst=10.0.0.5 sport=443 dport=44820 [ASSURED] mark=0 use=1</span><br>
+    <span class="output">udp  17 29 src=10.0.0.5 dst=8.8.8.8 sport=53214 dport=53 src=8.8.8.8 dst=10.0.0.5 sport=53 dport=53214 mark=0 use=1</span><br><br>
+    <span class="prompt">$ </span>conntrack -C    <span class="prompt"># Count entries</span><br>
+    <span class="output">2847</span><br><br>
+    <span class="prompt">$ </span>sysctl net.netfilter.nf_conntrack_max<br>
+    <span class="output">net.netfilter.nf_conntrack_max = 262144</span>
+  </div>
+
+  <h3>Why Conntrack Matters</h3>
+
+  <div class="panel">
+    <div class="panel-title">Conntrack Powers Everything Stateful in Linux Networking</div>
+    <ul>
+      <li><strong>Stateful firewalling</strong> — <code>-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT</code> is the single most important firewall rule</li>
+      <li><strong>NAT</strong> — SNAT/DNAT/MASQUERADE all store their mappings in conntrack; return packets use conntrack to reverse the translation</li>
+      <li><strong>Kubernetes Services</strong> — kube-proxy's iptables mode creates DNAT rules that rely on conntrack for return-path translation</li>
+    </ul>
+  </div>
+
+  <h3>Conntrack Table Exhaustion</h3>
+
+  <div class="warn">
+    <strong>A real production failure mode.</strong> The conntrack table has a finite size (<code>nf_conntrack_max</code>, default ~262144). Under heavy load or during a SYN flood, the table fills up. When it's full:
+    <ul style="margin-top: 8px;">
+      <li>New connections are silently dropped</li>
+      <li><code>dmesg</code> shows: <code>nf_conntrack: table full, dropping packet</code></li>
+      <li>Symptoms: intermittent connection failures, timeouts, "connection refused" with no corresponding firewall rule</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Diagnosing & Fixing Conntrack Exhaustion</div>
+    <div class="terminal">
+      <span class="prompt"># Check current usage vs max</span><br>
+      <span class="prompt">$ </span>conntrack -C<br>
+      <span class="output">261890</span>  <span class="prompt"># Dangerously close to max!</span><br><br>
+      <span class="prompt">$ </span>sysctl net.netfilter.nf_conntrack_max<br>
+      <span class="output">262144</span><br><br>
+      <span class="prompt"># Increase the limit (immediate)</span><br>
+      <span class="prompt">$ </span>sysctl -w net.netfilter.nf_conntrack_max=524288<br><br>
+      <span class="prompt"># Persistent: add to /etc/sysctl.d/99-conntrack.conf</span><br>
+      <span class="output">net.netfilter.nf_conntrack_max = 524288</span><br>
+      <span class="output">net.netfilter.nf_conntrack_buckets = 131072</span><br><br>
+      <span class="prompt"># Reduce timeouts for faster cleanup</span><br>
+      <span class="prompt">$ </span>sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=3600<br>
+      <span class="prompt">$ </span>sysctl -w net.netfilter.nf_conntrack_tcp_timeout_time_wait=30
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>K8s-specific:</strong> On a busy Kubernetes node running many Services, conntrack exhaustion is a well-known issue. Each Service connection (ClusterIP DNAT) creates a conntrack entry. Nodes with high pod density and many short-lived connections (like gRPC or HTTP/1.1 without keep-alive) are most vulnerable. Monitor <code>node_nf_conntrack_entries</code> in Prometheus and alert at 80% of max.
+  </div>
+
+</body>
+</html>

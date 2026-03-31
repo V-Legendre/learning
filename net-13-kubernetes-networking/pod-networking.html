@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 13 — Pod Networking</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 13 — Pod Networking</h1>
+  <p class="subtitle">How every Pod gets a unique, routable IP</p>
+
+  <!-- ===== THE 3 RULES ===== -->
+  <h2>Kubernetes Networking Requirements (The 3 Rules)</h2>
+
+  <p>The Kubernetes networking model is built on three non-negotiable constraints. Every CNI plugin must satisfy all three — there is no wiggle room.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Three Fundamental Rules</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong style="color: #fff;">Every Pod gets a unique, cluster-wide IP address</strong><br>
+          No two Pods share an IP. Containers within a Pod share the same network namespace (and IP), but each Pod is distinct. This is the flat networking model — no port-mapping hacks.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong style="color: #fff;">Pods on any node can communicate with all Pods on any other node without NAT</strong><br>
+          Pod A on Node 1 can reach Pod B on Node 3 using Pod B's real IP. No SNAT, no DNAT, no port translation. The source IP seen by the destination is the real Pod IP.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong style="color: #fff;">Agents on a node (kubelet, system daemons) can reach all Pods on that node</strong><br>
+          The kubelet must be able to health-check pods, pull metrics, and stream logs. System-level daemons (node exporter, log collectors) need direct Pod access.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> These rules intentionally exclude Services. The Service abstraction (ClusterIP, kube-proxy) is a separate layer built <em>on top of</em> the pod networking model. The CNI only needs to deliver the three rules above.
+  </div>
+
+  <!-- ===== PAUSE CONTAINER ===== -->
+  <h2>The Pause Container: Network Namespace Anchor</h2>
+
+  <p>Every Pod contains a hidden infrastructure container that you rarely see but is critical to how networking works.</p>
+
+  <div class="panel">
+    <div class="panel-title">What is the pause container?</div>
+    <ul>
+      <li>Image: <code>registry.k8s.io/pause:3.9</code> (previously <code>gcr.io/google_containers/pause</code>)</li>
+      <li>It runs a single instruction: <code>pause()</code> — literally does nothing, sleeps forever</li>
+      <li>Its sole purpose is to <strong>hold the network namespace</strong> for the Pod</li>
+      <li>All app containers in the Pod <strong>join the pause container's network namespace</strong> via <code>--net=container:pause</code></li>
+    </ul>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">kubelet creates Pod</div>
+      <div class="desc">Calls CRI (containerd)</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Pause container starts</div>
+      <div class="desc">Creates network namespace</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">CNI plugin called</div>
+      <div class="desc">Assigns IP, creates veth pair</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">App containers start</div>
+      <div class="desc">Join pause's netns</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Why this matters:</strong> If an app container crashes and kubelet restarts it, the <strong>network namespace persists</strong> because the pause container is still running. The Pod keeps its IP, its veth pair, its network identity. This is why you can restart containers without breaking connections.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Containers within a Pod share:</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Shared</th>
+          <th>Not Shared</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>IP address (same <code>eth0</code>)</td>
+          <td>Filesystem (separate rootfs)</td>
+        </tr>
+        <tr>
+          <td>Port space (container A on :8080 blocks container B from :8080)</td>
+          <td>Process namespace (by default)</td>
+        </tr>
+        <tr>
+          <td>Loopback (<code>localhost</code> — containers talk via 127.0.0.1)</td>
+          <td>CPU/memory cgroups (separate limits)</td>
+        </tr>
+        <tr>
+          <td>Network interfaces</td>
+          <td>Environment variables (per container)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== SAME NODE ===== -->
+  <h2>Pod-to-Pod Communication: Same Node</h2>
+
+  <p>When two Pods are on the same node, traffic stays local and flows through a Linux bridge via veth pairs.</p>
+
+  <h3>How veth Pairs Work</h3>
+
+  <p>A veth (virtual ethernet) pair is a tunnel with two ends. One end sits in the Pod's network namespace (as <code>eth0</code>), the other end sits in the host namespace and is plugged into a bridge.</p>
+
+  <div class="topology">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; width: 100%;">
+      <!-- Node box -->
+      <div style="font-weight: bold; color: #fff; font-size: 16px;">Node 1</div>
+
+      <!-- Pods row -->
+      <div style="display: flex; gap: 60px; justify-content: center;">
+        <div class="topo-node host">
+          <div class="topo-label">Pod A</div>
+          <div class="topo-detail">10.244.1.2</div>
+          <div class="topo-detail">eth0</div>
+        </div>
+        <div class="topo-node host">
+          <div class="topo-label">Pod B</div>
+          <div class="topo-detail">10.244.1.3</div>
+          <div class="topo-detail">eth0</div>
+        </div>
+      </div>
+
+      <!-- veth arrows -->
+      <div style="display: flex; gap: 60px; justify-content: center; color: #888; font-size: 13px;">
+        <div style="text-align: center;">vethA</div>
+        <div style="text-align: center;">vethB</div>
+      </div>
+
+      <!-- Bridge -->
+      <div class="topo-node switch" style="min-width: 250px;">
+        <div class="topo-label">cbr0 (bridge)</div>
+        <div class="topo-detail">10.244.1.1/24</div>
+      </div>
+
+      <!-- Host eth0 -->
+      <div class="topo-node router">
+        <div class="topo-label">eth0 (host NIC)</div>
+        <div class="topo-detail">192.168.1.10</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Traffic Flow: Pod A -> Pod B (Same Node)</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Pod A eth0</div>
+        <div class="desc">10.244.1.2</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="label">vethA</div>
+        <div class="desc">Host namespace</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="label">cbr0 bridge</div>
+        <div class="desc">L2 MAC lookup</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="label">vethB</div>
+        <div class="desc">Host namespace</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="label">Pod B eth0</div>
+        <div class="desc">10.244.1.3</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key detail:</strong> The bridge learns MAC addresses just like a physical switch. Pod A ARPs for Pod B's MAC, the bridge forwards the frame to the correct veth. No routing needed — it's pure L2 switching.
+  </div>
+
+  <!-- ===== CROSS NODE ===== -->
+  <h2>Pod-to-Pod Communication: Across Nodes</h2>
+
+  <p>When pods live on different nodes, the packet must leave one node and reach the other. There are two fundamentally different approaches.</p>
+
+  <h3>Approach 1: Overlay Networks (VXLAN Encapsulation)</h3>
+
+  <p>Used by <strong>Flannel</strong>, <strong>Weave</strong>, and Calico in VXLAN mode. The original pod packet is wrapped inside a new UDP packet for transport across the underlay network.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Original Payload (application data)</div>
+    <div class="encap-layer tcp">Inner TCP/UDP Header (src: Pod A port, dst: Pod B port)</div>
+    <div class="encap-layer ip">Inner IP Header (src: 10.244.1.2, dst: 10.244.2.5)</div>
+    <div class="encap-layer eth" style="border-color: #e94560; color: #f87171; background: #e9456015;">VXLAN Header (VNI: 1, 8 bytes)</div>
+    <div class="encap-layer eth" style="border-color: #fbbf24;">Outer UDP Header (src: ephemeral, dst: 4789)</div>
+    <div class="encap-layer ip" style="border-color: #22d3ee; color: #22d3ee; background: #06b6d415;">Outer IP Header (src: Node 1 IP, dst: Node 2 IP)</div>
+    <div class="encap-layer phys">Outer Ethernet Frame (src: Node 1 MAC, dst: Node 2 MAC / Gateway MAC)</div>
+  </div>
+
+  <div class="warn">
+    <strong>Overhead:</strong> VXLAN adds ~50 bytes per packet (outer Ethernet 14B + outer IP 20B + outer UDP 8B + VXLAN 8B). This reduces your effective MTU from 1500 to ~1450. If jumbo frames aren't configured, you'll see fragmentation and performance degradation. Set <code>--mtu=1450</code> in your CNI config or enable jumbo frames on your underlay.
+  </div>
+
+  <div class="topology">
+    <div style="display: flex; flex-direction: column; gap: 20px; width: 100%; align-items: center;">
+      <div style="font-weight: bold; color: #fff; font-size: 16px;">Overlay Network (VXLAN)</div>
+      <div style="display: flex; gap: 30px; justify-content: center; flex-wrap: wrap;">
+        <!-- Node 1 -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #2a2a4a; border-radius: 12px;">
+          <div style="color: #60a5fa; font-weight: bold;">Node 1 (192.168.1.10)</div>
+          <div class="topo-node host">
+            <div class="topo-label">Pod A</div>
+            <div class="topo-detail">10.244.1.2</div>
+          </div>
+          <div style="color: #888; font-size: 12px;">cbr0 bridge</div>
+          <div class="topo-node switch">
+            <div class="topo-label">flannel.1</div>
+            <div class="topo-detail">VTEP (VXLAN endpoint)</div>
+          </div>
+        </div>
+
+        <!-- Underlay -->
+        <div style="display: flex; align-items: center;">
+          <div class="topo-node cloud">
+            <div class="topo-label">Underlay</div>
+            <div class="topo-detail">UDP:4789</div>
+            <div class="topo-detail">Encapsulated</div>
+          </div>
+        </div>
+
+        <!-- Node 2 -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #2a2a4a; border-radius: 12px;">
+          <div style="color: #60a5fa; font-weight: bold;">Node 2 (192.168.1.11)</div>
+          <div class="topo-node host">
+            <div class="topo-label">Pod B</div>
+            <div class="topo-detail">10.244.2.5</div>
+          </div>
+          <div style="color: #888; font-size: 12px;">cbr0 bridge</div>
+          <div class="topo-node switch">
+            <div class="topo-label">flannel.1</div>
+            <div class="topo-detail">VTEP (VXLAN endpoint)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Approach 2: Native Routing (BGP)</h3>
+
+  <p>Used by <strong>Calico</strong> in BGP mode. No encapsulation — nodes announce their Pod CIDRs via BGP, and the infrastructure routes Pod traffic directly.</p>
+
+  <div class="topology">
+    <div style="display: flex; flex-direction: column; gap: 20px; width: 100%; align-items: center;">
+      <div style="font-weight: bold; color: #fff; font-size: 16px;">Native Routing (BGP)</div>
+      <div style="display: flex; gap: 30px; justify-content: center; flex-wrap: wrap;">
+        <!-- Node 1 -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #2a2a4a; border-radius: 12px;">
+          <div style="color: #60a5fa; font-weight: bold;">Node 1 (192.168.1.10)</div>
+          <div class="topo-node host">
+            <div class="topo-label">Pod A</div>
+            <div class="topo-detail">10.244.1.2</div>
+          </div>
+          <div style="color: #34d399; font-size: 12px; font-weight: bold;">BIRD BGP agent</div>
+          <div style="color: #888; font-size: 11px;">Announces: 10.244.1.0/24</div>
+        </div>
+
+        <!-- Router -->
+        <div style="display: flex; align-items: center;">
+          <div class="topo-node router">
+            <div class="topo-label">ToR / Fabric</div>
+            <div class="topo-detail">BGP peer</div>
+            <div class="topo-detail">Native L3 routing</div>
+          </div>
+        </div>
+
+        <!-- Node 2 -->
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; border: 2px dashed #2a2a4a; border-radius: 12px;">
+          <div style="color: #60a5fa; font-weight: bold;">Node 2 (192.168.1.11)</div>
+          <div class="topo-node host">
+            <div class="topo-label">Pod B</div>
+            <div class="topo-detail">10.244.2.5</div>
+          </div>
+          <div style="color: #34d399; font-size: 12px; font-weight: bold;">BIRD BGP agent</div>
+          <div style="color: #888; font-size: 11px;">Announces: 10.244.2.0/24</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Overlay vs Native Routing</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Aspect</th>
+        <th>Overlay (VXLAN)</th>
+        <th>Native Routing (BGP)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Encapsulation</strong></td>
+        <td>Yes — VXLAN (UDP:4789)</td>
+        <td>None</td>
+      </tr>
+      <tr>
+        <td><strong>Per-packet overhead</strong></td>
+        <td>~50 bytes</td>
+        <td>0 bytes</td>
+      </tr>
+      <tr>
+        <td><strong>MTU impact</strong></td>
+        <td>Reduces effective MTU to ~1450</td>
+        <td>No impact</td>
+      </tr>
+      <tr>
+        <td><strong>Infrastructure requirements</strong></td>
+        <td>Just IP connectivity between nodes</td>
+        <td>BGP-capable routers or cloud VPC routes</td>
+      </tr>
+      <tr>
+        <td><strong>Performance</strong></td>
+        <td>Good — slight CPU overhead for encap/decap</td>
+        <td>Best — native kernel routing</td>
+      </tr>
+      <tr>
+        <td><strong>Debugging</strong></td>
+        <td>Harder — tcpdump shows encapsulated packets</td>
+        <td>Easier — pod IPs visible on wire</td>
+      </tr>
+      <tr>
+        <td><strong>CNI examples</strong></td>
+        <td>Flannel, Weave, Calico (VXLAN mode)</td>
+        <td>Calico (BGP mode), Cilium (BGP)</td>
+      </tr>
+      <tr>
+        <td><strong>Cloud-native option</strong></td>
+        <td>Works anywhere</td>
+        <td>AWS VPC CNI, GKE native routing</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Cloud shortcut:</strong> AWS VPC CNI and GKE's native routing assign Pod IPs directly from the VPC subnet — no overlay, no BGP. Pods get VPC-routable IPs. Best performance, but ties you to the cloud provider and consumes VPC IP space.
+  </div>
+
+  <!-- ===== IP ALLOCATION ===== -->
+  <h2>IP Address Allocation</h2>
+
+  <p>Kubernetes uses a hierarchical IP allocation scheme to ensure every Pod gets a unique IP without centralized coordination.</p>
+
+  <div class="panel">
+    <div class="panel-title">CIDR Hierarchy</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong style="color: #fff;">Cluster CIDR</strong> — The overall range for all pod IPs<br>
+          <code>--cluster-cidr=10.244.0.0/16</code> (set on kube-controller-manager)<br>
+          Provides 65,536 addresses across the entire cluster
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong style="color: #fff;">Node CIDR</strong> — Each node gets a subnet carved from the cluster CIDR<br>
+          <code>--node-cidr-mask-size=24</code> (default)<br>
+          Node 1: <code>10.244.1.0/24</code> (256 IPs) | Node 2: <code>10.244.2.0/24</code> | Node 3: <code>10.244.3.0/24</code>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong style="color: #fff;">IPAM (IP Address Management)</strong> — Allocates individual IPs from the node's subnet<br>
+          CNI plugin's IPAM module (host-local, calico-ipam, etc.) hands out IPs to Pods as they're created
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Example: Full Allocation</div>
+    <pre><code><span class="cm">Cluster CIDR:   10.244.0.0/16</span>
+<span class="cm">                        |</span>
+<span class="cm">        +---------------+---------------+</span>
+<span class="cm">        |               |               |</span>
+<span class="cm">   Node 1            Node 2           Node 3</span>
+<span class="cm">  10.244.1.0/24    10.244.2.0/24    10.244.3.0/24</span>
+<span class="cm">        |               |               |</span>
+<span class="cm">  Pod: .2, .3, .4  Pod: .2, .3      Pod: .2, .3, .4, .5</span></code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Capacity planning:</strong> With <code>/16</code> cluster CIDR and <code>/24</code> per node, you get 256 nodes max (2^(24-16) = 256). Each node supports ~253 pods (256 minus network, gateway, broadcast). For larger clusters, use <code>/12</code> for the cluster CIDR or <code>/25</code> for node masks. Plan your CIDRs before cluster creation — changing them later requires cluster rebuild.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Key Takeaways</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">The Model</div>
+      <ul>
+        <li>Every Pod gets a real, unique IP — no NAT between pods</li>
+        <li>The pause container anchors the network namespace</li>
+        <li>Same-node traffic: veth pairs + bridge (L2)</li>
+        <li>Cross-node: overlay (VXLAN) or native routing (BGP)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Operational Notes</div>
+      <ul>
+        <li>Always configure MTU correctly when using overlays</li>
+        <li>Plan your cluster CIDR and node CIDR sizes early</li>
+        <li>In cloud: consider native VPC CNIs for best performance</li>
+        <li>On-prem: Calico with BGP if your fabric supports it, VXLAN otherwise</li>
+      </ul>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 01 — Encapsulation</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 01 — Encapsulation</h1>
+  <p class="subtitle">How data gets wrapped at each layer for transmission</p>
+
+  <!-- ===== THE CONCEPT ===== -->
+  <h2>What Is Encapsulation?</h2>
+
+  <p>Encapsulation is the process by which each layer of the networking stack <strong>wraps the data from the layer above</strong> with its own header (and sometimes a trailer). Each layer treats the entire output of the layer above as an opaque payload — it doesn't inspect or modify it, just wraps it.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Fundamental Principle</div>
+    <ul>
+      <li><strong>Sending side:</strong> Data flows <strong>down</strong> the stack. Each layer adds its header → data grows.</li>
+      <li><strong>Receiving side:</strong> Data flows <strong>up</strong> the stack. Each layer strips its header → data shrinks.</li>
+      <li>Each layer only reads <strong>its own header</strong> — it treats everything inside as an opaque payload.</li>
+      <li>This is what enables <strong>layered independence</strong>: TCP doesn't care whether it's running over IPv4 or IPv6. IP doesn't care whether it's running over Ethernet or Wi-Fi.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Analogy:</strong> Think of it like nested envelopes. You write a letter (Application data), put it in an envelope with a tracking number (TCP header), put that in a mailer with a ZIP code (IP header), and put that in a courier package with a local delivery address (Ethernet header). Each handler only reads the outermost envelope they're responsible for.
+  </div>
+
+  <!-- ===== ENCAPSULATION DIAGRAM ===== -->
+  <h2>Encapsulation — Layer by Layer</h2>
+
+  <p>Here's what happens when an HTTP GET request is encapsulated for transmission:</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">
+      Application Data &nbsp;&nbsp; [HTTP GET /index.html HTTP/1.1 ...]
+    </div>
+    <div class="encap-layer tcp">
+      TCP Header (20B) &nbsp; | &nbsp; Application Data
+    </div>
+    <div class="encap-layer ip">
+      IP Header (20B) &nbsp; | &nbsp; TCP Header &nbsp; | &nbsp; Application Data
+    </div>
+    <div class="encap-layer eth">
+      Eth Header (14B) &nbsp; | &nbsp; IP Header &nbsp; | &nbsp; TCP Header &nbsp; | &nbsp; Application Data &nbsp; | &nbsp; FCS (4B)
+    </div>
+    <div class="encap-layer phys">
+      Preamble (8B) &nbsp; | &nbsp; Ethernet Frame &nbsp; | &nbsp; Inter-frame Gap (12B) &rarr; Bits on the wire
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key observation:</strong> Notice how each layer wraps the <em>entire</em> output of the layer above. The IP layer doesn't know or care that its payload contains a TCP header followed by HTTP data — to IP, it's all just "payload bytes" that need to be delivered to the destination IP address.
+  </div>
+
+  <!-- ===== FULL PACKET WALKTHROUGH ===== -->
+  <h2>Full Packet Walkthrough — HTTP Request from App to Wire</h2>
+
+  <p>Let's trace exactly what happens when your browser sends <code>GET /api/health HTTP/1.1</code> to <code>10.0.1.50:8080</code>.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Application Layer — HTTP</strong><br>
+        The browser constructs an HTTP request:
+        <pre><code><span class="fn">GET</span> <span class="str">/api/health</span> HTTP/1.1
+<span class="attr">Host</span>: <span class="str">10.0.1.50:8080</span>
+<span class="attr">Accept</span>: <span class="str">application/json</span>
+<span class="attr">Connection</span>: <span class="str">keep-alive</span></code></pre>
+        This is just a text payload — approximately 120 bytes of ASCII. The application hands it to the OS via the <strong>socket API</strong>: <code>send(sockfd, data, len, 0)</code>.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Transport Layer — TCP</strong><br>
+        The kernel's TCP stack prepends a <strong>20-byte TCP header</strong> containing:
+        <ul>
+          <li>Source port: <code>49152</code> (ephemeral port assigned by the OS)</li>
+          <li>Destination port: <code>8080</code></li>
+          <li>Sequence number: tracks byte position in the stream</li>
+          <li>Acknowledgment number: confirms received data</li>
+          <li>Flags: <code>PSH, ACK</code> (push data to application, acknowledge previous segment)</li>
+          <li>Window size: how much more data the sender can accept</li>
+          <li>Checksum: covers the header + data + a pseudo-header from IP</li>
+        </ul>
+        The result is a <strong>TCP segment</strong>: [TCP Header (20B) | HTTP Data (~120B)] = ~140 bytes.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Internet Layer — IPv4</strong><br>
+        The kernel's IP stack prepends a <strong>20-byte IPv4 header</strong> containing:
+        <ul>
+          <li>Source IP: <code>10.0.1.10</code> (our host)</li>
+          <li>Destination IP: <code>10.0.1.50</code> (the server)</li>
+          <li>TTL: <code>64</code> (decremented by each router; packet dies at 0)</li>
+          <li>Protocol: <code>6</code> (indicates the payload is TCP)</li>
+          <li>Total Length: <code>160</code> bytes (20B IP + 20B TCP + ~120B data)</li>
+          <li>Header checksum: covers only the IP header itself</li>
+        </ul>
+        The result is an <strong>IP packet</strong>: [IP Header (20B) | TCP Segment (140B)] = ~160 bytes.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Link Layer — Ethernet</strong><br>
+        The NIC driver prepends a <strong>14-byte Ethernet header</strong> and appends a <strong>4-byte FCS trailer</strong>:
+        <ul>
+          <li>Destination MAC: <code>aa:bb:cc:dd:ee:ff</code> (next hop — gateway or destination NIC)</li>
+          <li>Source MAC: <code>11:22:33:44:55:66</code> (our NIC)</li>
+          <li>EtherType: <code>0x0800</code> (indicates the payload is IPv4)</li>
+          <li>FCS: CRC-32 checksum over the entire frame for error detection</li>
+        </ul>
+        The result is an <strong>Ethernet frame</strong>: [Eth Header (14B) | IP Packet (160B) | FCS (4B)] = 178 bytes.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Physical Layer</strong><br>
+        The NIC prepends an <strong>8-byte preamble</strong> (7 bytes of <code>10101010</code> + 1 byte SFD <code>10101011</code>) for clock synchronization, transmits the frame as electrical signals, and appends a <strong>12-byte inter-frame gap</strong> (silence between frames).
+        <br><br>
+        Total on the wire: 8 + 178 + 12 = <strong>198 bytes</strong> to send ~120 bytes of HTTP text.
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Overhead reality check:</strong> For our ~120-byte HTTP payload, we added 78 bytes of overhead (TCP: 20, IP: 20, Ethernet: 14+4, Preamble+IFG: 20). That's roughly <strong>39% overhead</strong>. For small requests, protocol overhead is significant. For large transfers (1460-byte TCP payload in a 1518-byte frame), overhead drops to about 4%.
+  </div>
+
+  <!-- ===== ETHERNET FRAME ANATOMY ===== -->
+  <h2>Ethernet Frame Anatomy</h2>
+
+  <p>Here is the complete structure of an Ethernet II frame carrying an IPv4/TCP payload:</p>
+
+  <h3>Ethernet Header (14 bytes)</h3>
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 3;">
+      <span class="field-name">Destination MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field src" style="flex: 3;">
+      <span class="field-name">Source MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">EtherType</span>
+      <span class="field-size">2 bytes</span>
+    </div>
+  </div>
+
+  <h3>IPv4 Header (20 bytes, no options)</h3>
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Ver</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">IHL</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">DSCP/ECN</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 2;">
+      <span class="field-name">Total Length</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 2;">
+      <span class="field-name">Identification</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Flags</span>
+      <span class="field-size">3 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 2;">
+      <span class="field-name">Fragment Offset</span>
+      <span class="field-size">13 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field check" style="flex: 1;">
+      <span class="field-name">TTL</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Protocol</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field check" style="flex: 2;">
+      <span class="field-name">Header Checksum</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Source IP Address</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Destination IP Address</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+
+  <h3>TCP Header (20 bytes, no options)</h3>
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Source Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Destination Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 1;">
+      <span class="field-name">Sequence Number</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 1;">
+      <span class="field-name">Acknowledgment Number</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Data Offset</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Reserved</span>
+      <span class="field-size">3 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 3;">
+      <span class="field-name">Flags (NS, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN)</span>
+      <span class="field-size">9 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 2;">
+      <span class="field-name">Window Size</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field check" style="flex: 1;">
+      <span class="field-name">Checksum</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Urgent Pointer</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+
+  <h3>Payload + Trailer</h3>
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 4;">
+      <span class="field-name">Application Data (HTTP Request)</span>
+      <span class="field-size">46 - 1460 bytes (must pad to 46 min)</span>
+    </div>
+    <div class="pkt-field check" style="flex: 1;">
+      <span class="field-name">FCS (CRC-32)</span>
+      <span class="field-size">4 bytes</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>MTU and MSS:</strong> The standard Ethernet <strong>MTU</strong> (Maximum Transmission Unit) is <strong>1500 bytes</strong> — this is the maximum IP packet size. With 20 bytes for IP and 20 bytes for TCP headers, the <strong>MSS</strong> (Maximum Segment Size) is <strong>1460 bytes</strong> of application data per frame. Jumbo frames (MTU 9000) increase this but require end-to-end support.
+  </div>
+
+  <!-- ===== KEY FIELDS EXPLAINED ===== -->
+  <h2>Critical Header Fields Explained</h2>
+
+  <table>
+    <tr><th>Layer</th><th>Field</th><th>Purpose</th></tr>
+    <tr><td>Ethernet</td><td><code>EtherType</code></td><td>Tells the receiver what's inside: <code>0x0800</code> = IPv4, <code>0x86DD</code> = IPv6, <code>0x0806</code> = ARP</td></tr>
+    <tr><td>Ethernet</td><td><code>FCS</code></td><td>CRC-32 error detection — corrupted frames are silently dropped (no retransmission at L2)</td></tr>
+    <tr><td>IPv4</td><td><code>Protocol</code></td><td>Tells the receiver what's inside: <code>6</code> = TCP, <code>17</code> = UDP, <code>1</code> = ICMP</td></tr>
+    <tr><td>IPv4</td><td><code>TTL</code></td><td>Decremented by each router. Packet discarded at 0. Prevents infinite loops. Used by <code>traceroute</code>.</td></tr>
+    <tr><td>IPv4</td><td><code>DF flag</code></td><td>"Don't Fragment" — tells routers to drop the packet rather than fragment it. Enables Path MTU Discovery.</td></tr>
+    <tr><td>TCP</td><td><code>Sequence Number</code></td><td>Byte offset of the first byte in this segment within the stream. Enables ordering and retransmission.</td></tr>
+    <tr><td>TCP</td><td><code>Window Size</code></td><td>How many bytes the receiver can currently buffer. Flow control mechanism.</td></tr>
+    <tr><td>TCP</td><td><code>SYN/ACK/FIN/RST</code></td><td>Connection lifecycle flags: establish, acknowledge, close gracefully, reset forcefully.</td></tr>
+  </table>
+
+  <!-- ===== ARP ===== -->
+  <h2>ARP — The Bridge Between L2 and L3</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Problem ARP Solves</div>
+    <p>When a host wants to send a packet to <code>10.0.1.50</code> on the same subnet, it knows the <strong>destination IP address</strong> (Layer 3) but not the <strong>destination MAC address</strong> (Layer 2). It needs the MAC address to construct the Ethernet frame header. ARP (Address Resolution Protocol) resolves this mapping.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Scope:</strong> ARP only works within a single <strong>broadcast domain</strong> (same L2 segment / same subnet). It uses Ethernet broadcasts, which don't cross routers. For destinations on other subnets, the host sends to its <strong>default gateway's MAC</strong>, not the destination host's MAC.
+  </div>
+
+  <h3>ARP Request / Reply Flow</h3>
+
+  <p>Host A (<code>10.0.1.10</code>, MAC <code>AA:AA:AA:AA:AA:AA</code>) wants to send data to Host B (<code>10.0.1.50</code>):</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Host A<br><span style="font-size: 11px; color: #888;">10.0.1.10</span></div>
+      <div class="seq-entity">Network (Broadcast)</div>
+      <div class="seq-entity">Host B<br><span style="font-size: 11px; color: #888;">10.0.1.50</span></div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ARP Request: Who has 10.0.1.50? Tell 10.0.1.10</span>
+        </div>
+      </div>
+    </div>
+    <div style="text-align: center; color: #888; font-size: 12px; padding: 8px 0;">
+      Broadcast to FF:FF:FF:FF:FF:FF — all hosts on the segment receive this
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ARP Reply: 10.0.1.50 is at BB:BB:BB:BB:BB:BB</span>
+        </div>
+      </div>
+    </div>
+    <div style="text-align: center; color: #888; font-size: 12px; padding: 8px 0;">
+      Unicast reply directly to AA:AA:AA:AA:AA:AA
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Host A checks its ARP cache:</strong> Does it already have a MAC for <code>10.0.1.50</code>?
+        <pre><code><span class="fn">ip</span> neigh show 10.0.1.50
+<span class="cm"># If empty or STALE, ARP request is needed</span></code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Host A sends an ARP Request</strong> as an Ethernet <strong>broadcast</strong> (dst MAC: <code>FF:FF:FF:FF:FF:FF</code>). The ARP payload says: "Who has IP <code>10.0.1.50</code>? Please tell <code>10.0.1.10</code> (MAC <code>AA:AA:AA:AA:AA:AA</code>)."
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Every host on the segment receives the broadcast.</strong> Only Host B (which owns <code>10.0.1.50</code>) responds. All others silently discard it.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Host B sends an ARP Reply</strong> as a <strong>unicast</strong> back to Host A's MAC. The reply says: "<code>10.0.1.50</code> is at MAC <code>BB:BB:BB:BB:BB:BB</code>."
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Host A caches the mapping</strong> (<code>10.0.1.50 → BB:BB:BB:BB:BB:BB</code>) and can now construct the Ethernet frame.
+        <pre><code><span class="fn">ip</span> neigh show 10.0.1.50
+<span class="output">10.0.1.50 dev eth0 lladdr bb:bb:bb:bb:bb:bb REACHABLE</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>ARP Packet Structure</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">HW Type</span>
+      <span class="field-size">2B (0x0001 = Ethernet)</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Proto Type</span>
+      <span class="field-size">2B (0x0800 = IPv4)</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1;">
+      <span class="field-name">HW Size</span>
+      <span class="field-size">1B (6)</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1;">
+      <span class="field-name">Proto Size</span>
+      <span class="field-size">1B (4)</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Opcode</span>
+      <span class="field-size">2B (1=Req, 2=Reply)</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 2;">
+      <span class="field-name">Sender MAC Address</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Sender IP</span>
+      <span class="field-size">4 bytes</span>
+    </div>
+  </div>
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 2;">
+      <span class="field-name">Target MAC Address</span>
+      <span class="field-size">6 bytes (00:00:00:00:00:00 in request)</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Target IP</span>
+      <span class="field-size">4 bytes</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> ARP's EtherType is <code>0x0806</code>. ARP packets are <strong>not</strong> IP packets — they sit directly inside Ethernet frames. This is why ARP is often described as "between L2 and L3."
+  </div>
+
+  <h3>ARP Security Concerns</h3>
+
+  <div class="warn">
+    <strong>ARP Spoofing / Poisoning:</strong> ARP has <strong>no authentication</strong>. Any host on the segment can send a gratuitous ARP reply claiming any IP maps to its own MAC. This enables man-in-the-middle attacks. Mitigations include:
+    <ul>
+      <li><strong>Dynamic ARP Inspection (DAI):</strong> Switch validates ARP packets against a DHCP snooping database</li>
+      <li><strong>Static ARP entries:</strong> Manually pin critical mappings (doesn't scale)</li>
+      <li><strong>802.1X:</strong> Port-based authentication prevents untrusted hosts from joining the network</li>
+      <li><strong>IPv6 NDP:</strong> Uses SEND (SEcure Neighbor Discovery) with cryptographic signatures — but rarely deployed</li>
+    </ul>
+  </div>
+
+  <!-- ===== DE-ENCAPSULATION ===== -->
+  <h2>De-encapsulation on the Receiving Side</h2>
+
+  <p>When Host B receives the Ethernet frame, the process reverses — headers are stripped as the data moves <strong>up the stack</strong>:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">NIC receives bits</div>
+      <div class="desc">Physical signals → frame</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Ethernet processing</div>
+      <div class="desc">Check dst MAC, verify FCS, strip Ethernet header. EtherType 0x0800 → pass to IP.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">IP processing</div>
+      <div class="desc">Check dst IP, decrement TTL, verify checksum, strip IP header. Protocol 6 → pass to TCP.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">TCP processing</div>
+      <div class="desc">Check dst port, manage sequence/ACK, strip TCP header. Port 8080 → pass to application.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Application receives</div>
+      <div class="desc">HTTP server reads "GET /api/health"</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Demultiplexing — How Each Layer Finds the Right Handler</div>
+    <table>
+      <tr><th>Layer</th><th>Field Used</th><th>Example</th><th>Determines</th></tr>
+      <tr><td>Ethernet</td><td><code>EtherType</code></td><td><code>0x0800</code></td><td>Pass to IPv4 stack</td></tr>
+      <tr><td>IP</td><td><code>Protocol</code></td><td><code>6</code></td><td>Pass to TCP handler</td></tr>
+      <tr><td>TCP</td><td><code>Destination Port</code></td><td><code>8080</code></td><td>Deliver to the application listening on port 8080</td></tr>
+    </table>
+    <p>This chain of protocol identifiers is how a single NIC can serve traffic for hundreds of applications simultaneously — the stack uses these fields to <strong>demultiplex</strong> incoming frames to the correct process.</p>
+  </div>
+
+  <!-- ===== ROUTING AND RE-ENCAPSULATION ===== -->
+  <h2>What Happens at a Router (L3 Hop)</h2>
+
+  <p>When a packet crosses a router to reach a different subnet, the <strong>Ethernet header is stripped and replaced</strong> while the IP packet remains intact:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Router receives frame on ingress interface.</strong> Ethernet header says dst MAC = router's MAC. It strips the Ethernet header and reads the IP packet.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Router performs a routing table lookup</strong> on the destination IP to determine the next hop and egress interface.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Router decrements TTL</strong> by 1 and recalculates the IP header checksum. If TTL reaches 0, the packet is dropped and an ICMP Time Exceeded message is sent back.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Router constructs a new Ethernet frame</strong> on the egress interface with the next hop's MAC address as the destination MAC (found via ARP on that segment) and the router's egress interface MAC as the source.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>The IP packet inside is unchanged</strong> (except TTL and checksum). Source IP and destination IP remain the original sender and final receiver. Only the L2 addressing changes at each hop.
+      </div>
+    </div>
+  </div>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Host A</div>
+      <div class="topo-detail">10.0.1.10<br>MAC: AA:AA</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node switch">
+      <div class="topo-label">Switch</div>
+      <div class="topo-detail">L2 forwarding</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node router">
+      <div class="topo-label">Router</div>
+      <div class="topo-detail">eth0: 10.0.1.1<br>eth1: 10.0.2.1</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node switch">
+      <div class="topo-label">Switch</div>
+      <div class="topo-detail">L2 forwarding</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node host">
+      <div class="topo-label">Host B</div>
+      <div class="topo-detail">10.0.2.50<br>MAC: BB:BB</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Address Changes Across Hops</div>
+    <table>
+      <tr><th>Hop</th><th>Src MAC</th><th>Dst MAC</th><th>Src IP</th><th>Dst IP</th></tr>
+      <tr><td>Host A → Router</td><td><code>AA:AA</code></td><td><code>Router eth0 MAC</code></td><td><code>10.0.1.10</code></td><td><code>10.0.2.50</code></td></tr>
+      <tr><td>Router → Host B</td><td><code>Router eth1 MAC</code></td><td><code>BB:BB</code></td><td><code>10.0.1.10</code></td><td><code>10.0.2.50</code></td></tr>
+    </table>
+    <p><strong>Key insight:</strong> MAC addresses change at every L3 hop. IP addresses stay constant end-to-end (unless NAT is involved). This is the fundamental difference between L2 and L3 addressing.</p>
+  </div>
+
+  <div class="tip">
+    <strong>DevOps context:</strong> This hop-by-hop re-encapsulation is exactly what happens in Kubernetes networking. When a pod on Node A sends a packet to a pod on Node B, the CNI plugin (e.g., Calico, Cilium) routes the packet through the node's network stack, potentially through a VXLAN tunnel (which adds another layer of encapsulation), before it reaches the destination pod. Understanding encapsulation is essential for debugging <code>kubectl exec</code> connectivity issues, pod-to-service routing, and MTU problems with overlay networks.
+  </div>
+
+  <!-- ===== SEEING IT IN PRACTICE ===== -->
+  <h2>Seeing Encapsulation with tcpdump</h2>
+
+  <p>You can observe encapsulation directly with packet capture tools:</p>
+
+  <pre><code><span class="cm"># Capture packets on eth0, show link-layer headers (-e), verbose (-v)</span>
+<span class="fn">tcpdump</span> -i eth0 -e -v -n host 10.0.1.50 and port 8080
+
+<span class="cm"># Output shows all layers:</span>
+<span class="output">12:34:56.789 AA:AA:AA:AA:AA:AA > BB:BB:BB:BB:BB:BB, ethertype IPv4 (0x0800), length 178:
+    10.0.1.10.49152 > 10.0.1.50.8080: Flags [P.], seq 1:121, ack 1, win 502,
+    length 120: HTTP: GET /api/health HTTP/1.1</span></code></pre>
+
+  <p>In one line, tcpdump shows you:</p>
+  <table>
+    <tr><th>Layer</th><th>What tcpdump Shows</th></tr>
+    <tr><td>L2 (Ethernet)</td><td><code>AA:AA:AA:AA:AA:AA > BB:BB:BB:BB:BB:BB, ethertype IPv4 (0x0800)</code></td></tr>
+    <tr><td>L3 (IP)</td><td><code>10.0.1.10 > 10.0.1.50</code>, <code>length 178</code></td></tr>
+    <tr><td>L4 (TCP)</td><td><code>.49152 > .8080</code>, <code>Flags [P.]</code>, <code>seq 1:121</code>, <code>ack 1</code>, <code>win 502</code></td></tr>
+    <tr><td>L7 (HTTP)</td><td><code>HTTP: GET /api/health HTTP/1.1</code></td></tr>
+  </table>
+
+  <pre><code><span class="cm"># Even more detail with -xx (hex dump of entire frame)</span>
+<span class="fn">tcpdump</span> -i eth0 -xx -n host 10.0.1.50 and port 8080
+
+<span class="cm"># Or use Wireshark for a GUI with per-layer dissection:</span>
+<span class="fn">tshark</span> -i eth0 -V host 10.0.1.50 and port 8080</code></pre>
+
+  <div class="tip">
+    <strong>Pro tip:</strong> In Kubernetes, capture packets inside a pod's network namespace:
+    <pre><code><span class="cm"># Find the pod's PID</span>
+<span class="fn">PID</span>=$(crictl inspect --output go-template --template '{{.info.pid}}' $(crictl ps --name mycontainer -q))
+<span class="cm"># Enter its network namespace and capture</span>
+<span class="fn">nsenter</span> -t $PID -n tcpdump -i eth0 -e -n -v</code></pre>
+  </div>
+
+</body>
+</html>

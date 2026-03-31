@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 09 — Network Namespaces & Virtual Interfaces</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 09 — Network Namespaces & Virtual Interfaces</h1>
+  <p class="subtitle">The kernel primitives that make container networking possible</p>
+
+  <!-- ===== NETWORK NAMESPACES ===== -->
+  <h2>Network Namespaces: Fully Isolated Network Stacks</h2>
+
+  <p>A network namespace is a kernel construct that provides a <strong>complete, independent copy</strong> of the entire network stack. Each namespace has its own:</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Per-Namespace Resources</div>
+      <ul>
+        <li><strong>Network interfaces</strong> (lo, eth0, etc.)</li>
+        <li><strong>Routing table</strong> (separate <code>ip route</code>)</li>
+        <li><strong>iptables/nftables rules</strong> (separate firewall)</li>
+        <li><strong>Socket bindings</strong> (port 80 in ns1 != port 80 in ns2)</li>
+        <li><strong>ARP/NDP tables</strong></li>
+        <li><strong>/proc/net</strong> view</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Where Namespaces Are Used</div>
+      <ul>
+        <li><strong>Docker containers</strong> &mdash; each container gets one</li>
+        <li><strong>Kubernetes pods</strong> &mdash; all containers in a pod share one</li>
+        <li><strong>Network testing</strong> &mdash; simulate multi-host topologies on one machine</li>
+        <li><strong>VRF isolation</strong> &mdash; separate routing domains</li>
+        <li><strong>systemd-networkd</strong> &mdash; isolates network services</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Default namespace:</strong> The host itself runs in the <em>initial</em> (default) network namespace. When you run <code>ip addr</code> on a host, you see the default namespace's interfaces. Every process inherits its parent's namespace unless explicitly moved.
+  </div>
+
+  <h3>Creating and Using Namespaces</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create a namespace</span><br>
+    <span class="output">$ ip netns add ns1</span><br><br>
+    <span class="prompt"># List all namespaces</span><br>
+    <span class="output">$ ip netns list</span><br>
+    <span class="output">ns1</span><br><br>
+    <span class="prompt"># Execute a command inside the namespace</span><br>
+    <span class="output">$ ip netns exec ns1 ip addr</span><br>
+    <span class="output">1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN</span><br>
+    <span class="output">    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00</span><br><br>
+    <span class="prompt"># Note: loopback is DOWN by default in new namespaces</span><br>
+    <span class="output">$ ip netns exec ns1 ip link set lo up</span><br><br>
+    <span class="prompt"># Enter namespace interactively (spawns a shell inside ns1)</span><br>
+    <span class="output">$ ip netns exec ns1 bash</span><br><br>
+    <span class="prompt"># Delete a namespace</span><br>
+    <span class="output">$ ip netns del ns1</span>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> <code>ip netns exec</code> uses <code>setns(2)</code> + <code>unshare(2)</code> under the hood. Docker uses the same syscalls but manages namespace lifecycle via containerd/runc. You can inspect a container's namespace with <code>nsenter -t &lt;PID&gt; -n</code>.
+  </div>
+
+  <!-- ===== VETH PAIRS ===== -->
+  <h2>veth Pairs: Virtual Ethernet Cables</h2>
+
+  <p>A <strong>veth pair</strong> is two virtual network interfaces connected like a pipe &mdash; whatever goes in one end comes out the other. They are the fundamental mechanism for connecting network namespaces together.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Namespace A</div>
+      <div class="topo-detail">veth0</div>
+      <div class="topo-detail">10.0.0.1/24</div>
+    </div>
+    <div class="topo-link">&lt;======== veth pair ========&gt;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Namespace B</div>
+      <div class="topo-detail">veth1</div>
+      <div class="topo-detail">10.0.0.2/24</div>
+    </div>
+  </div>
+
+  <h3>Creating a veth Pair</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create veth pair (both ends start in the default namespace)</span><br>
+    <span class="output">$ ip link add veth0 type veth peer name veth1</span><br><br>
+    <span class="prompt"># Move one end into a namespace</span><br>
+    <span class="output">$ ip link set veth1 netns ns1</span><br><br>
+    <span class="prompt"># Assign IPs and bring up interfaces</span><br>
+    <span class="output">$ ip addr add 10.0.0.1/24 dev veth0</span><br>
+    <span class="output">$ ip link set veth0 up</span><br><br>
+    <span class="output">$ ip netns exec ns1 ip addr add 10.0.0.2/24 dev veth1</span><br>
+    <span class="output">$ ip netns exec ns1 ip link set veth1 up</span><br><br>
+    <span class="prompt"># Test connectivity</span><br>
+    <span class="output">$ ping -c 1 10.0.0.2</span><br>
+    <span class="output">PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.</span><br>
+    <span class="output">64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.043 ms</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Properties of veth Pairs</div>
+    <ul>
+      <li>Always created <strong>in pairs</strong> &mdash; you cannot have one end without the other</li>
+      <li>Deleting one end <strong>automatically destroys</strong> the other</li>
+      <li>They operate at <strong>L2</strong> &mdash; Ethernet frames pass between the two ends</li>
+      <li>Each end can be in a <strong>different namespace</strong></li>
+      <li>Performance is near line-rate &mdash; no kernel-to-userspace copy</li>
+      <li>Docker creates a veth pair for every container: one end in the container ns, the other attached to <code>docker0</code> bridge</li>
+    </ul>
+  </div>
+
+  <!-- ===== LINUX BRIDGES ===== -->
+  <h2>Linux Bridges: L2 Switch in Software</h2>
+
+  <p>A Linux bridge is a <strong>software Layer 2 switch</strong>. It learns MAC addresses from incoming frames and forwards traffic between attached interfaces &mdash; exactly like a physical Ethernet switch, but implemented in the kernel.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Container A</div>
+      <div class="topo-detail">vethA-ns</div>
+      <div class="topo-detail">172.17.0.2</div>
+    </div>
+    <div class="topo-link">---vethA---</div>
+    <div class="topo-node switch">
+      <div class="topo-label">br0 (bridge)</div>
+      <div class="topo-detail">172.17.0.1</div>
+      <div class="topo-detail">MAC learning</div>
+    </div>
+    <div class="topo-link">---vethB---</div>
+    <div class="topo-node host">
+      <div class="topo-label">Container B</div>
+      <div class="topo-detail">vethB-ns</div>
+      <div class="topo-detail">172.17.0.3</div>
+    </div>
+  </div>
+
+  <h3>Creating and Using a Bridge</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create a bridge</span><br>
+    <span class="output">$ ip link add br0 type bridge</span><br>
+    <span class="output">$ ip link set br0 up</span><br><br>
+    <span class="prompt"># Assign an IP to the bridge (acts as default gateway for containers)</span><br>
+    <span class="output">$ ip addr add 172.17.0.1/24 dev br0</span><br><br>
+    <span class="prompt"># Attach veth ends to the bridge</span><br>
+    <span class="output">$ ip link set vethA master br0</span><br>
+    <span class="output">$ ip link set vethB master br0</span><br><br>
+    <span class="prompt"># View bridge members</span><br>
+    <span class="output">$ bridge link show</span><br>
+    <span class="output">3: vethA: &lt;BROADCAST,MULTICAST,UP&gt; mtu 1500 master br0</span><br>
+    <span class="output">4: vethB: &lt;BROADCAST,MULTICAST,UP&gt; mtu 1500 master br0</span><br><br>
+    <span class="prompt"># View learned MAC addresses</span><br>
+    <span class="output">$ bridge fdb show br br0</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How Bridge Forwarding Works</div>
+    <ul>
+      <li><strong>Learning:</strong> When a frame arrives on a port, the bridge records the source MAC &rarr; port mapping</li>
+      <li><strong>Flooding:</strong> If the destination MAC is unknown, the frame is sent to <em>all</em> ports (except the source)</li>
+      <li><strong>Forwarding:</strong> If the destination MAC is known, the frame is sent only to the correct port</li>
+      <li>This is identical behavior to a physical L2 switch</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Docker's docker0:</strong> When Docker starts, it creates a bridge called <code>docker0</code> (default: 172.17.0.1/16). Each container's veth pair has one end attached to this bridge. That's how containers on the same Docker network communicate at L2.
+  </div>
+
+  <!-- ===== TUN/TAP ===== -->
+  <h2>tun/tap Devices</h2>
+
+  <p>tun and tap are <strong>virtual network interfaces</strong> where the "other end" is a <strong>userspace program</strong> instead of a physical wire or another namespace. The program reads/writes packets via a file descriptor (<code>/dev/net/tun</code>).</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l2">TAP &mdash; Layer 2</div>
+      <div class="comp-body">
+        <ul>
+          <li>Carries <strong>Ethernet frames</strong></li>
+          <li>Appears as a full Ethernet interface (has a MAC address)</li>
+          <li>Used by: <strong>VM hypervisors</strong> (QEMU/KVM), OpenVPN in tap mode, <strong>bridged networking</strong></li>
+          <li>Userspace program receives raw L2 frames</li>
+          <li>Can be attached to a bridge</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">TUN &mdash; Layer 3</div>
+      <div class="comp-body">
+        <ul>
+          <li>Carries <strong>IP packets</strong></li>
+          <li>No Ethernet framing &mdash; point-to-point</li>
+          <li>Used by: <strong>WireGuard</strong>, OpenVPN in tun mode, <strong>VPN tunnels</strong></li>
+          <li>Userspace program receives raw IP packets</li>
+          <li>Cannot be bridged (no L2 headers)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Application</div>
+      <div class="desc">sends data to dest IP</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Kernel Routing</div>
+      <div class="desc">routes to tun0/tap0</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">tun/tap Device</div>
+      <div class="desc">kernel &rarr; userspace fd</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">VPN Process</div>
+      <div class="desc">encrypts, encapsulates</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Physical NIC</div>
+      <div class="desc">sends encrypted packet</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create a tun device</span><br>
+    <span class="output">$ ip tuntap add dev tun0 mode tun</span><br>
+    <span class="output">$ ip addr add 10.8.0.1/24 dev tun0</span><br>
+    <span class="output">$ ip link set tun0 up</span><br><br>
+    <span class="prompt"># Create a tap device</span><br>
+    <span class="output">$ ip tuntap add dev tap0 mode tap</span><br>
+    <span class="output">$ ip link set tap0 up</span><br>
+    <span class="output">$ ip link set tap0 master br0  # attach to bridge</span>
+  </div>
+
+  <!-- ===== MACVLAN / IPVLAN ===== -->
+  <h2>macvlan / ipvlan</h2>
+
+  <p>Both macvlan and ipvlan create <strong>virtual sub-interfaces</strong> from a single physical NIC, allowing multiple "virtual NICs" to share one uplink &mdash; each appearing as a distinct network identity to the rest of the network.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l2">macvlan</div>
+      <div class="comp-body">
+        <ul>
+          <li>Each sub-interface gets its own <strong>unique MAC address</strong></li>
+          <li>To external network, each looks like a <strong>separate physical NIC</strong></li>
+          <li>Multiple modes: bridge, vepa, private, passthru</li>
+          <li>Bridge mode: sub-interfaces can talk to each other directly</li>
+          <li>Use case: give containers direct L2 network access without NAT</li>
+        </ul>
+        <pre><code><span class="cm"># Create macvlan sub-interface</span>
+<span class="fn">ip link add</span> macvlan0 link eth0 type macvlan mode bridge
+<span class="fn">ip addr add</span> 192.168.1.100/24 dev macvlan0
+<span class="fn">ip link set</span> macvlan0 up</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">ipvlan</div>
+      <div class="comp-body">
+        <ul>
+          <li>All sub-interfaces share the <strong>same MAC address</strong> as the parent</li>
+          <li>Distinguished by IP only &mdash; L3 multiplexing</li>
+          <li>Two modes: <strong>L2</strong> (acts like bridge) and <strong>L3</strong> (acts like router)</li>
+          <li>Works in environments that restrict multiple MACs (some cloud NICs, 802.1X)</li>
+          <li>Use case: cloud VMs where provider limits MACs per interface</li>
+        </ul>
+        <pre><code><span class="cm"># Create ipvlan sub-interface</span>
+<span class="fn">ip link add</span> ipvlan0 link eth0 type ipvlan mode l2
+<span class="fn">ip addr add</span> 192.168.1.101/24 dev ipvlan0
+<span class="fn">ip link set</span> ipvlan0 up</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>macvlan</th>
+        <th>ipvlan</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>MAC address</td>
+        <td>Unique per sub-interface</td>
+        <td>Shared with parent</td>
+      </tr>
+      <tr>
+        <td>Isolation level</td>
+        <td>L2 (different MACs)</td>
+        <td>L3 (same MAC, different IPs)</td>
+      </tr>
+      <tr>
+        <td>Cloud compatibility</td>
+        <td>May not work (MAC restrictions)</td>
+        <td>Works everywhere</td>
+      </tr>
+      <tr>
+        <td>Parent &harr; child traffic</td>
+        <td>Cannot communicate directly</td>
+        <td>Cannot communicate directly</td>
+      </tr>
+      <tr>
+        <td>Performance</td>
+        <td>Excellent (no bridge overhead)</td>
+        <td>Excellent (no bridge overhead)</td>
+      </tr>
+      <tr>
+        <td>Docker driver</td>
+        <td><code>--driver macvlan</code></td>
+        <td><code>--driver ipvlan</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Limitation:</strong> With both macvlan and ipvlan, the <em>parent interface cannot communicate with its sub-interfaces</em>. This is by kernel design. If you need host-to-container communication, add a separate macvlan/ipvlan sub-interface for the host or use a bridge instead.
+  </div>
+
+  <!-- ===== HANDS-ON ===== -->
+  <h2>Hands-on: Build Container Networking from Scratch</h2>
+
+  <p>This walkthrough recreates what Docker and Kubernetes CNIs do under the hood: create isolated network namespaces and connect them through a bridge with NAT for external access.</p>
+
+  <h3>Target Topology</h3>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">ns1 (Container A)</div>
+      <div class="topo-detail">eth0: 10.200.0.2/24</div>
+      <div class="topo-detail">gw: 10.200.0.1</div>
+    </div>
+    <div class="topo-link">--veth-ns1--</div>
+    <div class="topo-node switch">
+      <div class="topo-label">br0 (Bridge)</div>
+      <div class="topo-detail">10.200.0.1/24</div>
+    </div>
+    <div class="topo-link">--veth-ns2--</div>
+    <div class="topo-node host">
+      <div class="topo-label">ns2 (Container B)</div>
+      <div class="topo-detail">eth0: 10.200.0.3/24</div>
+      <div class="topo-detail">gw: 10.200.0.1</div>
+    </div>
+  </div>
+
+  <div style="text-align: center; margin: 10px 0;">
+    <div class="topo-link" style="display: inline-block;">|<br>| host routing + NAT<br>|</div>
+  </div>
+
+  <div class="topology" style="justify-content: center;">
+    <div class="topo-node cloud">
+      <div class="topo-label">Internet</div>
+      <div class="topo-detail">via host eth0</div>
+    </div>
+  </div>
+
+  <h3>Step 1: Create Namespaces</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create two namespaces (representing two containers)</span><br>
+    <span class="output">$ ip netns add ns1</span><br>
+    <span class="output">$ ip netns add ns2</span><br><br>
+    <span class="prompt"># Bring up loopback in each</span><br>
+    <span class="output">$ ip netns exec ns1 ip link set lo up</span><br>
+    <span class="output">$ ip netns exec ns2 ip link set lo up</span>
+  </div>
+
+  <h3>Step 2: Create the Bridge</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create bridge and assign it an IP (acts as default gateway)</span><br>
+    <span class="output">$ ip link add br0 type bridge</span><br>
+    <span class="output">$ ip link set br0 up</span><br>
+    <span class="output">$ ip addr add 10.200.0.1/24 dev br0</span>
+  </div>
+
+  <h3>Step 3: Create veth Pairs and Connect</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Create veth pairs for ns1</span><br>
+    <span class="output">$ ip link add veth-ns1 type veth peer name eth0-ns1</span><br>
+    <span class="output">$ ip link set veth-ns1 master br0       # host end → bridge</span><br>
+    <span class="output">$ ip link set veth-ns1 up</span><br>
+    <span class="output">$ ip link set eth0-ns1 netns ns1         # container end → namespace</span><br><br>
+    <span class="prompt"># Create veth pairs for ns2</span><br>
+    <span class="output">$ ip link add veth-ns2 type veth peer name eth0-ns2</span><br>
+    <span class="output">$ ip link set veth-ns2 master br0</span><br>
+    <span class="output">$ ip link set veth-ns2 up</span><br>
+    <span class="output">$ ip link set eth0-ns2 netns ns2</span>
+  </div>
+
+  <h3>Step 4: Assign IPs Inside Namespaces</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Configure ns1</span><br>
+    <span class="output">$ ip netns exec ns1 ip addr add 10.200.0.2/24 dev eth0-ns1</span><br>
+    <span class="output">$ ip netns exec ns1 ip link set eth0-ns1 up</span><br>
+    <span class="output">$ ip netns exec ns1 ip route add default via 10.200.0.1</span><br><br>
+    <span class="prompt"># Configure ns2</span><br>
+    <span class="output">$ ip netns exec ns2 ip addr add 10.200.0.3/24 dev eth0-ns2</span><br>
+    <span class="output">$ ip netns exec ns2 ip link set eth0-ns2 up</span><br>
+    <span class="output">$ ip netns exec ns2 ip route add default via 10.200.0.1</span>
+  </div>
+
+  <h3>Step 5: Enable Routing + NAT</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Enable IP forwarding on the host</span><br>
+    <span class="output">$ sysctl -w net.ipv4.ip_forward=1</span><br><br>
+    <span class="prompt"># NAT outbound traffic from containers</span><br>
+    <span class="output">$ iptables -t nat -A POSTROUTING -s 10.200.0.0/24 ! -o br0 -j MASQUERADE</span><br><br>
+    <span class="prompt"># Allow forwarded traffic</span><br>
+    <span class="output">$ iptables -A FORWARD -i br0 -j ACCEPT</span><br>
+    <span class="output">$ iptables -A FORWARD -o br0 -j ACCEPT</span>
+  </div>
+
+  <h3>Step 6: Verify Connectivity</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Container-to-container (via bridge, L2)</span><br>
+    <span class="output">$ ip netns exec ns1 ping -c 2 10.200.0.3</span><br>
+    <span class="output">PING 10.200.0.3 (10.200.0.3) 56(84) bytes of data.</span><br>
+    <span class="output">64 bytes from 10.200.0.3: icmp_seq=1 ttl=64 time=0.051 ms</span><br>
+    <span class="output">64 bytes from 10.200.0.3: icmp_seq=2 ttl=64 time=0.038 ms</span><br><br>
+    <span class="prompt"># Container-to-host (via bridge, L3)</span><br>
+    <span class="output">$ ip netns exec ns1 ping -c 1 10.200.0.1</span><br>
+    <span class="output">64 bytes from 10.200.0.1: icmp_seq=1 ttl=64 time=0.029 ms</span><br><br>
+    <span class="prompt"># Container-to-internet (via host NAT)</span><br>
+    <span class="output">$ ip netns exec ns1 ping -c 1 8.8.8.8</span><br>
+    <span class="output">64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=12.3 ms</span>
+  </div>
+
+  <div class="tip">
+    <strong>That's it.</strong> You just built the same networking model that Docker uses. Docker's <code>docker0</code> bridge, per-container veth pairs, and MASQUERADE rules are exactly this pattern. Kubernetes CNIs (Flannel, Calico, Cilium) build on this foundation with additional overlay/routing logic.
+  </div>
+
+  <!-- ===== SUMMARY DIAGRAM ===== -->
+  <h2>Summary: Virtual Interface Types</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Interface Type</th>
+        <th>Layer</th>
+        <th>Purpose</th>
+        <th>Primary Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>veth pair</code></td>
+        <td>L2</td>
+        <td>Connect two namespaces</td>
+        <td>Container networking (Docker, K8s)</td>
+      </tr>
+      <tr>
+        <td><code>bridge</code></td>
+        <td>L2</td>
+        <td>Software switch (connect multiple interfaces)</td>
+        <td>docker0, VM networking</td>
+      </tr>
+      <tr>
+        <td><code>tun</code></td>
+        <td>L3</td>
+        <td>Userspace &harr; kernel IP packets</td>
+        <td>VPNs (WireGuard, OpenVPN tun)</td>
+      </tr>
+      <tr>
+        <td><code>tap</code></td>
+        <td>L2</td>
+        <td>Userspace &harr; kernel Ethernet frames</td>
+        <td>VM networking, OpenVPN tap</td>
+      </tr>
+      <tr>
+        <td><code>macvlan</code></td>
+        <td>L2</td>
+        <td>Multiple MACs on one physical NIC</td>
+        <td>Direct L2 container access</td>
+      </tr>
+      <tr>
+        <td><code>ipvlan</code></td>
+        <td>L3</td>
+        <td>Multiple IPs, same MAC on one NIC</td>
+        <td>Cloud environments (MAC-restricted)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">How These Compose in Real Systems</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Container</div>
+        <div class="desc">network namespace</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">veth pair</div>
+        <div class="desc">pipe between ns</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">bridge</div>
+        <div class="desc">L2 switching</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">iptables NAT</div>
+        <div class="desc">MASQUERADE</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Physical NIC</div>
+        <div class="desc">internet access</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

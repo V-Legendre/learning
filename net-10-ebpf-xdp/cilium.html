@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 10 — Cilium</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 10 — Cilium</h1>
+  <p class="subtitle">eBPF-powered networking for Kubernetes</p>
+
+  <!-- ===== WHAT IS CILIUM ===== -->
+  <h2>What Is Cilium?</h2>
+
+  <p>Cilium is an <strong>eBPF-based CNI (Container Network Interface) plugin</strong> for Kubernetes. It replaces traditional iptables-based networking with eBPF programs that run directly in the kernel, providing networking, observability, and security at a fundamentally different performance tier. Cilium is a CNCF graduated project and the default CNI in Google GKE, AWS EKS (optional), and Azure AKS (optional).</p>
+
+  <div class="panel">
+    <div class="panel-title">Cilium's Core Components</div>
+    <div class="grid-3">
+      <div class="panel" style="margin: 0;">
+        <div class="panel-title">cilium-agent</div>
+        <p>DaemonSet on every node. Compiles and loads eBPF programs, manages maps, syncs K8s state (services, endpoints, policies).</p>
+      </div>
+      <div class="panel" style="margin: 0;">
+        <div class="panel-title">cilium-operator</div>
+        <p>Cluster-wide singleton. Handles IPAM allocation, CRD management, garbage collection of stale state.</p>
+      </div>
+      <div class="panel" style="margin: 0;">
+        <div class="panel-title">Hubble</div>
+        <p>eBPF-powered observability. Flow logs, service maps, DNS visibility, L7 metrics — all without sidecar proxies.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REPLACING KUBE-PROXY ===== -->
+  <h2>How Cilium Replaces kube-proxy</h2>
+
+  <p>In a standard Kubernetes cluster, <code>kube-proxy</code> watches the API server for Service/Endpoint changes and writes iptables DNAT rules to implement service load balancing. Cilium replaces this entirely with eBPF hash map lookups.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">kube-proxy + iptables (Traditional)</div>
+      <div class="comp-body">
+        <h3>Packet Path</h3>
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div>Pod sends packet to <code>ClusterIP:port</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div>Packet enters netfilter PREROUTING chain</div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div>iptables walks KUBE-SERVICES chain (<strong>O(n)</strong> — one rule per service)</div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div>Matches service, jumps to KUBE-SVC-xxxx chain</div>
+          </div>
+          <div class="step">
+            <div class="step-num">5</div>
+            <div>Probabilistic DNAT to one of the KUBE-SEP-xxxx chains (random endpoint)</div>
+          </div>
+          <div class="step">
+            <div class="step-num">6</div>
+            <div>DNAT rewrites destination IP to backend pod IP</div>
+          </div>
+          <div class="step">
+            <div class="step-num">7</div>
+            <div>Conntrack entry created for return path</div>
+          </div>
+        </div>
+        <div class="warn" style="margin-top: 12px;">
+          <strong>At scale:</strong> 10,000 services = ~50,000 iptables rules. Every packet traverses these linearly. Rule updates require atomic replacement of the entire chain — can take seconds with large rulesets.
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Cilium + eBPF (Modern)</div>
+      <div class="comp-body">
+        <h3>Packet Path</h3>
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div>Pod sends packet to <code>ClusterIP:port</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div>tc-bpf program on pod's veth intercepts</div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div>eBPF hash map lookup: <code>{ClusterIP, port}</code> -> backend list (<strong>O(1)</strong>)</div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div>Select backend (Maglev consistent hashing or random)</div>
+          </div>
+          <div class="step">
+            <div class="step-num">5</div>
+            <div>DNAT in eBPF — rewrite headers directly</div>
+          </div>
+          <div class="step">
+            <div class="step-num">6</div>
+            <div>eBPF conntrack (CT) map entry for return path</div>
+          </div>
+        </div>
+        <div class="tip" style="margin-top: 12px;">
+          <strong>Performance is independent of cluster size.</strong> Whether you have 100 or 100,000 services, the lookup is a single hash map access. Map updates are atomic per-entry — no full-chain replacement.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ # Verify Cilium has replaced kube-proxy</div>
+    <div class="prompt">$ cilium status</div>
+    <div class="output">KubeProxyReplacement:    True</div>
+    <div class="output">  - ClusterIP:           Enabled</div>
+    <div class="output">  - NodePort:            Enabled</div>
+    <div class="output">  - ExternalIPs:         Enabled</div>
+    <div class="output">  - LoadBalancer:         Enabled</div>
+    <div class="output">  - HostPort:            Enabled</div>
+    <br>
+    <div class="prompt">$ # View eBPF service map</div>
+    <div class="prompt">$ cilium bpf lb list</div>
+    <div class="output">SERVICE ADDRESS       BACKEND ADDRESS</div>
+    <div class="output">10.96.0.1:443         10.244.0.5:6443</div>
+    <div class="output">10.96.0.10:53         10.244.1.12:53, 10.244.2.8:53</div>
+    <div class="output">10.96.45.200:80       10.244.1.20:8080, 10.244.3.15:8080, 10.244.2.31:8080</div>
+  </div>
+
+  <!-- ===== NETWORK POLICY ===== -->
+  <h2>eBPF-Based Network Policy</h2>
+
+  <p>Cilium enforces Kubernetes NetworkPolicy using eBPF programs instead of iptables. But Cilium goes far beyond standard K8s NetworkPolicy — it provides <strong>L7-aware policy</strong> that can filter by HTTP path, gRPC method, Kafka topic, and DNS domain.</p>
+
+  <h3>Policy Enforcement Layers</h3>
+
+  <div class="layer-diagram">
+    <div class="layer l3">
+      <div class="layer-name">L3 Policy</div>
+      <div class="layer-protocols">Allow/deny by IP address, CIDR, pod label, namespace, service account</div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-name">L4 Policy</div>
+      <div class="layer-protocols">Allow/deny by port and protocol (TCP/UDP/SCTP/ICMP)</div>
+    </div>
+    <div class="layer l7">
+      <div class="layer-name">L7 Policy (Cilium-exclusive)</div>
+      <div class="layer-protocols">Allow/deny by HTTP path/method, gRPC service/method, Kafka topic, DNS domain</div>
+    </div>
+  </div>
+
+  <h3>L7 Policy: Cilium's Unique Strength</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">HTTP Policy</div>
+      <pre><code><span class="attr">apiVersion</span>: <span class="str">"cilium.io/v2"</span>
+<span class="attr">kind</span>: <span class="str">CiliumNetworkPolicy</span>
+<span class="attr">metadata</span>:
+  <span class="attr">name</span>: <span class="str">"api-access"</span>
+<span class="attr">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">api-server</span>
+  <span class="attr">ingress</span>:
+  - <span class="attr">fromEndpoints</span>:
+    - <span class="attr">matchLabels</span>:
+        <span class="attr">app</span>: <span class="str">frontend</span>
+    <span class="attr">toPorts</span>:
+    - <span class="attr">ports</span>:
+      - <span class="attr">port</span>: <span class="str">"80"</span>
+        <span class="attr">protocol</span>: <span class="str">TCP</span>
+      <span class="attr">rules</span>:
+        <span class="attr">http</span>:
+        - <span class="attr">method</span>: <span class="str">"GET"</span>
+          <span class="attr">path</span>: <span class="str">"/api/v1/products"</span>
+        - <span class="attr">method</span>: <span class="str">"GET"</span>
+          <span class="attr">path</span>: <span class="str">"/api/v1/health"</span></code></pre>
+      <p style="font-size: 13px; color: #999; margin-top: 8px;">Only <code>GET /api/v1/products</code> and <code>GET /api/v1/health</code> are allowed. POST, PUT, DELETE, or any other path is denied.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Kafka Policy</div>
+      <pre><code><span class="attr">apiVersion</span>: <span class="str">"cilium.io/v2"</span>
+<span class="attr">kind</span>: <span class="str">CiliumNetworkPolicy</span>
+<span class="attr">metadata</span>:
+  <span class="attr">name</span>: <span class="str">"kafka-access"</span>
+<span class="attr">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">kafka-broker</span>
+  <span class="attr">ingress</span>:
+  - <span class="attr">fromEndpoints</span>:
+    - <span class="attr">matchLabels</span>:
+        <span class="attr">app</span>: <span class="str">order-service</span>
+    <span class="attr">toPorts</span>:
+    - <span class="attr">ports</span>:
+      - <span class="attr">port</span>: <span class="str">"9092"</span>
+        <span class="attr">protocol</span>: <span class="str">TCP</span>
+      <span class="attr">rules</span>:
+        <span class="attr">kafka</span>:
+        - <span class="attr">apiKey</span>: <span class="str">"produce"</span>
+          <span class="attr">topic</span>: <span class="str">"orders"</span>
+        - <span class="attr">apiKey</span>: <span class="str">"fetch"</span>
+          <span class="attr">topic</span>: <span class="str">"orders"</span></code></pre>
+      <p style="font-size: 13px; color: #999; margin-top: 8px;">The order-service can only produce/consume from the <code>orders</code> topic. Access to other topics is denied.</p>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">gRPC Policy</div>
+      <pre><code><span class="attr">rules</span>:
+  <span class="attr">http</span>:
+  - <span class="attr">method</span>: <span class="str">"POST"</span>
+    <span class="attr">path</span>: <span class="str">"/myservice.UserService/GetUser"</span>
+  - <span class="attr">method</span>: <span class="str">"POST"</span>
+    <span class="attr">path</span>: <span class="str">"/myservice.UserService/ListUsers"</span></code></pre>
+      <p style="font-size: 13px; color: #999; margin-top: 8px;">gRPC uses HTTP/2 — Cilium filters by the gRPC method path. Only <code>GetUser</code> and <code>ListUsers</code> are permitted.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">DNS Policy</div>
+      <pre><code><span class="attr">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">backend</span>
+  <span class="attr">egress</span>:
+  - <span class="attr">toFQDNs</span>:
+    - <span class="attr">matchPattern</span>: <span class="str">"*.amazonaws.com"</span>
+    - <span class="attr">matchName</span>: <span class="str">"api.stripe.com"</span>
+  - <span class="attr">toEndpoints</span>:
+    - <span class="attr">matchLabels</span>:
+        <span class="attr">io.kubernetes.pod.namespace</span>: <span class="str">kube-system</span>
+        <span class="attr">k8s-app</span>: <span class="str">kube-dns</span>
+    <span class="attr">toPorts</span>:
+    - <span class="attr">ports</span>:
+      - <span class="attr">port</span>: <span class="str">"53"</span></code></pre>
+      <p style="font-size: 13px; color: #999; margin-top: 8px;">Backend can only reach AWS APIs and Stripe. DNS queries to kube-dns are explicitly allowed (required for FQDN resolution).</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>How L7 policy works under the hood:</strong> For L3/L4 policy, Cilium uses pure eBPF. For L7 policy, Cilium transparently redirects matching traffic through an Envoy proxy (running as a DaemonSet or per-pod) via eBPF socket redirection. The proxy inspects L7 content and enforces the policy. The key insight: eBPF decides <em>which</em> traffic needs L7 inspection, so only matching flows take the proxy path.
+  </div>
+
+  <!-- ===== IDENTITY-BASED SECURITY ===== -->
+  <h2>Identity-Based Security</h2>
+
+  <p>Traditional network policy works with IP addresses. In Kubernetes, pod IPs are <strong>ephemeral</strong> — they change on every restart, reschedule, or scale event. Cilium solves this by assigning <strong>numeric identities</strong> to pods based on their labels, and enforcing policy on identity rather than IP.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">IP-Based Policy (Calico/iptables)</div>
+      <div class="comp-body">
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div>Pod <code>app=frontend</code> gets IP <code>10.244.1.5</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div>iptables rule: <code>-s 10.244.1.5 -j ACCEPT</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div>Pod restarts, gets IP <code>10.244.2.12</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div>Old rule is stale. New rule must be synced.</div>
+          </div>
+        </div>
+        <div class="warn" style="margin-top: 12px;">
+          <strong>Race condition window:</strong> Between pod IP change and iptables rule update, policy is either too permissive (old IP not blocked) or too restrictive (new IP not allowed). At scale with frequent deployments, this window is non-trivial.
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Identity-Based Policy (Cilium)</div>
+      <div class="comp-body">
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div>Pod <code>app=frontend</code> assigned identity <code>12345</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div>eBPF policy map: <code>identity 12345 -> ALLOW</code></div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div>Pod restarts, gets different IP — <strong>same identity</strong></div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div>Policy still matches. No rule update needed.</div>
+          </div>
+        </div>
+        <div class="tip" style="margin-top: 12px;">
+          <strong>Identity is derived from labels, not IPs.</strong> All pods with the same label set share the same identity. This eliminates the pod-IP-to-policy synchronization problem entirely.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How Cilium Identity Works</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">Pod Created</div>
+        <div class="desc">K8s assigns labels: app=frontend, env=prod</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Identity Allocated</div>
+        <div class="desc">cilium-agent hashes labels -> numeric ID (e.g. 12345)</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">Identity Stamped</div>
+        <div class="desc">Outgoing packets carry identity in VXLAN/Geneve header or WireGuard metadata</div>
+      </div>
+      <div class="arrow">-></div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">Policy Enforced</div>
+        <div class="desc">Receiving node's eBPF matches on identity, not IP</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ # View identity assignments</div>
+    <div class="prompt">$ cilium identity list</div>
+    <div class="output">ID       LABELS</div>
+    <div class="output">12345    k8s:app=frontend k8s:env=prod</div>
+    <div class="output">12346    k8s:app=api-server k8s:env=prod</div>
+    <div class="output">12347    k8s:app=redis k8s:env=prod</div>
+    <br>
+    <div class="prompt">$ # View per-endpoint eBPF policy</div>
+    <div class="prompt">$ cilium bpf policy get 1234</div>
+    <div class="output">IDENTITY   DIRECTION   PORT/PROTO   ACTION</div>
+    <div class="output">12345      ingress     80/TCP       allow</div>
+    <div class="output">12346      ingress     80/TCP       allow</div>
+    <div class="output">0          ingress     0/ANY        deny</div>
+  </div>
+
+  <!-- ===== HUBBLE ===== -->
+  <h2>Hubble: eBPF-Powered Observability</h2>
+
+  <p>Hubble is Cilium's <strong>built-in network observability layer</strong>. Because Cilium's eBPF programs already see every packet at tc-bpf and XDP hook points, Hubble can extract flow metadata <em>without</em> injecting sidecar proxies or tapping interfaces. Zero additional overhead for flow visibility.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">What Hubble Sees</div>
+      <ul>
+        <li><strong>Flow logs</strong> — source/destination pod, namespace, identity, IP, port, protocol, verdict (forwarded/dropped/redirected)</li>
+        <li><strong>L7 visibility</strong> — HTTP request/response (method, path, status code, latency), DNS queries/responses, Kafka operations</li>
+        <li><strong>Drop reasons</strong> — policy denied, conntrack invalid, TTL exceeded, etc.</li>
+        <li><strong>Service dependency map</strong> — which services talk to which, auto-discovered from flows</li>
+        <li><strong>DNS resolution</strong> — which pods resolve which domains, response IPs, TTLs</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">How It's Different from Sidecar Observability</div>
+      <ul>
+        <li><strong>No sidecar injection</strong> — runs at the node level in eBPF, not per pod</li>
+        <li><strong>No extra containers</strong> — no Envoy/Linkerd proxy per pod consuming CPU/RAM</li>
+        <li><strong>Sees all traffic</strong> — including traffic between pods on the same node (sidecar misses this if using <code>localhost</code>)</li>
+        <li><strong>No application changes</strong> — no library instrumentation needed</li>
+        <li><strong>Low overhead</strong> — eBPF event ring buffer, not packet copying</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ # Watch live flows</div>
+    <div class="prompt">$ hubble observe --namespace production</div>
+    <div class="output">TIMESTAMP              SOURCE                      DESTINATION                 TYPE      VERDICT</div>
+    <div class="output">Mar 31 10:23:45.123    production/frontend-7b4c     production/api-server-3d2    L4/TCP    FORWARDED</div>
+    <div class="output">Mar 31 10:23:45.125    production/api-server-3d2    production/redis-5a1f        L4/TCP    FORWARDED</div>
+    <div class="output">Mar 31 10:23:45.200    production/api-server-3d2    kube-system/coredns-6d4      L4/UDP    FORWARDED</div>
+    <div class="output">Mar 31 10:23:46.001    production/unknown-pod-x     production/api-server-3d2    L4/TCP    DROPPED (policy denied)</div>
+    <br>
+    <div class="prompt">$ # Filter by drop verdict</div>
+    <div class="prompt">$ hubble observe --verdict DROPPED --namespace production</div>
+    <div class="output">Mar 31 10:23:46.001    production/unknown-pod-x     production/api-server-3d2    DROPPED (Policy denied)</div>
+    <br>
+    <div class="prompt">$ # HTTP-level flows</div>
+    <div class="prompt">$ hubble observe --protocol http --namespace production</div>
+    <div class="output">Mar 31 10:23:45.124    production/frontend-7b4c -> production/api-server-3d2</div>
+    <div class="output">  HTTP/1.1 GET /api/v1/products -> 200 OK (12ms)</div>
+    <br>
+    <div class="prompt">$ # DNS flows</div>
+    <div class="prompt">$ hubble observe --protocol dns</div>
+    <div class="output">Mar 31 10:23:45.200    production/api-server-3d2 -> kube-system/coredns-6d4</div>
+    <div class="output">  DNS Query A api.stripe.com -> 104.16.0.1, 104.16.0.2 (TTL: 300)</div>
+  </div>
+
+  <div class="tip">
+    <strong>Hubble UI</strong> provides a graphical service dependency map — a live topology view of which services communicate, with flow rates, error rates, and latency percentiles. Deploy it with <code>cilium hubble enable --ui</code>.
+  </div>
+
+  <!-- ===== SIDECAR-FREE SERVICE MESH ===== -->
+  <h2>Cilium Service Mesh (Sidecar-Free)</h2>
+
+  <p>Traditional service meshes (Istio, Linkerd) inject a <strong>sidecar proxy</strong> (usually Envoy) into every pod. This adds 2 extra containers per pod (init + sidecar), consumes significant CPU/memory, and adds latency to every request. Cilium offers a <strong>sidecar-free service mesh</strong> using eBPF.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Traditional Service Mesh (Istio/Linkerd)</div>
+      <div class="comp-body">
+        <div class="topology" style="flex-direction: column; gap: 10px; padding: 15px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;">
+            <div class="topo-node host">
+              <div class="topo-label">App Container</div>
+            </div>
+            <div class="topo-link">&lt;-&gt;</div>
+            <div class="topo-node firewall">
+              <div class="topo-label">Envoy Sidecar</div>
+              <div class="topo-detail">mTLS, routing, metrics</div>
+            </div>
+            <div class="topo-link">&lt;-&gt;</div>
+            <div class="topo-node firewall">
+              <div class="topo-label">Envoy Sidecar</div>
+              <div class="topo-detail">(remote pod)</div>
+            </div>
+            <div class="topo-link">&lt;-&gt;</div>
+            <div class="topo-node host">
+              <div class="topo-label">App Container</div>
+            </div>
+          </div>
+        </div>
+        <ul>
+          <li><strong>2 extra containers</strong> per pod (init-container + sidecar)</li>
+          <li><strong>~50-100MB RAM</strong> per sidecar Envoy instance</li>
+          <li><strong>~0.5-2ms latency added</strong> per hop (iptables redirect + proxy)</li>
+          <li>Requires sidecar injection (mutating webhook)</li>
+          <li>Difficult to debug (traffic flows through proxy transparently)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Cilium Service Mesh (eBPF)</div>
+      <div class="comp-body">
+        <div class="topology" style="flex-direction: column; gap: 10px; padding: 15px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;">
+            <div class="topo-node host">
+              <div class="topo-label">App Container</div>
+            </div>
+            <div class="topo-link">&lt;-&gt;</div>
+            <div class="topo-node router" style="border-color: #a78bfa;">
+              <div class="topo-label">eBPF (kernel)</div>
+              <div class="topo-detail">mTLS, routing, metrics</div>
+            </div>
+            <div class="topo-link">&lt;-&gt;</div>
+            <div class="topo-node host">
+              <div class="topo-label">App Container</div>
+            </div>
+          </div>
+        </div>
+        <ul>
+          <li><strong>No sidecar containers</strong> — eBPF programs run per-node, not per-pod</li>
+          <li><strong>Near-zero memory overhead</strong> per pod (shared node-level eBPF programs)</li>
+          <li><strong>Lower latency</strong> — kernel-level processing, no userspace proxy hop for L3/L4</li>
+          <li>No injection webhooks — works with any pod, including system pods</li>
+          <li>Transparent — Hubble gives full visibility into eBPF-handled traffic</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What Cilium's Service Mesh Handles</div>
+    <table>
+      <tr>
+        <th>Feature</th>
+        <th>Implementation</th>
+        <th>Where It Runs</th>
+      </tr>
+      <tr>
+        <td>mTLS (mutual TLS)</td>
+        <td>WireGuard-based or SPIFFE/SPIRE</td>
+        <td>Kernel (WireGuard) or per-node Envoy</td>
+      </tr>
+      <tr>
+        <td>L4 load balancing</td>
+        <td>eBPF hash maps (Maglev)</td>
+        <td>Kernel (tc-bpf / XDP)</td>
+      </tr>
+      <tr>
+        <td>L7 traffic management</td>
+        <td>Per-node Envoy proxy (not per-pod sidecar)</td>
+        <td>Userspace Envoy, invoked via eBPF redirect</td>
+      </tr>
+      <tr>
+        <td>Retries, timeouts, circuit breaking</td>
+        <td>Per-node Envoy proxy</td>
+        <td>Userspace Envoy (L7 features only)</td>
+      </tr>
+      <tr>
+        <td>Observability (metrics, traces)</td>
+        <td>Hubble (eBPF ring buffer)</td>
+        <td>Kernel</td>
+      </tr>
+      <tr>
+        <td>Canary/traffic splitting</td>
+        <td>CiliumEnvoyConfig CRD</td>
+        <td>Per-node Envoy</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Cilium still uses Envoy for L7.</strong> The key difference is <em>where</em> it runs: one shared Envoy per node (DaemonSet) instead of one Envoy per pod (sidecar). eBPF handles all L3/L4 work natively in the kernel. Only traffic that needs L7 inspection (HTTP routing, retries, etc.) is redirected to the per-node Envoy via eBPF socket redirection. Most production traffic is L4 and never touches Envoy at all.
+  </div>
+
+  <!-- ===== WHY CILIUM IS WINNING ===== -->
+  <h2>Why Cilium Is Winning Over Calico/iptables-Based CNIs</h2>
+
+  <table>
+    <tr>
+      <th>Dimension</th>
+      <th>Calico (iptables mode)</th>
+      <th>Cilium (eBPF)</th>
+    </tr>
+    <tr>
+      <td><strong>Data plane</strong></td>
+      <td>iptables rules (O(n) per packet)</td>
+      <td>eBPF programs + hash maps (O(1))</td>
+    </tr>
+    <tr>
+      <td><strong>Service load balancing</strong></td>
+      <td>Relies on kube-proxy/iptables</td>
+      <td>Native eBPF replacement for kube-proxy</td>
+    </tr>
+    <tr>
+      <td><strong>Network policy</strong></td>
+      <td>L3/L4 only (standard K8s NetworkPolicy)</td>
+      <td>L3/L4/L7 (HTTP, gRPC, Kafka, DNS)</td>
+    </tr>
+    <tr>
+      <td><strong>Observability</strong></td>
+      <td>External tools needed (Prometheus + custom exporters)</td>
+      <td>Built-in Hubble (flow logs, service maps, L7 visibility)</td>
+    </tr>
+    <tr>
+      <td><strong>Service mesh</strong></td>
+      <td>Requires separate mesh (Istio/Linkerd)</td>
+      <td>Built-in sidecar-free service mesh</td>
+    </tr>
+    <tr>
+      <td><strong>Scale</strong></td>
+      <td>Degrades with rule count (10K+ services problematic)</td>
+      <td>Constant performance regardless of scale</td>
+    </tr>
+    <tr>
+      <td><strong>Encryption</strong></td>
+      <td>WireGuard (separate config)</td>
+      <td>Native WireGuard integration, transparent</td>
+    </tr>
+    <tr>
+      <td><strong>Multi-cluster</strong></td>
+      <td>Third-party federation</td>
+      <td>ClusterMesh — native multi-cluster connectivity</td>
+    </tr>
+    <tr>
+      <td><strong>CNCF status</strong></td>
+      <td>CNCF project (Calico Open Source)</td>
+      <td>CNCF Graduated (strong governance and community)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Calico also supports eBPF now.</strong> Calico added an eBPF data plane mode that can replace its iptables mode. However, Cilium was purpose-built for eBPF from the ground up, with deeper integration (L7 policy, Hubble, service mesh). Calico's eBPF mode is catching up but lacks the L7 capabilities and integrated observability.
+  </div>
+
+  <!-- ===== DEBUGGING TOOLS ===== -->
+  <h2>Debugging Tools</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">bpftool — eBPF Inspection</div>
+      <div class="terminal">
+        <div class="prompt">$ # List all loaded eBPF programs</div>
+        <div class="prompt">$ bpftool prog list</div>
+        <div class="output">6: sched_cls  name cil_from_cont  tag a1b2c3  gpl</div>
+        <div class="output">    loaded_at 2024-01-15  uid 0</div>
+        <div class="output">    xlated 4096B  jited 2480B  memlock 8192B</div>
+        <div class="output">    map_ids 4,5,6,7</div>
+        <br>
+        <div class="prompt">$ # Dump an eBPF map's contents</div>
+        <div class="prompt">$ bpftool map dump id 4</div>
+        <div class="output">key: 0a f4 01 05  value: 00 00 30 39</div>
+        <div class="output"># (10.244.1.5 -> identity 12345)</div>
+        <br>
+        <div class="prompt">$ # Show program stats</div>
+        <div class="prompt">$ bpftool prog show id 6 --json | jq</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">bpftrace — Dynamic Tracing</div>
+      <div class="terminal">
+        <div class="prompt">$ # Trace XDP actions on eth0</div>
+        <div class="prompt">$ bpftrace -e '</div>
+        <div class="prompt">  tracepoint:xdp:xdp_redirect {</div>
+        <div class="prompt">    @actions[args->act] = count();</div>
+        <div class="prompt">  }'</div>
+        <div class="output">@actions[2]: 15234   # XDP_PASS</div>
+        <div class="output">@actions[1]: 8921    # XDP_DROP</div>
+        <div class="output">@actions[4]: 3417    # XDP_REDIRECT</div>
+        <br>
+        <div class="prompt">$ # Histogram of packet sizes</div>
+        <div class="prompt">$ bpftrace -e '</div>
+        <div class="prompt">  kprobe:netif_receive_skb {</div>
+        <div class="prompt">    @bytes = hist(((struct sk_buff *)arg0)->len);</div>
+        <div class="prompt">  }'</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Cilium CLI — Cluster Diagnostics</div>
+    <div class="terminal">
+      <div class="prompt">$ # Overall Cilium health status</div>
+      <div class="prompt">$ cilium status</div>
+      <div class="output">    /¯¯\</div>
+      <div class="output"> /¯¯\__/¯¯\    Cilium:          OK</div>
+      <div class="output"> \__/¯¯\__/    Operator:        OK</div>
+      <div class="output"> /¯¯\__/¯¯\    Hubble:          OK</div>
+      <div class="output"> \__/¯¯\__/    ClusterMesh:     disabled</div>
+      <div class="output">    \__/</div>
+      <div class="output">KubeProxyReplacement:    True</div>
+      <div class="output">Encryption:              Wireguard</div>
+      <br>
+      <div class="prompt">$ # List endpoints and their identity/policy status</div>
+      <div class="prompt">$ cilium endpoint list</div>
+      <div class="output">ENDPOINT   POLICY (ingress)   POLICY (egress)   IDENTITY   LABELS</div>
+      <div class="output">1234       Enabled            Enabled           12345      k8s:app=frontend</div>
+      <div class="output">1235       Enabled            Enabled           12346      k8s:app=api-server</div>
+      <br>
+      <div class="prompt">$ # Inspect eBPF CT (conntrack) table</div>
+      <div class="prompt">$ cilium bpf ct list global</div>
+      <div class="output">TCP IN  10.244.1.5:45321 -> 10.96.0.10:53  expires=300 rx_packets=2 tx_packets=2</div>
+      <div class="output">TCP IN  10.244.1.5:52100 -> 10.244.2.8:80  expires=120 rx_packets=45 tx_packets=38</div>
+      <br>
+      <div class="prompt">$ # Run connectivity test</div>
+      <div class="prompt">$ cilium connectivity test</div>
+      <div class="output">✅  All 46 tests (172 actions) successful, 0 tests skipped, 0 scenarios skipped.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Essential Debugging Commands Quick Reference</div>
+    <table>
+      <tr>
+        <th>Task</th>
+        <th>Command</th>
+      </tr>
+      <tr>
+        <td>List loaded eBPF programs</td>
+        <td><code>bpftool prog list</code></td>
+      </tr>
+      <tr>
+        <td>Dump eBPF map contents</td>
+        <td><code>bpftool map dump id &lt;ID&gt;</code></td>
+      </tr>
+      <tr>
+        <td>Dynamic kernel tracing</td>
+        <td><code>bpftrace -e 'tracepoint:... { ... }'</code></td>
+      </tr>
+      <tr>
+        <td>Cilium cluster health</td>
+        <td><code>cilium status</code></td>
+      </tr>
+      <tr>
+        <td>List Cilium endpoints</td>
+        <td><code>cilium endpoint list</code></td>
+      </tr>
+      <tr>
+        <td>View eBPF service table</td>
+        <td><code>cilium bpf lb list</code></td>
+      </tr>
+      <tr>
+        <td>View eBPF conntrack table</td>
+        <td><code>cilium bpf ct list global</code></td>
+      </tr>
+      <tr>
+        <td>View eBPF policy maps</td>
+        <td><code>cilium bpf policy get &lt;endpoint-id&gt;</code></td>
+      </tr>
+      <tr>
+        <td>Observe live flows</td>
+        <td><code>hubble observe --namespace &lt;ns&gt;</code></td>
+      </tr>
+      <tr>
+        <td>View dropped flows</td>
+        <td><code>hubble observe --verdict DROPPED</code></td>
+      </tr>
+      <tr>
+        <td>End-to-end connectivity test</td>
+        <td><code>cilium connectivity test</code></td>
+      </tr>
+      <tr>
+        <td>Monitor eBPF events (debug)</td>
+        <td><code>cilium monitor --type drop</code></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ===== ARCHITECTURE OVERVIEW ===== -->
+  <h2>Cilium Architecture Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">Node-Level Architecture</div>
+    <div class="topology">
+      <div class="topo-node cloud">
+        <div class="topo-label">K8s API Server</div>
+        <div class="topo-detail">Services, Endpoints, Policies</div>
+      </div>
+      <div class="topo-link">watches</div>
+      <div class="topo-node server">
+        <div class="topo-label">cilium-agent</div>
+        <div class="topo-detail">DaemonSet, per node</div>
+      </div>
+      <div class="topo-link">loads</div>
+      <div class="topo-node router" style="border-color: #a78bfa;">
+        <div class="topo-label">eBPF Programs</div>
+        <div class="topo-detail">XDP, tc-bpf, cgroup-bpf</div>
+      </div>
+      <div class="topo-link">configures via</div>
+      <div class="topo-node switch">
+        <div class="topo-label">eBPF Maps</div>
+        <div class="topo-detail">Services, Policy, CT, NAT</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">K8s Event</div>
+      <div class="desc">Service created, NetworkPolicy applied, pod scheduled</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">cilium-agent</div>
+      <div class="desc">Translates K8s objects into eBPF map entries</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">eBPF Maps Updated</div>
+      <div class="desc">Atomic per-entry updates, no traffic interruption</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">eBPF Programs</div>
+      <div class="desc">Read maps at packet time — new policy effective immediately</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Kernel version matters.</strong> Cilium requires Linux 4.19.57+ (minimum), but many features need 5.4+ or 5.10+ (kube-proxy replacement, WireGuard, BPF LSM). Always check the <a href="https://docs.cilium.io/en/stable/operations/system_requirements/">Cilium system requirements</a> for your target kernel.
+  </div>
+
+</body>
+</html>

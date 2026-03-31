@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 06 — mTLS & Certificate Management</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 06 — mTLS & Certificate Management</h1>
+  <p class="subtitle">Mutual authentication and practical certificate operations</p>
+
+  <!-- ===== mTLS Concept ===== -->
+  <h2>mTLS — Mutual TLS Authentication</h2>
+
+  <p>In standard TLS, only the <strong>server</strong> authenticates itself to the client by presenting a certificate. The client verifies the server's identity, but the server has no cryptographic proof of who the client is. <strong>mTLS (Mutual TLS)</strong> extends this so that both sides present and verify certificates.</p>
+
+  <h3>Standard TLS vs mTLS</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Standard TLS</div>
+      <div class="comp-body">
+        <ul>
+          <li>Server presents certificate</li>
+          <li>Client verifies server identity</li>
+          <li>Client is <strong>anonymous</strong> at the TLS layer</li>
+          <li>Client authentication happens at the application layer (cookies, tokens, API keys)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">mTLS (Mutual TLS)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Server presents certificate</li>
+          <li>Client verifies server identity</li>
+          <li>Server requests client certificate (<code>CertificateRequest</code>)</li>
+          <li>Client presents certificate</li>
+          <li>Server verifies client identity</li>
+          <li><strong>Both sides are cryptographically authenticated</strong></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>mTLS Handshake</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ClientHello (cipher suites, key_share, SNI)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ServerHello + key_share</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">{EncryptedExts + CertificateRequest + ServerCert + Finished}</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">{ClientCert + CertificateVerify + Finished}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Difference from Standard TLS</div>
+    <p>The server sends a <code>CertificateRequest</code> message in its handshake flight, telling the client "I need you to prove your identity with a certificate." The client responds with its certificate and a <code>CertificateVerify</code> message — a signature over the handshake transcript using the client's private key. The server validates the client certificate against its configured CA trust bundle.</p>
+  </div>
+
+  <!-- ===== Use Cases ===== -->
+  <h2>mTLS Use Cases</h2>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Zero-Trust Service Mesh</div>
+      <p>In zero-trust architectures, <strong>every</strong> service-to-service call is authenticated and encrypted. No implicit trust based on network location. mTLS provides identity at the transport layer — you don't just know "something on 10.0.3.42 called me," you know "the payment-service with certificate CN=payment.prod.svc called me."</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Kubernetes Service Meshes</div>
+      <p><strong>Istio</strong> and <strong>Linkerd</strong> inject sidecar proxies (Envoy for Istio, linkerd2-proxy for Linkerd) that transparently handle mTLS between services. The application code doesn't need to manage certificates — the mesh control plane automates certificate issuance, rotation, and distribution.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">API Authentication</div>
+      <p>mTLS is <strong>stronger than API keys or bearer tokens</strong>. An API key can be stolen and replayed from anywhere. A client certificate requires possession of the private key, which never leaves the client. Banks, payment processors, and cloud providers use mTLS for partner API authentication.</p>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Istio mTLS modes:</strong> Istio supports <code>STRICT</code> (only mTLS connections accepted — plaintext is rejected), <code>PERMISSIVE</code> (accepts both mTLS and plaintext — useful during migration), and <code>DISABLE</code>. Always aim for STRICT in production. PERMISSIVE is a migration aid, not a steady state.
+  </div>
+
+  <h3>mTLS in a K8s Service Mesh (Istio)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Service A Pod</div>
+      <div class="desc">App sends plaintext<br>to localhost (sidecar)</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Envoy Sidecar A</div>
+      <div class="desc">Intercepts traffic<br>Initiates mTLS</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Envoy Sidecar B</div>
+      <div class="desc">Terminates mTLS<br>Verifies client cert</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Service B Pod</div>
+      <div class="desc">Receives plaintext<br>from sidecar</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>SPIFFE:</strong> Istio uses SPIFFE (Secure Production Identity Framework for Everyone) identities. Each workload gets a SVID (SPIFFE Verifiable Identity Document) — an X.509 certificate with a SPIFFE ID as the SAN URI, e.g., <code>spiffe://cluster.local/ns/default/sa/payment-service</code>. This gives every pod a cryptographic identity tied to its K8s service account.
+  </div>
+
+  <!-- ===== Let's Encrypt & ACME ===== -->
+  <h2>Let's Encrypt & the ACME Protocol</h2>
+
+  <p>Before Let's Encrypt (2016), obtaining TLS certificates required paying a CA, manually generating CSRs, and going through a validation process. Let's Encrypt automated the entire flow using the <strong>ACME (Automatic Certificate Management Environment)</strong> protocol (RFC 8555).</p>
+
+  <h3>ACME Challenge Types</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Challenge</th>
+        <th>Mechanism</th>
+        <th>Pros</th>
+        <th>Cons</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>HTTP-01</code></td>
+        <td>ACME server fetches <code>http://&lt;domain&gt;/.well-known/acme-challenge/&lt;token&gt;</code></td>
+        <td>Simple, no DNS access needed</td>
+        <td>Requires port 80 open, doesn't work for wildcards, doesn't work behind CDNs that cache</td>
+      </tr>
+      <tr>
+        <td><code>DNS-01</code></td>
+        <td>Create a TXT record: <code>_acme-challenge.&lt;domain&gt;</code> with a specific value</td>
+        <td>Works for <strong>wildcards</strong>, no HTTP server needed, works from private networks</td>
+        <td>Requires DNS API access, propagation delay</td>
+      </tr>
+      <tr>
+        <td><code>TLS-ALPN-01</code></td>
+        <td>Serve a self-signed cert with an ACME-specific ALPN extension on port 443</td>
+        <td>Works when only port 443 is available (no port 80), no DNS access needed</td>
+        <td>More complex setup, limited tooling support</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>DNS-01 is the power move.</strong> It's the only challenge that supports wildcard certificates (<code>*.example.com</code>). It works even if your server isn't publicly reachable. And it integrates cleanly with infrastructure-as-code: Terraform/Pulumi can create the DNS record, certbot or cert-manager verifies it, and the cert is issued. The tradeoff is that you need programmatic DNS access (Route53, CloudFlare, Google Cloud DNS, etc.).
+  </div>
+
+  <h3>ACME Flow (HTTP-01)</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client (certbot)</div>
+      <div class="seq-entity">ACME Server (LE)</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">POST /acme/new-order (domain: example.com)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Order created + authorization URL</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /acme/authz (fetch challenge)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">HTTP-01 challenge: token + thumbprint</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">POST /acme/challenge (ready)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Validates http://example.com/.well-known/acme-challenge/...</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">POST /acme/finalize (send CSR)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Certificate issued (download URL)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== cert-manager ===== -->
+  <h2>cert-manager in Kubernetes</h2>
+
+  <p><strong>cert-manager</strong> is the de-facto standard for automated certificate management in Kubernetes. It watches for Certificate resources, obtains certificates from configured issuers, stores them as Secrets, and handles automatic renewal.</p>
+
+  <h3>Key Resources</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Resource</th>
+        <th>Scope</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>Issuer</code></td>
+        <td>Namespace</td>
+        <td>Defines <em>how</em> to obtain certificates. References a CA (ACME, Vault, self-signed, CA key pair).</td>
+      </tr>
+      <tr>
+        <td><code>ClusterIssuer</code></td>
+        <td>Cluster-wide</td>
+        <td>Same as Issuer but available across all namespaces. Typically used for Let's Encrypt.</td>
+      </tr>
+      <tr>
+        <td><code>Certificate</code></td>
+        <td>Namespace</td>
+        <td>Declares the desired certificate (domain, issuer, secret name). cert-manager creates/renews it.</td>
+      </tr>
+      <tr>
+        <td><code>CertificateRequest</code></td>
+        <td>Namespace</td>
+        <td>Internal resource — represents a single issuance request to the issuer.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>cert-manager with Let's Encrypt (DNS-01)</h3>
+
+  <pre><code><span class="cm"># ClusterIssuer for Let's Encrypt production</span>
+<span class="kw">apiVersion</span>: <span class="val">cert-manager.io/v1</span>
+<span class="kw">kind</span>: <span class="val">ClusterIssuer</span>
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="val">letsencrypt-prod</span>
+<span class="kw">spec</span>:
+  <span class="kw">acme</span>:
+    <span class="attr">server</span>: <span class="str">https://acme-v02.api.letsencrypt.org/directory</span>
+    <span class="attr">email</span>: <span class="str">ops@example.com</span>
+    <span class="attr">privateKeySecretRef</span>:
+      <span class="attr">name</span>: <span class="val">letsencrypt-prod-account-key</span>
+    <span class="kw">solvers</span>:
+    - <span class="kw">dns01</span>:
+        <span class="kw">route53</span>:
+          <span class="attr">region</span>: <span class="val">us-east-1</span>
+          <span class="attr">hostedZoneID</span>: <span class="val">Z2ABCDEF123456</span></code></pre>
+
+  <pre><code><span class="cm"># Certificate resource — cert-manager handles the rest</span>
+<span class="kw">apiVersion</span>: <span class="val">cert-manager.io/v1</span>
+<span class="kw">kind</span>: <span class="val">Certificate</span>
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="val">api-tls</span>
+  <span class="attr">namespace</span>: <span class="val">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">secretName</span>: <span class="val">api-tls-secret</span>          <span class="cm"># K8s Secret with tls.crt + tls.key</span>
+  <span class="attr">issuerRef</span>:
+    <span class="attr">name</span>: <span class="val">letsencrypt-prod</span>
+    <span class="attr">kind</span>: <span class="val">ClusterIssuer</span>
+  <span class="attr">dnsNames</span>:
+  - <span class="str">api.example.com</span>
+  - <span class="str">"*.api.example.com"</span>             <span class="cm"># Wildcard — requires DNS-01</span>
+  <span class="attr">renewBefore</span>: <span class="val">720h</span>                  <span class="cm"># Renew 30 days before expiry</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">cert-manager Issuers</div>
+    <div class="grid-3">
+      <div class="panel">
+        <div class="panel-title">ACME (Let's Encrypt)</div>
+        <p>Automated via HTTP-01 or DNS-01 challenges. Free. 90-day certs. The most common issuer for public-facing services.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">HashiCorp Vault</div>
+        <p>Vault's PKI secrets engine acts as a private CA. Perfect for internal mTLS certs. Supports short-lived certs (hours/days) with automatic rotation.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Self-Signed / CA</div>
+        <p>For dev/test environments or bootstrapping. <code>SelfSigned</code> issuer generates a self-signed CA, then a <code>CA</code> issuer uses that CA to sign certs. Not for production public-facing services.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Ingress integration:</strong> cert-manager integrates with Ingress resources via annotations. Adding <code>cert-manager.io/cluster-issuer: letsencrypt-prod</code> to an Ingress automatically triggers certificate issuance for the Ingress's <code>tls.hosts</code>. No separate Certificate resource needed.
+  </div>
+
+  <!-- ===== Short-Lived Certificates ===== -->
+  <h2>Short-Lived Certificates</h2>
+
+  <p>Traditional certificates have long lifetimes — 1-2 years (now capped at 398 days for public CAs). Short-lived certificates last <strong>hours to days</strong>. This is a paradigm shift with significant security benefits.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Long-Lived Certificates (Days-Years)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Compromised key is usable for months</li>
+          <li>Revocation is required but unreliable:
+            <ul>
+              <li>CRLs are often cached and not checked</li>
+              <li>OCSP adds latency; some clients soft-fail</li>
+              <li>Revocation propagation is not instantaneous</li>
+            </ul>
+          </li>
+          <li>Manual renewal = operational risk (expired certs = outage)</li>
+          <li>Large blast radius on compromise</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Short-Lived Certificates (Hours-Days)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Compromised key is usable for hours at most</li>
+          <li><strong>No revocation needed</strong> — the cert expires before revocation infrastructure could react anyway</li>
+          <li>Automated renewal is mandatory (forces good practices)</li>
+          <li>Small blast radius — exposure window is tiny</li>
+          <li>Istio/Linkerd issue certs with 24h lifetime by default</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Prerequisite:</strong> Short-lived certificates require robust automation. If your renewal pipeline breaks, you have hours (not months) before everything fails. This is why tools like cert-manager, Istio's citadel, and Vault's PKI engine are critical — they handle the entire lifecycle automatically.
+  </div>
+
+  <div class="tip">
+    <strong>Industry trend:</strong> Apple, Google, and Mozilla have been pushing for shorter certificate lifetimes for public CAs. As of 2025, the CA/Browser Forum is moving toward 90-day maximum lifetimes (matching Let's Encrypt's existing practice), with a path toward even shorter (47-day and eventually 10-day) certificates. Automation is no longer optional — it's table stakes.
+  </div>
+
+  <!-- ===== OpenSSL CLI ===== -->
+  <h2>OpenSSL CLI — Essential Commands</h2>
+
+  <p>OpenSSL is the Swiss Army knife for certificate operations. These are the commands you'll use regularly in production.</p>
+
+  <h3>Inspect a Certificate</h3>
+
+  <div class="terminal">
+    <div class="prompt">$ openssl x509 -in cert.pem -text -noout</div>
+    <div class="output">
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            04:a1:b2:c3:d4:e5:f6:07:08:09:0a:0b:0c:0d:0e:0f
+        Signature Algorithm: ecdsa-with-SHA384
+        Issuer: C=US, O=Let's Encrypt, CN=R3
+        Validity
+            Not Before: Mar  1 00:00:00 2026 GMT
+            Not After : May 30 00:00:00 2026 GMT
+        Subject: CN=api.example.com
+        Subject Public Key Info:
+            Public Key Algorithm: id-ecPublicKey
+                Public-Key: (256 bit)
+        X509v3 extensions:
+            X509v3 Subject Alternative Name:
+                DNS:api.example.com, DNS:*.api.example.com
+            X509v3 Key Usage: critical
+                Digital Signature
+            X509v3 Extended Key Usage:
+                TLS Web Server Authentication
+            X509v3 Basic Constraints: critical
+                CA:FALSE
+            Authority Information Access:
+                OCSP - URI:http://r3.o.lencr.org
+                CA Issuers - URI:http://r3.i.lencr.org/
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Key flags:</strong> <code>-text</code> outputs human-readable details. <code>-noout</code> suppresses the PEM-encoded cert output. Add <code>-dates</code> instead of <code>-text</code> to see only validity dates. Add <code>-subject</code> or <code>-issuer</code> for quick checks.
+  </div>
+
+  <h3>Verify a Certificate Chain</h3>
+
+  <div class="terminal">
+    <div class="prompt">$ openssl verify -CAfile ca-bundle.pem -untrusted intermediate.pem cert.pem</div>
+    <div class="output">cert.pem: OK</div>
+  </div>
+
+  <pre><code><span class="cm"># -CAfile    → trusted root CA(s)</span>
+<span class="cm"># -untrusted → intermediate CA(s) (not in trust store but part of the chain)</span>
+<span class="cm"># Last arg   → the end-entity certificate to verify</span>
+
+<span class="cm"># Common failure modes:</span>
+<span class="cm"># "unable to get local issuer certificate" → missing intermediate in the chain</span>
+<span class="cm"># "certificate has expired" → self-explanatory</span>
+<span class="cm"># "self signed certificate in certificate chain" → CA not in trust store</span></code></pre>
+
+  <h3>Test a TLS Connection</h3>
+
+  <div class="terminal">
+    <div class="prompt">$ openssl s_client -connect api.example.com:443 -servername api.example.com</div>
+    <div class="output">
+CONNECTED(00000003)
+depth=2 C=US, O=Internet Security Research Group, CN=ISRG Root X1
+verify return:1
+depth=1 C=US, O=Let's Encrypt, CN=R3
+verify return:1
+depth=0 CN=api.example.com
+verify return:1
+---
+Certificate chain
+ 0 s:CN=api.example.com
+   i:C=US, O=Let's Encrypt, CN=R3
+ 1 s:C=US, O=Let's Encrypt, CN=R3
+   i:C=US, O=Internet Security Research Group, CN=ISRG Root X1
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+MIIFLTCCBBWgAwIBAgISA...
+-----END CERTIFICATE-----
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: ECDSA
+Server Temp Key: X25519, 253 bits
+---
+SSL handshake has read 3421 bytes and written 373 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol  : TLSv1.3
+Cipher    : TLS_AES_256_GCM_SHA384
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What to look for in s_client output</div>
+    <ul>
+      <li><strong>Certificate chain:</strong> Should show end-entity + intermediates. Missing intermediates cause "unable to verify" errors in clients.</li>
+      <li><strong>Verification: OK</strong> — chain validates against the system trust store.</li>
+      <li><strong>Protocol / Cipher:</strong> Confirm TLS 1.3 and a strong cipher suite.</li>
+      <li><strong>Server Temp Key:</strong> Should show X25519 or P-256 (ECDHE — forward secrecy).</li>
+      <li><strong>"No client certificate CA names sent"</strong> — means the server is NOT requesting mTLS. If it is, you'll see the list of acceptable CAs.</li>
+      <li><strong><code>-servername</code> flag:</strong> Sets the SNI field. Required for virtual-hosted servers to return the correct cert.</li>
+    </ul>
+  </div>
+
+  <h3>Generate a Self-Signed Certificate</h3>
+
+  <div class="terminal">
+    <div class="prompt">$ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=localhost" -nodes</div>
+    <div class="output">
+Generating a RSA private key
+........++++
+.............................++++
+writing new private key to 'key.pem'
+-----
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># -x509      → output a self-signed certificate (not a CSR)</span>
+<span class="cm"># -newkey     → generate a new private key (rsa:4096 = RSA with 4096-bit key)</span>
+<span class="cm"># -keyout     → where to write the private key</span>
+<span class="cm"># -out        → where to write the certificate</span>
+<span class="cm"># -days 365   → validity period</span>
+<span class="cm"># -subj       → subject DN (skip interactive prompts)</span>
+<span class="cm"># -nodes      → no DES — don't encrypt the private key (no passphrase)</span>
+
+<span class="cm"># For ECDSA instead of RSA (smaller, faster):</span>
+<span class="fn">openssl req</span> <span class="kw">-x509</span> <span class="kw">-newkey</span> <span class="val">ec</span> <span class="kw">-pkeyopt</span> <span class="val">ec_paramgen_curve:prime256v1</span> \
+  <span class="kw">-keyout</span> <span class="val">key.pem</span> <span class="kw">-out</span> <span class="val">cert.pem</span> <span class="kw">-days</span> <span class="num">365</span> <span class="kw">-subj</span> <span class="str">"/CN=localhost"</span> <span class="kw">-nodes</span></code></pre>
+
+  <h3>Generate a CSR (Certificate Signing Request)</h3>
+
+  <div class="terminal">
+    <div class="prompt">$ openssl req -new -newkey rsa:4096 -keyout key.pem -out csr.pem \
+  -subj "/CN=api.example.com" -nodes</div>
+    <div class="output">
+Generating a RSA private key
+........++++
+writing new private key to 'key.pem'
+-----
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># Inspect a CSR:</span>
+<span class="fn">openssl req</span> <span class="kw">-in</span> <span class="val">csr.pem</span> <span class="kw">-text</span> <span class="kw">-noout</span>
+
+<span class="cm"># Sign a CSR with your CA:</span>
+<span class="fn">openssl x509</span> <span class="kw">-req</span> <span class="kw">-in</span> <span class="val">csr.pem</span> <span class="kw">-CA</span> <span class="val">ca-cert.pem</span> <span class="kw">-CAkey</span> <span class="val">ca-key.pem</span> \
+  <span class="kw">-CAcreateserial</span> <span class="kw">-out</span> <span class="val">signed-cert.pem</span> <span class="kw">-days</span> <span class="num">90</span></code></pre>
+
+  <h3>Other Useful Commands</h3>
+
+  <div class="terminal">
+    <div class="prompt"># Check certificate expiry date</div>
+    <div class="prompt">$ openssl x509 -in cert.pem -enddate -noout</div>
+    <div class="output">notAfter=May 30 00:00:00 2026 GMT</div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt"># Check a remote server's certificate (without full s_client output)</div>
+    <div class="prompt">$ echo | openssl s_client -connect api.example.com:443 -servername api.example.com 2>/dev/null | openssl x509 -noout -dates -subject -issuer</div>
+    <div class="output">
+notBefore=Mar  1 00:00:00 2026 GMT
+notAfter=May 30 00:00:00 2026 GMT
+subject=CN=api.example.com
+issuer=C=US, O=Let's Encrypt, CN=R3
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt"># Verify that a private key matches a certificate</div>
+    <div class="prompt">$ diff <(openssl x509 -in cert.pem -noout -modulus) <(openssl rsa -in key.pem -noout -modulus)</div>
+    <div class="output">(no output = they match)</div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt"># Convert PEM to PKCS#12 (for importing into Java keystores, browsers, etc.)</div>
+    <div class="prompt">$ openssl pkcs12 -export -in cert.pem -inkey key.pem -out bundle.p12 -name "api.example.com"</div>
+  </div>
+
+  <div class="warn">
+    <strong>Debugging checklist when TLS fails:</strong>
+    <ul>
+      <li>Is the certificate expired? (<code>openssl x509 -dates</code>)</li>
+      <li>Is the certificate chain complete? (missing intermediate is the #1 cause of "works in browser but not in curl/Java")</li>
+      <li>Does the SAN match the hostname? (<code>openssl x509 -ext subjectAltName</code>)</li>
+      <li>Is the server sending the right cert? (<code>openssl s_client -servername</code>)</li>
+      <li>Is the private key matching the certificate? (compare modulus)</li>
+      <li>Is the protocol/cipher supported by both sides? (check <code>s_client</code> output)</li>
+    </ul>
+  </div>
+
+</body>
+</html>

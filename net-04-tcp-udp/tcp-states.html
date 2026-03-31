@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 04 — TCP State Machine</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 04 — TCP State Machine</h1>
+  <p class="subtitle">Connection lifecycle from LISTEN to CLOSED</p>
+
+  <!-- ===== FULL STATE MACHINE ===== -->
+  <h2>TCP Connection States</h2>
+
+  <p>Every TCP connection traverses a well-defined state machine. Understanding these states is essential for diagnosing connection issues — when you run <code>ss</code> or <code>netstat</code>, you're looking at these states.</p>
+
+  <h3>Server-Side Path (Passive Open)</h3>
+
+  <div class="state-diagram">
+    <div class="state closed">CLOSED</div>
+    <div class="state-arrow">→ listen()</div>
+    <div class="state initial">LISTEN</div>
+    <div class="state-arrow">→ recv SYN</div>
+    <div class="state waiting">SYN_RCVD</div>
+    <div class="state-arrow">→ recv ACK</div>
+    <div class="state active">ESTABLISHED</div>
+  </div>
+
+  <h3>Client-Side Path (Active Open)</h3>
+
+  <div class="state-diagram">
+    <div class="state closed">CLOSED</div>
+    <div class="state-arrow">→ send SYN</div>
+    <div class="state waiting">SYN_SENT</div>
+    <div class="state-arrow">→ recv SYN+ACK</div>
+    <div class="state active">ESTABLISHED</div>
+  </div>
+
+  <h3>Active Close (Initiator of Close)</h3>
+
+  <div class="state-diagram">
+    <div class="state active">ESTABLISHED</div>
+    <div class="state-arrow">→ send FIN</div>
+    <div class="state waiting">FIN_WAIT_1</div>
+    <div class="state-arrow">→ recv ACK</div>
+    <div class="state waiting">FIN_WAIT_2</div>
+    <div class="state-arrow">→ recv FIN</div>
+    <div class="state special">TIME_WAIT</div>
+    <div class="state-arrow">→ 2xMSL timeout</div>
+    <div class="state closed">CLOSED</div>
+  </div>
+
+  <h3>Passive Close (Peer of Close Initiator)</h3>
+
+  <div class="state-diagram">
+    <div class="state active">ESTABLISHED</div>
+    <div class="state-arrow">→ recv FIN</div>
+    <div class="state waiting">CLOSE_WAIT</div>
+    <div class="state-arrow">→ send FIN</div>
+    <div class="state waiting">LAST_ACK</div>
+    <div class="state-arrow">→ recv ACK</div>
+    <div class="state closed">CLOSED</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">All 11 TCP States</div>
+    <table>
+      <thead>
+        <tr><th>State</th><th>Side</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>CLOSED</code></td><td>Both</td><td>No connection exists (fictional starting/ending state)</td></tr>
+        <tr><td><code>LISTEN</code></td><td>Server</td><td>Waiting for incoming SYN (passive open)</td></tr>
+        <tr><td><code>SYN_SENT</code></td><td>Client</td><td>SYN sent, waiting for SYN-ACK</td></tr>
+        <tr><td><code>SYN_RCVD</code></td><td>Server</td><td>SYN received, SYN-ACK sent, waiting for final ACK</td></tr>
+        <tr><td><code>ESTABLISHED</code></td><td>Both</td><td>Connection open, data flows bidirectionally</td></tr>
+        <tr><td><code>FIN_WAIT_1</code></td><td>Active closer</td><td>FIN sent, waiting for ACK of FIN</td></tr>
+        <tr><td><code>FIN_WAIT_2</code></td><td>Active closer</td><td>FIN ACKed, waiting for peer's FIN</td></tr>
+        <tr><td><code>TIME_WAIT</code></td><td>Active closer</td><td>Both FINs exchanged, waiting 2xMSL before fully closing</td></tr>
+        <tr><td><code>CLOSE_WAIT</code></td><td>Passive closer</td><td>Received peer's FIN, waiting for application to call close()</td></tr>
+        <tr><td><code>LAST_ACK</code></td><td>Passive closer</td><td>FIN sent, waiting for final ACK</td></tr>
+        <tr><td><code>CLOSING</code></td><td>Both</td><td>Simultaneous close — both sides sent FIN before receiving peer's FIN (rare)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== 4-WAY FIN TEARDOWN ===== -->
+  <h2>4-Way Connection Teardown</h2>
+
+  <p>TCP close is a 4-segment exchange (can be collapsed to 3 if FIN+ACK are combined). Each direction is shut down independently — TCP is full-duplex, so each side must send its own FIN.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <span class="seq-entity">Active Closer (Client)</span>
+      <span class="seq-entity">Passive Closer (Server)</span>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">FIN &nbsp; seq=5000</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ACK &nbsp; ack=5001</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">FIN &nbsp; seq=8000</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ACK &nbsp; ack=8001</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Teardown Sequence</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>FIN (client):</strong> Client calls <code>close()</code>. Kernel sends FIN. Client enters FIN_WAIT_1.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>ACK (server):</strong> Server's kernel ACKs the FIN. Server enters CLOSE_WAIT. Client enters FIN_WAIT_2.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>FIN (server):</strong> Server application calls <code>close()</code>. Kernel sends FIN. Server enters LAST_ACK.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>ACK (client):</strong> Client ACKs the FIN. Client enters TIME_WAIT. Server enters CLOSED.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>In practice:</strong> Many implementations combine steps 2 and 3 into a single FIN+ACK segment, making it a 3-segment teardown. This happens when the server application calls <code>close()</code> quickly after receiving the client's FIN.
+  </div>
+
+  <!-- ===== TIME_WAIT ===== -->
+  <h2>TIME_WAIT</h2>
+
+  <p>The most misunderstood TCP state. After the active closer sends its final ACK, it enters TIME_WAIT for <strong>2 x MSL</strong> (Maximum Segment Lifetime). On Linux, MSL = 30s, so TIME_WAIT lasts <strong>60 seconds</strong>.</p>
+
+  <div class="panel">
+    <div class="panel-title">Why TIME_WAIT Exists</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>Reliable termination:</strong> If the final ACK is lost, the peer will retransmit its FIN. The TIME_WAIT state ensures the closing side can re-ACK it.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>Prevent stale segments:</strong> Delayed segments from the old connection might arrive after a new connection is established on the same 5-tuple. TIME_WAIT ensures all old segments have expired (TTL exceeded) before the 5-tuple can be reused.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>TIME_WAIT Accumulation</h3>
+
+  <p>On busy servers that initiate many short-lived connections (e.g., a reverse proxy connecting to backends), TIME_WAIT sockets can accumulate in the tens of thousands.</p>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Count connections by state<br>
+    <span class="prompt">$ </span>ss -s<br>
+    <span class="output">Total: 15423</span><br>
+    <span class="output">TCP:   12847 (estab 3201, closed 1024, orphaned 12, timewait 8610)</span><br><br>
+    <span class="prompt"># </span>Count TIME_WAIT connections per destination<br>
+    <span class="prompt">$ </span>ss -tan state time-wait | awk '{print $4}' | sort | uniq -c | sort -rn | head<br>
+    <span class="output">  3412  10.0.1.5:8080</span><br>
+    <span class="output">  2891  10.0.1.6:8080</span><br>
+    <span class="output">  1204  10.0.2.3:443</span><br>
+    <span class="output">  1103  10.0.2.4:443</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Mitigations</div>
+    <table>
+      <thead>
+        <tr><th>Approach</th><th>How</th><th>Trade-offs</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SO_REUSEADDR</code></td>
+          <td>Socket option — allows <code>bind()</code> to a local address in TIME_WAIT</td>
+          <td>Safe, universally used for server sockets</td>
+        </tr>
+        <tr>
+          <td><code>tcp_tw_reuse</code></td>
+          <td><code>sysctl net.ipv4.tcp_tw_reuse=1</code></td>
+          <td>Allows reusing TIME_WAIT sockets for <em>outgoing</em> connections (client-side only). Safe with timestamps enabled.</td>
+        </tr>
+        <tr>
+          <td>Connection pooling</td>
+          <td>Keep-alive / persistent connections, HTTP/2 multiplexing</td>
+          <td>Best solution — avoid the problem entirely. Fewer connections = fewer TIME_WAITs.</td>
+        </tr>
+        <tr>
+          <td>Let the peer close first</td>
+          <td>Architecture change — make the server the passive closer</td>
+          <td>TIME_WAIT lands on the side with more ephemeral ports (the client).</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Never use <code>tcp_tw_recycle</code>:</strong> This sysctl was removed from Linux kernel 4.12 because it breaks connections from clients behind NAT (which share source IPs but have different timestamp clocks). If you see it in old tuning guides, ignore it.
+  </div>
+
+  <!-- ===== CLOSE_WAIT ===== -->
+  <h2>CLOSE_WAIT Accumulation</h2>
+
+  <p>While TIME_WAIT is normal, <strong>CLOSE_WAIT accumulation is always a bug</strong>. It means the remote peer has sent a FIN (closed its side), but your application has not called <code>close()</code> on the socket.</p>
+
+  <div class="panel">
+    <div class="panel-title">Common Causes</div>
+    <ul>
+      <li><strong>Resource leak:</strong> Application reads EOF from the socket but never closes it (missing <code>close()</code> / <code>defer conn.Close()</code>)</li>
+      <li><strong>Blocked thread:</strong> Application is stuck processing and never returns to its read loop to notice the FIN</li>
+      <li><strong>Connection pool bug:</strong> Connection returned to pool after peer closed it, pool doesn't validate liveness</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Find CLOSE_WAIT sockets and the owning process<br>
+    <span class="prompt">$ </span>ss -tanp state close-wait<br>
+    <span class="output">Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process</span><br>
+    <span class="output">0       0       10.0.0.1:44832      10.0.0.5:443       users:(("myapp",pid=12345,fd=47))</span><br>
+    <span class="output">0       0       10.0.0.1:44833      10.0.0.5:443       users:(("myapp",pid=12345,fd=48))</span><br>
+    <span class="output">0       0       10.0.0.1:44834      10.0.0.5:443       users:(("myapp",pid=12345,fd=49))</span><br><br>
+    <span class="prompt"># </span>Count open file descriptors for the suspect process<br>
+    <span class="prompt">$ </span>ls -la /proc/12345/fd | wc -l<br>
+    <span class="output">4096</span>
+  </div>
+
+  <div class="tip">
+    <strong>Diagnosis workflow:</strong> If you see CLOSE_WAIT growing over time, identify the PID with <code>ss -tanp state close-wait</code>, then examine the application code for socket leaks. Check <code>/proc/PID/fd</code> count — if it keeps growing, you have a file descriptor leak.
+  </div>
+
+  <!-- ===== HALF-OPEN CONNECTIONS ===== -->
+  <h2>Half-Open Connections</h2>
+
+  <p>A <strong>half-open</strong> connection occurs when one side believes the connection is ESTABLISHED but the other side has no knowledge of it (crashed, rebooted, or network partition).</p>
+
+  <div class="panel">
+    <div class="panel-title">How Half-Open Connections Happen</div>
+    <ul>
+      <li><strong>Peer crashes without sending FIN:</strong> Process kill -9, kernel panic, power failure — no graceful close</li>
+      <li><strong>Network partition:</strong> Firewall rule change, route withdrawal, cable unplugged</li>
+      <li><strong>NAT timeout:</strong> Stateful NAT/firewall drops the mapping after idle timeout, but both endpoints still think connection is alive</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Detection Mechanisms</div>
+    <table>
+      <thead>
+        <tr><th>Mechanism</th><th>How It Works</th><th>Configuration</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>TCP keepalive</strong></td>
+          <td>After idle period, send probe segments. If no response after retries, declare connection dead.</td>
+          <td><code>tcp_keepalive_time=7200</code> (2h default!), <code>tcp_keepalive_intvl=75</code>, <code>tcp_keepalive_probes=9</code></td>
+        </tr>
+        <tr>
+          <td><strong>Application-level heartbeat</strong></td>
+          <td>Application protocol sends periodic pings (gRPC keepalive, WebSocket ping/pong)</td>
+          <td>Much faster detection — typically 10-30 seconds</td>
+        </tr>
+        <tr>
+          <td><strong>RST on data send</strong></td>
+          <td>If the surviving side sends data, the rebooted peer responds with RST (it has no record of the connection)</td>
+          <td>Only works when the surviving side actively sends data</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>The 2-hour trap:</strong> Default TCP keepalive is <strong>7200 seconds (2 hours)</strong> before the first probe. In K8s environments with pod restarts, service mesh proxies, and cloud load balancers, this is far too long. Always configure application-level keepalives or tune the kernel settings.
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Tune TCP keepalive for K8s/cloud workloads<br>
+    <span class="prompt">$ </span>sysctl -w net.ipv4.tcp_keepalive_time=60<br>
+    <span class="prompt">$ </span>sysctl -w net.ipv4.tcp_keepalive_intvl=10<br>
+    <span class="prompt">$ </span>sysctl -w net.ipv4.tcp_keepalive_probes=6<br>
+    <span class="prompt"># </span>Total detection time: 60 + (10 * 6) = 120 seconds
+  </div>
+
+  <!-- ===== SYN FLOODS ===== -->
+  <h2>SYN Floods & SYN Cookies</h2>
+
+  <p>A SYN flood is a classic DoS attack that exploits the TCP handshake. The attacker sends a barrage of SYN segments with spoofed source IPs. The server allocates resources for each half-open connection in the SYN queue and sends SYN-ACKs — but the ACKs never come.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <span class="seq-entity">Attacker (spoofed IPs)</span>
+      <span class="seq-entity">Server</span>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">SYN (src=1.2.3.4)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">SYN (src=5.6.7.8)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">SYN (src=9.10.11.12) ...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">SYN Cookies Defense</div>
+    <p>SYN cookies (RFC 4987) eliminate the need to store state for half-open connections. Instead of allocating a SYN queue entry, the server encodes the connection state <strong>into the ISN itself</strong>:</p>
+    <ul>
+      <li>The server's ISN is a cryptographic hash of (source IP, source port, dest IP, dest port, timestamp, secret key)</li>
+      <li>No state is stored — if the ACK comes back, the server reconstructs the connection info from the ack number</li>
+      <li>Trade-off: TCP options from the SYN (MSS, window scale, SACK) are lost (partially mitigated by encoding MSS in the hash)</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Check if SYN cookies are enabled (1 = enabled when SYN queue overflows)<br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_syncookies<br>
+    <span class="output">net.ipv4.tcp_syncookies = 1</span><br><br>
+    <span class="prompt"># </span>Check SYN queue overflow counter<br>
+    <span class="prompt">$ </span>netstat -s | grep "SYNs to LISTEN"<br>
+    <span class="output">    12847 SYNs to LISTEN sockets dropped</span><br><br>
+    <span class="prompt"># </span>Increase SYN backlog<br>
+    <span class="prompt">$ </span>sysctl -w net.ipv4.tcp_max_syn_backlog=4096
+  </div>
+
+  <div class="tip">
+    <strong>Modern Linux:</strong> SYN cookies are enabled by default and activate automatically when the SYN queue overflows. Under normal operation, the kernel uses the standard SYN queue. Under attack, it seamlessly falls back to SYN cookies. You generally don't need to touch this.
+  </div>
+
+  <!-- ===== INSPECTING WITH SS/NETSTAT ===== -->
+  <h2>Inspecting TCP States with <code>ss</code></h2>
+
+  <p><code>ss</code> (socket statistics) is the modern replacement for <code>netstat</code>. It's faster (reads directly from kernel netlink) and more feature-rich.</p>
+
+  <div class="terminal">
+    <span class="prompt"># </span>All TCP connections with state<br>
+    <span class="prompt">$ </span>ss -tan<br>
+    <span class="output">State      Recv-Q  Send-Q  Local Address:Port  Peer Address:Port</span><br>
+    <span class="output">LISTEN     0       4096    0.0.0.0:443         0.0.0.0:*</span><br>
+    <span class="output">LISTEN     0       4096    0.0.0.0:80          0.0.0.0:*</span><br>
+    <span class="output">ESTAB      0       0       10.0.0.1:443        10.0.0.5:52341</span><br>
+    <span class="output">TIME-WAIT  0       0       10.0.0.1:443        10.0.0.6:48912</span><br>
+    <span class="output">CLOSE-WAIT 0       0       10.0.0.1:44832      10.0.1.5:8080</span><br><br>
+    <span class="prompt"># </span>Filter by state<br>
+    <span class="prompt">$ </span>ss -tan state established<br>
+    <span class="prompt">$ </span>ss -tan state time-wait<br>
+    <span class="prompt">$ </span>ss -tan state close-wait<br><br>
+    <span class="prompt"># </span>Show process info (requires root)<br>
+    <span class="prompt">$ </span>ss -tanp state listening<br><br>
+    <span class="prompt"># </span>Show extended TCP info (cwnd, rtt, etc.)<br>
+    <span class="prompt">$ </span>ss -ti dst 10.0.0.5<br><br>
+    <span class="prompt"># </span>Summary of all socket states<br>
+    <span class="prompt">$ </span>ss -s
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><code>ss</code> Key Flags</div>
+    <table>
+      <thead>
+        <tr><th>Flag</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>-t</code></td><td>TCP sockets only</td></tr>
+        <tr><td><code>-u</code></td><td>UDP sockets only</td></tr>
+        <tr><td><code>-a</code></td><td>All states (including LISTEN and TIME-WAIT)</td></tr>
+        <tr><td><code>-n</code></td><td>Numeric output (no DNS resolution, faster)</td></tr>
+        <tr><td><code>-l</code></td><td>Listening sockets only</td></tr>
+        <tr><td><code>-p</code></td><td>Show process using the socket</td></tr>
+        <tr><td><code>-i</code></td><td>Show TCP internal info (cwnd, rtt, mss, etc.)</td></tr>
+        <tr><td><code>-s</code></td><td>Summary statistics</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Recv-Q / Send-Q meaning changes by state:</strong>
+    For LISTEN sockets, <code>Recv-Q</code> = number of pending connections in the accept queue, <code>Send-Q</code> = backlog size.
+    For ESTABLISHED sockets, <code>Recv-Q</code> = bytes in receive buffer not yet read by app, <code>Send-Q</code> = bytes sent but not yet ACKed.
+  </div>
+
+</body>
+</html>

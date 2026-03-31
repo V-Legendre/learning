@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 10 — XDP & tc-bpf</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 10 — XDP & tc-bpf</h1>
+  <p class="subtitle">Programmable packet processing at line rate</p>
+
+  <!-- ===== XDP OVERVIEW ===== -->
+  <h2>XDP (eXpress Data Path)</h2>
+
+  <p>XDP is the <strong>earliest programmable hook point in the Linux networking stack</strong>. It processes packets at the NIC driver level, <em>before</em> the kernel allocates an <code>sk_buff</code> structure. This makes XDP extraordinarily fast — packets that are dropped or redirected by XDP never touch the normal network stack at all.</p>
+
+  <div class="panel">
+    <div class="panel-title">Why XDP Is Fast</div>
+    <ul>
+      <li><strong>No sk_buff allocation</strong> — the kernel's <code>sk_buff</code> (socket buffer) is a heavyweight structure. XDP works with the minimal <code>xdp_md</code> struct, which is just pointers to the raw packet data.</li>
+      <li><strong>No lock contention</strong> — runs per-CPU in the driver's NAPI context</li>
+      <li><strong>No netfilter traversal</strong> — dropped/redirected packets skip all of iptables, conntrack, etc.</li>
+      <li><strong>JIT-compiled</strong> — native machine code execution, not interpreted</li>
+      <li><strong>Batching</strong> — processes packets in NAPI poll batches, amortizing overhead</li>
+    </ul>
+  </div>
+
+  <!-- XDP vs iptables packet path -->
+  <h3>Packet Processing: XDP vs. iptables Path</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ebpf">XDP Path (eBPF)</div>
+      <div class="comp-body">
+        <div class="flow" style="flex-direction: column; align-items: stretch;">
+          <div class="flow-step" style="border-color: #f87171;">
+            <div class="label">NIC receives packet</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step" style="border-color: #e94560;">
+            <div class="label">XDP eBPF program</div>
+            <div class="desc">DROP/PASS/TX/REDIRECT</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v (if XDP_PASS)</div>
+          <div class="flow-step">
+            <div class="label">sk_buff allocation</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">Normal stack</div>
+          </div>
+        </div>
+        <div class="tip" style="margin-top: 12px;">
+          <strong>Dropped packets never allocate sk_buff.</strong> At 10 Gbps, this saves millions of allocations per second.
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header old">iptables Path (Traditional)</div>
+      <div class="comp-body">
+        <div class="flow" style="flex-direction: column; align-items: stretch;">
+          <div class="flow-step" style="border-color: #f87171;">
+            <div class="label">NIC receives packet</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">sk_buff allocation</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">tc ingress</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">Netfilter PREROUTING</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">Routing decision</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step" style="border-color: #ef4444;">
+            <div class="label">Netfilter INPUT/FORWARD</div>
+            <div class="desc">O(n) chain walking per packet</div>
+          </div>
+          <div class="arrow" style="text-align: center;">v</div>
+          <div class="flow-step">
+            <div class="label">Application</div>
+          </div>
+        </div>
+        <div class="warn" style="margin-top: 12px;">
+          <strong>Every packet traverses the full chain</strong> even if it will be dropped.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== XDP ACTIONS ===== -->
+  <h2>XDP Actions (Return Codes)</h2>
+
+  <p>Every XDP program must return one of these action codes. The return value tells the NIC driver what to do with the packet.</p>
+
+  <table>
+    <tr>
+      <th>Action</th>
+      <th>Value</th>
+      <th>Behavior</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>XDP_PASS</code></td>
+      <td>2</td>
+      <td>Continue to normal network stack (allocate sk_buff)</td>
+      <td>Default — let the packet through</td>
+    </tr>
+    <tr>
+      <td><code>XDP_DROP</code></td>
+      <td>1</td>
+      <td>Drop the packet immediately at the driver level</td>
+      <td>DDoS mitigation, blocklists, rate limiting</td>
+    </tr>
+    <tr>
+      <td><code>XDP_TX</code></td>
+      <td>3</td>
+      <td>Bounce the packet back out the same NIC it arrived on</td>
+      <td>Load balancer reflection, hairpin NAT</td>
+    </tr>
+    <tr>
+      <td><code>XDP_REDIRECT</code></td>
+      <td>4</td>
+      <td>Forward to a different NIC, CPU, or AF_XDP socket</td>
+      <td>Cross-NIC forwarding, software switches, userspace fast-path (AF_XDP)</td>
+    </tr>
+    <tr>
+      <td><code>XDP_ABORTED</code></td>
+      <td>0</td>
+      <td>Error path — drop and generate trace event</td>
+      <td>Error handling, debugging (triggers <code>xdp:xdp_exception</code> tracepoint)</td>
+    </tr>
+  </table>
+
+  <div class="state-diagram">
+    <div class="state initial">Packet Arrives</div>
+    <div class="state-arrow">-></div>
+    <div class="state special">XDP Program</div>
+    <div class="state-arrow">-></div>
+    <div class="state active">XDP_PASS (to stack)</div>
+  </div>
+  <div class="state-diagram">
+    <div class="state special">XDP Program</div>
+    <div class="state-arrow">-></div>
+    <div class="state closed">XDP_DROP (discarded)</div>
+  </div>
+  <div class="state-diagram">
+    <div class="state special">XDP Program</div>
+    <div class="state-arrow">-></div>
+    <div class="state waiting">XDP_TX (back out same NIC)</div>
+  </div>
+  <div class="state-diagram">
+    <div class="state special">XDP Program</div>
+    <div class="state-arrow">-></div>
+    <div class="state initial">XDP_REDIRECT (to other NIC/CPU/AF_XDP)</div>
+  </div>
+
+  <!-- ===== XDP ATTACHMENT MODES ===== -->
+  <h2>XDP Attachment Modes</h2>
+
+  <table>
+    <tr>
+      <th>Mode</th>
+      <th>Where It Runs</th>
+      <th>Performance</th>
+      <th>Requirements</th>
+    </tr>
+    <tr>
+      <td><strong>Native (driver mode)</strong></td>
+      <td>In the NIC driver's receive path</td>
+      <td>Best — true pre-sk_buff processing</td>
+      <td>NIC driver must have XDP support (most modern drivers: i40e, mlx5, ixgbe, virtio_net, etc.)</td>
+    </tr>
+    <tr>
+      <td><strong>Offloaded</strong></td>
+      <td>On the NIC hardware itself (SmartNIC)</td>
+      <td>Ultimate — zero CPU usage</td>
+      <td>SmartNIC with eBPF offload support (Netronome/Corigine)</td>
+    </tr>
+    <tr>
+      <td><strong>Generic (SKB mode)</strong></td>
+      <td>In the network stack (after sk_buff)</td>
+      <td>Slowest — loses the main XDP advantage</td>
+      <td>Works on any NIC. Useful for testing only.</td>
+    </tr>
+  </table>
+
+  <div class="terminal">
+    <div class="prompt">$ # Attach XDP program in native mode</div>
+    <div class="prompt">$ ip link set dev eth0 xdpdrv obj xdp_prog.o sec xdp</div>
+    <br>
+    <div class="prompt">$ # Attach in generic (SKB) mode — fallback</div>
+    <div class="prompt">$ ip link set dev eth0 xdpgeneric obj xdp_prog.o sec xdp</div>
+    <br>
+    <div class="prompt">$ # Verify attachment</div>
+    <div class="prompt">$ ip link show eth0</div>
+    <div class="output">2: eth0: &lt;BROADCAST,MULTICAST,UP&gt; mtu 1500 <strong>xdp</strong> qdisc mq state UP</div>
+    <div class="output">    prog/xdp id 42 tag a1b2c3d4</div>
+    <br>
+    <div class="prompt">$ # Detach XDP program</div>
+    <div class="prompt">$ ip link set dev eth0 xdp off</div>
+  </div>
+
+  <div class="warn">
+    <strong>Never use generic mode in production.</strong> It defeats the purpose of XDP — packets still go through sk_buff allocation. Always verify your NIC driver supports native XDP. Check with <code>ethtool -i eth0</code> and verify driver support in the kernel source.
+  </div>
+
+  <!-- ===== XDP USE CASES ===== -->
+  <h2>XDP in Production</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">DDoS Mitigation (Cloudflare)</div>
+      <p>Cloudflare processes <strong>>30 Mpps</strong> (million packets per second) of DDoS traffic per server using XDP. Malicious packets are dropped at the driver level before consuming any CPU on the normal stack.</p>
+      <ul>
+        <li>IP blocklists stored in eBPF hash maps</li>
+        <li>Rate limiting with per-CPU counters</li>
+        <li>Pattern matching on packet headers</li>
+        <li>Latency: <strong>sub-microsecond</strong> drop decision</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">L4 Load Balancing (Katran / Facebook)</div>
+      <p>Katran is Facebook's open-source <strong>XDP-based L4 load balancer</strong>. It replaces traditional IPVS/LVS with an eBPF program that does consistent hashing and packet encapsulation at line rate.</p>
+      <ul>
+        <li>Consistent hashing via eBPF maps</li>
+        <li><code>XDP_TX</code> to reflect modified packets back to NIC</li>
+        <li>IPIP/GUE encapsulation for backend forwarding</li>
+        <li>Handles <strong>millions of connections</strong> per server</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== EXAMPLE XDP PROGRAM ===== -->
+  <h2>XDP Program Structure (C Pseudocode)</h2>
+
+  <p>An XDP program receives an <code>xdp_md</code> context with pointers to the raw packet data. Here is a simplified firewall that drops packets from a blocked IP list.</p>
+
+  <pre><code><span class="cm">// SPDX-License-Identifier: GPL-2.0</span>
+<span class="kw">#include</span> <span class="str">&lt;linux/bpf.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;linux/if_ether.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;linux/ip.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;bpf/bpf_helpers.h&gt;</span>
+
+<span class="cm">// Map: blocked source IPs (key = __be32 IP, value = drop counter)</span>
+<span class="kw">struct</span> {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, <span class="num">10000</span>);
+    __type(key, __be32);           <span class="cm">// source IP</span>
+    __type(value, __u64);          <span class="cm">// packet counter</span>
+} <span class="prop">blocked_ips</span> SEC(<span class="str">".maps"</span>);
+
+SEC(<span class="str">"xdp"</span>)
+<span class="type">int</span> <span class="fn">xdp_firewall</span>(<span class="kw">struct</span> xdp_md *ctx) {
+    <span class="cm">// Packet data boundaries</span>
+    <span class="type">void</span> *data     = (<span class="type">void</span> *)(<span class="type">long</span>)ctx->data;
+    <span class="type">void</span> *data_end = (<span class="type">void</span> *)(<span class="type">long</span>)ctx->data_end;
+
+    <span class="cm">// Parse Ethernet header — MUST bounds-check for verifier</span>
+    <span class="kw">struct</span> ethhdr *eth = data;
+    <span class="kw">if</span> ((<span class="type">void</span> *)(eth + <span class="num">1</span>) > data_end)
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="cm">// Only process IPv4</span>
+    <span class="kw">if</span> (eth->h_proto != __constant_htons(ETH_P_IP))
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="cm">// Parse IP header — MUST bounds-check again</span>
+    <span class="kw">struct</span> iphdr *ip = (<span class="type">void</span> *)(eth + <span class="num">1</span>);
+    <span class="kw">if</span> ((<span class="type">void</span> *)(ip + <span class="num">1</span>) > data_end)
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="cm">// Lookup source IP in blocked list</span>
+    __u64 *counter = <span class="fn">bpf_map_lookup_elem</span>(&blocked_ips, &ip->saddr);
+    <span class="kw">if</span> (counter) {
+        <span class="cm">// IP is in blocklist — increment counter and DROP</span>
+        __sync_fetch_and_add(counter, <span class="num">1</span>);
+        <span class="kw">return</span> XDP_DROP;
+    }
+
+    <span class="kw">return</span> XDP_PASS;
+}
+
+<span class="type">char</span> _license[] SEC(<span class="str">"license"</span>) = <span class="str">"GPL"</span>;</code></pre>
+
+  <div class="note">
+    <strong>Bounds checking is mandatory.</strong> Every pointer dereference after packet data must be preceded by a bounds check against <code>data_end</code>. Without it, the verifier rejects the program. This is the most common source of verifier errors for XDP newcomers.
+  </div>
+
+  <!-- ===== tc-bpf ===== -->
+  <h2>tc-bpf (Traffic Control eBPF)</h2>
+
+  <p>tc-bpf hooks into the Linux traffic control layer, processing packets <strong>after XDP but before netfilter/iptables</strong>. Unlike XDP, tc-bpf works with the full <code>sk_buff</code> structure, giving access to richer metadata — at the cost of being slightly slower.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header ebpf">XDP (xdp_md)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Runs <strong>before sk_buff</strong> allocation</li>
+          <li><strong>Ingress only</strong> (packet arrival)</li>
+          <li>Minimal context: raw packet pointers only</li>
+          <li>Cannot see: routing decisions, socket info, skb metadata</li>
+          <li>Fastest possible processing</li>
+          <li>Best for: drop/redirect decisions that need only packet headers</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l4">tc-bpf (__sk_buff)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Runs <strong>after sk_buff</strong> is created</li>
+          <li><strong>Ingress and egress</strong></li>
+          <li>Rich context: protocol, mark, priority, ifindex, hash, cgroup</li>
+          <li>Can modify: packet data, headers, skb metadata, marks</li>
+          <li>Slightly slower than XDP</li>
+          <li>Best for: classification, NAT, policy that needs metadata</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>tc-bpf Actions</h3>
+
+  <table>
+    <tr>
+      <th>Action</th>
+      <th>Behavior</th>
+      <th>Equivalent</th>
+    </tr>
+    <tr>
+      <td><code>TC_ACT_OK</code></td>
+      <td>Continue processing (accept)</td>
+      <td>Similar to <code>XDP_PASS</code></td>
+    </tr>
+    <tr>
+      <td><code>TC_ACT_SHOT</code></td>
+      <td>Drop the packet</td>
+      <td>Similar to <code>XDP_DROP</code></td>
+    </tr>
+    <tr>
+      <td><code>TC_ACT_REDIRECT</code></td>
+      <td>Redirect to another interface</td>
+      <td>Similar to <code>XDP_REDIRECT</code></td>
+    </tr>
+    <tr>
+      <td><code>TC_ACT_PIPE</code></td>
+      <td>Continue to next tc filter in chain</td>
+      <td>No XDP equivalent</td>
+    </tr>
+    <tr>
+      <td><code>TC_ACT_STOLEN</code></td>
+      <td>Packet consumed, don't free sk_buff</td>
+      <td>No XDP equivalent</td>
+    </tr>
+  </table>
+
+  <h3>Where tc-bpf Fits in the Stack</h3>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #f87171;">
+      <div class="label">NIC</div>
+      <div class="desc">Packet arrives</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="label">XDP</div>
+      <div class="desc">Pre-sk_buff hook</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">sk_buff created</div>
+      <div class="desc">Kernel allocates socket buffer</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #22d3ee;">
+      <div class="label">tc ingress (eBPF)</div>
+      <div class="desc">Classify, mangle, redirect</div>
+      <span class="who developer">tc-bpf HOOK</span>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Netfilter / iptables</div>
+      <div class="desc">PREROUTING, INPUT...</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Application</div>
+      <div class="desc">Socket recv()</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Application</div>
+      <div class="desc">Socket send()</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Routing</div>
+      <div class="desc">Output route lookup</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Netfilter OUTPUT</div>
+      <div class="desc">POSTROUTING</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #22d3ee;">
+      <div class="label">tc egress (eBPF)</div>
+      <div class="desc">Shape, police, redirect</div>
+      <span class="who developer">tc-bpf HOOK</span>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #f87171;">
+      <div class="label">NIC</div>
+      <div class="desc">Packet transmitted</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ # Attach tc-bpf to ingress</div>
+    <div class="prompt">$ tc qdisc add dev eth0 clsact</div>
+    <div class="prompt">$ tc filter add dev eth0 ingress bpf da obj tc_prog.o sec tc</div>
+    <br>
+    <div class="prompt">$ # Attach tc-bpf to egress</div>
+    <div class="prompt">$ tc filter add dev eth0 egress bpf da obj tc_prog.o sec tc_egress</div>
+    <br>
+    <div class="prompt">$ # List attached tc programs</div>
+    <div class="prompt">$ tc filter show dev eth0 ingress</div>
+    <div class="output">filter protocol all pref 49152 bpf chain 0</div>
+    <div class="output">  handle 0x1 tc_prog.o:[tc] direct-action id 15 tag d4e5f6a7 jited</div>
+  </div>
+
+  <div class="tip">
+    <strong>Cilium uses tc-bpf extensively.</strong> While XDP handles early-stage fast-path decisions, Cilium's per-endpoint policy enforcement and service load balancing use tc-bpf programs on veth pairs. This gives Cilium access to full sk_buff metadata for identity-based policy, NAT, and L7 inspection hooks.
+  </div>
+
+  <!-- ===== eBPF vs iptables ===== -->
+  <h2>eBPF/XDP vs. iptables: The Comparison</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">iptables (Legacy)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>O(n) linear chain walking</strong> per packet — every rule evaluated sequentially</li>
+          <li>Kernel module-based — fixed functionality</li>
+          <li>Conntrack overhead even for stateless rules</li>
+          <li>Difficult to extend — requires writing kernel modules</li>
+          <li>Rules are text-based, not programmatic</li>
+          <li>Scales poorly: 5,000+ rules = measurable latency</li>
+          <li>Atomic updates require replacing the entire chain</li>
+          <li>No egress filtering before routing (nat table workaround)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">eBPF/XDP (Modern)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>O(1) hash map lookups</strong> — constant time regardless of rule count</li>
+          <li>Programmable — arbitrary logic in C/Rust</li>
+          <li>No conntrack unless you explicitly implement it</li>
+          <li>Extensible — load new programs without rebooting</li>
+          <li>Full programming language, not chain rules</li>
+          <li>Scales to millions of rules (map size only)</li>
+          <li>Atomic map updates — no traffic interruption</li>
+          <li>Native egress support with tc-bpf</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Performance Numbers</h3>
+
+  <table>
+    <tr>
+      <th>Metric</th>
+      <th>iptables</th>
+      <th>XDP (native)</th>
+      <th>Improvement</th>
+    </tr>
+    <tr>
+      <td>Packet drop rate</td>
+      <td>~2-5 Mpps</td>
+      <td>~24-26 Mpps (single core)</td>
+      <td>~5-10x</td>
+    </tr>
+    <tr>
+      <td>Latency per packet (drop)</td>
+      <td>~5-15 us</td>
+      <td>~0.1-0.5 us</td>
+      <td>~10-100x</td>
+    </tr>
+    <tr>
+      <td>Rule lookup (10K rules)</td>
+      <td>O(n) — evaluates each rule</td>
+      <td>O(1) — hash map lookup</td>
+      <td>Constant vs. linear</td>
+    </tr>
+    <tr>
+      <td>CPU overhead per packet</td>
+      <td>High (sk_buff + conntrack + chain)</td>
+      <td>Minimal (no sk_buff, JIT-compiled)</td>
+      <td>Significant</td>
+    </tr>
+    <tr>
+      <td>Memory per connection (conntrack)</td>
+      <td>~400 bytes</td>
+      <td>Custom (eBPF map entry)</td>
+      <td>Configurable</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Real-world impact at K8s scale:</strong> A cluster with 10,000 services generates tens of thousands of iptables rules via kube-proxy. Each packet traverses these rules linearly. Cilium replaces this with eBPF hash map lookups — the performance is independent of the number of services. This is why Cilium can replace kube-proxy.
+  </div>
+
+  <!-- ===== WHEN TO USE WHAT ===== -->
+  <h2>Decision Guide: XDP vs. tc-bpf vs. iptables</h2>
+
+  <table>
+    <tr>
+      <th>Use Case</th>
+      <th>Best Tool</th>
+      <th>Why</th>
+    </tr>
+    <tr>
+      <td>DDoS mitigation / volumetric drops</td>
+      <td><strong>XDP</strong></td>
+      <td>Fastest drop path, before any kernel processing</td>
+    </tr>
+    <tr>
+      <td>L4 load balancing</td>
+      <td><strong>XDP</strong></td>
+      <td>Modify + TX/redirect at line rate (Katran pattern)</td>
+    </tr>
+    <tr>
+      <td>Per-pod network policy (K8s)</td>
+      <td><strong>tc-bpf</strong></td>
+      <td>Needs sk_buff metadata (cgroup, mark) for identity</td>
+    </tr>
+    <tr>
+      <td>NAT / DNAT for services</td>
+      <td><strong>tc-bpf</strong></td>
+      <td>Needs to modify sk_buff fields, conntrack integration</td>
+    </tr>
+    <tr>
+      <td>Egress filtering</td>
+      <td><strong>tc-bpf</strong></td>
+      <td>XDP is ingress-only; tc has egress hook</td>
+    </tr>
+    <tr>
+      <td>Simple host firewall (low scale)</td>
+      <td><strong>iptables/nftables</strong></td>
+      <td>Good enough, simpler tooling, widely understood</td>
+    </tr>
+    <tr>
+      <td>L7-aware decisions</td>
+      <td><strong>tc-bpf + Envoy/proxy</strong></td>
+      <td>eBPF alone can't fully parse L7; Cilium uses an L7 proxy for deep inspection</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>They compose, not replace.</strong> In a Cilium-based K8s cluster, XDP, tc-bpf, cgroup-bpf, and sometimes even iptables coexist. XDP handles DDoS protection. tc-bpf handles service load balancing and policy. cgroup-bpf handles socket-level operations. Use the right hook for the right job.
+  </div>
+
+  <!-- ===== AF_XDP ===== -->
+  <h2>Bonus: AF_XDP (Kernel Bypass to Userspace)</h2>
+
+  <div class="panel">
+    <div class="panel-title">AF_XDP: XDP + Userspace Fast Path</div>
+    <p><code>XDP_REDIRECT</code> can forward packets to an <strong>AF_XDP socket</strong> — a special socket type that delivers raw frames directly to userspace, bypassing the entire kernel network stack. This is Linux's answer to DPDK, but without requiring a dedicated NIC or kernel bypass driver.</p>
+    <div class="grid-2">
+      <div>
+        <h3>How It Works</h3>
+        <ul>
+          <li>XDP program calls <code>bpf_redirect_map()</code> pointing to an <code>XSKMAP</code></li>
+          <li>Packets land in a shared UMEM ring buffer</li>
+          <li>Userspace application polls the ring — zero-copy path</li>
+          <li>Achieves millions of pps in userspace</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Use Cases</h3>
+        <ul>
+          <li>Custom packet processing engines (IDS/IPS)</li>
+          <li>Userspace protocol implementations</li>
+          <li>Network function virtualization (NFV)</li>
+          <li>Replacing DPDK with a less invasive approach</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 13 — Kubernetes Services</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 13 — Kubernetes Services</h1>
+  <p class="subtitle">Service discovery, load balancing, and the kube-proxy implementation</p>
+
+  <!-- ===== WHY SERVICES ===== -->
+  <h2>Why Services Exist</h2>
+
+  <p>Pod IPs are <strong>ephemeral</strong>. Every time a Pod restarts, gets rescheduled, or scales, it gets a new IP. You cannot hardcode Pod IPs in your application config. Services solve this by providing:</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Stable IP</div>
+      <p>A virtual IP (ClusterIP) that never changes for the lifetime of the Service, regardless of how many Pods come and go behind it.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Stable DNS</div>
+      <p>A predictable DNS name: <code>my-svc.my-ns.svc.cluster.local</code>. Applications connect by name, DNS resolves to ClusterIP.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Load Balancing</div>
+      <p>Traffic to the Service is distributed across all healthy Pod endpoints — no client-side balancing logic needed.</p>
+    </div>
+  </div>
+
+  <!-- ===== SERVICE TYPES ===== -->
+  <h2>Service Types</h2>
+
+  <h3>ClusterIP (default)</h3>
+
+  <div class="panel">
+    <div class="panel-title">ClusterIP: Internal-only virtual IP</div>
+    <ul>
+      <li>Allocates a VIP from the <strong>service CIDR</strong> (e.g., <code>10.96.0.0/12</code>, set via <code>--service-cluster-ip-range</code>)</li>
+      <li>This IP is <strong>virtual</strong> — it is not assigned to any network interface on any node</li>
+      <li>It exists only as <strong>iptables/IPVS rules</strong> programmed by kube-proxy on every node</li>
+      <li>When a Pod sends traffic to ClusterIP:port, kube-proxy's rules DNAT the packet to a real Pod IP:port</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Service
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">my-service</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">type</span>: <span class="str">ClusterIP</span>          <span class="cm"># default — can be omitted</span>
+  <span class="attr">selector</span>:
+    <span class="attr">app</span>: <span class="str">my-app</span>             <span class="cm"># selects pods with this label</span>
+  <span class="attr">ports</span>:
+    - <span class="attr">port</span>: <span class="num">80</span>              <span class="cm"># port exposed on the ClusterIP</span>
+      <span class="attr">targetPort</span>: <span class="num">8080</span>      <span class="cm"># port the Pod is listening on</span>
+      <span class="attr">protocol</span>: <span class="str">TCP</span></code></pre>
+
+  <div class="note">
+    <strong>DNS:</strong> CoreDNS creates an A record: <code>my-service.production.svc.cluster.local</code> -> <code>10.96.x.x</code>. Within the same namespace, Pods can use just <code>my-service</code>. Cross-namespace: <code>my-service.production</code>.
+  </div>
+
+  <h3>NodePort</h3>
+
+  <div class="panel">
+    <div class="panel-title">NodePort: Expose on every node's IP</div>
+    <ul>
+      <li>Allocates a port from the range <strong>30000-32767</strong> on <strong>every node</strong> in the cluster</li>
+      <li>External clients connect to <code>&lt;any-node-IP&gt;:&lt;NodePort&gt;</code></li>
+      <li>kube-proxy on the receiving node DNATs to a backend Pod (may be on a different node)</li>
+      <li>Also creates a ClusterIP — so it's accessible internally too</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="kw">spec</span>:
+  <span class="attr">type</span>: <span class="str">NodePort</span>
+  <span class="attr">selector</span>:
+    <span class="attr">app</span>: <span class="str">my-app</span>
+  <span class="attr">ports</span>:
+    - <span class="attr">port</span>: <span class="num">80</span>              <span class="cm"># ClusterIP port</span>
+      <span class="attr">targetPort</span>: <span class="num">8080</span>      <span class="cm"># Pod port</span>
+      <span class="attr">nodePort</span>: <span class="num">31234</span>       <span class="cm"># optional — auto-assigned if omitted</span></code></pre>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">External Client</div>
+      <div class="desc">192.168.1.10:31234</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">kube-proxy (any node)</div>
+      <div class="desc">DNAT to Pod IP:8080</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Backend Pod</div>
+      <div class="desc">10.244.2.5:8080</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Production warning:</strong> NodePort is rarely used directly in production. The high port range (30000+) is awkward. Use LoadBalancer or Ingress instead. NodePort is the building block underneath them.
+  </div>
+
+  <h3>LoadBalancer</h3>
+
+  <div class="panel">
+    <div class="panel-title">LoadBalancer: Cloud-provisioned external LB</div>
+    <ul>
+      <li>The cloud controller manager (CCM) provisions an external load balancer (AWS ELB/NLB, GCP LB, Azure LB)</li>
+      <li>The external LB receives traffic and forwards it to the NodePort on cluster nodes</li>
+      <li>Includes a NodePort + ClusterIP (it's a superset)</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="kw">spec</span>:
+  <span class="attr">type</span>: <span class="str">LoadBalancer</span>
+  <span class="attr">selector</span>:
+    <span class="attr">app</span>: <span class="str">my-app</span>
+  <span class="attr">ports</span>:
+    - <span class="attr">port</span>: <span class="num">443</span>
+      <span class="attr">targetPort</span>: <span class="num">8443</span></code></pre>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Internet Client</div>
+      <div class="desc">a]b-1234.elb.amazonaws.com</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Cloud LB</div>
+      <div class="desc">External IP</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">NodePort</div>
+      <div class="desc">Any node:3xxxx</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Pod</div>
+      <div class="desc">10.244.x.x:8443</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">externalTrafficPolicy</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Policy</th>
+          <th>Behavior</th>
+          <th>Trade-off</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>Cluster</code> (default)</td>
+          <td>Any node can receive, kube-proxy may forward to a pod on a different node</td>
+          <td>Even distribution but extra hop; source IP is SNAT'd (lost)</td>
+        </tr>
+        <tr>
+          <td><code>Local</code></td>
+          <td>LB only sends to nodes that have a local Pod; no second hop</td>
+          <td>Preserves source IP; uneven distribution if pods aren't evenly spread</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>ExternalName</h3>
+
+  <div class="panel">
+    <div class="panel-title">ExternalName: DNS-only alias</div>
+    <ul>
+      <li>No proxy, no ClusterIP, no endpoints — purely a DNS CNAME record</li>
+      <li>CoreDNS returns: <code>my-service.ns.svc.cluster.local</code> CNAME <code>external-db.example.com</code></li>
+      <li>Use case: abstract external dependencies behind a K8s Service name so your app config doesn't change if you migrate the external DB to in-cluster</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="kw">spec</span>:
+  <span class="attr">type</span>: <span class="str">ExternalName</span>
+  <span class="attr">externalName</span>: <span class="str">db.prod.example.com</span>
+  <span class="cm"># No selector, no ports, no ClusterIP</span></code></pre>
+
+  <h3>Service Types Summary</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>ClusterIP</th>
+        <th>NodePort</th>
+        <th>External LB</th>
+        <th>DNS</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>ClusterIP</strong></td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>No</td>
+        <td>A record</td>
+        <td>Internal service-to-service</td>
+      </tr>
+      <tr>
+        <td><strong>NodePort</strong></td>
+        <td>Yes</td>
+        <td>Yes (30000-32767)</td>
+        <td>No</td>
+        <td>A record</td>
+        <td>Dev/testing, bare-metal expose</td>
+      </tr>
+      <tr>
+        <td><strong>LoadBalancer</strong></td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>A record</td>
+        <td>Production external access</td>
+      </tr>
+      <tr>
+        <td><strong>ExternalName</strong></td>
+        <td>No</td>
+        <td>No</td>
+        <td>No</td>
+        <td>CNAME</td>
+        <td>DNS alias for external services</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== KUBE-PROXY ===== -->
+  <h2>How kube-proxy Works</h2>
+
+  <p>kube-proxy is the component that makes Services actually work. It watches the API server for Service and Endpoint changes, then programs the data plane on each node.</p>
+
+  <h3>iptables Mode (Default)</h3>
+
+  <p>kube-proxy writes iptables rules in the <code>nat</code> table. Here's the chain structure for a Service with 3 endpoints:</p>
+
+  <pre><code><span class="cm"># KUBE-SERVICES: entry point — match on ClusterIP + port</span>
+-A <span class="fn">KUBE-SERVICES</span> -d <span class="str">10.96.0.100/32</span> -p tcp --dport <span class="num">80</span> \
+   -j <span class="fn">KUBE-SVC-XXXX</span>
+
+<span class="cm"># KUBE-SVC-XXXX: probability-based load balancing</span>
+-A <span class="fn">KUBE-SVC-XXXX</span> -m statistic --mode random --probability <span class="num">0.33333</span> \
+   -j <span class="fn">KUBE-SEP-AAA</span>
+-A <span class="fn">KUBE-SVC-XXXX</span> -m statistic --mode random --probability <span class="num">0.50000</span> \
+   -j <span class="fn">KUBE-SEP-BBB</span>
+-A <span class="fn">KUBE-SVC-XXXX</span> \
+   -j <span class="fn">KUBE-SEP-CCC</span>
+
+<span class="cm"># KUBE-SEP-xxx: DNAT to actual Pod IP</span>
+-A <span class="fn">KUBE-SEP-AAA</span> -p tcp -j <span class="kw">DNAT</span> --to-destination <span class="str">10.244.1.5:8080</span>
+-A <span class="fn">KUBE-SEP-BBB</span> -p tcp -j <span class="kw">DNAT</span> --to-destination <span class="str">10.244.2.3:8080</span>
+-A <span class="fn">KUBE-SEP-CCC</span> -p tcp -j <span class="kw">DNAT</span> --to-destination <span class="str">10.244.3.7:8080</span></code></pre>
+
+  <div class="note">
+    <strong>Probability math:</strong> The probabilities are <code>1/n</code>, <code>1/(n-1)</code>, ..., <code>1/1</code>. For 3 endpoints: first rule matches with 1/3, second with 1/2 of remaining (= 1/3 total), third with 1/1 of remaining (= 1/3 total). Uniform distribution.
+  </div>
+
+  <div class="warn">
+    <strong>Scale problem:</strong> iptables rules are evaluated <strong>linearly</strong> — O(n). With 10,000 services x 10 endpoints = 100,000+ rules. Every packet traverses this list. At scale, you see increased latency, CPU overhead, and slow rule updates (full rewrite on every change). This is why IPVS exists.
+  </div>
+
+  <h3>IPVS Mode</h3>
+
+  <p>IPVS (IP Virtual Server) is a Linux kernel L4 load balancer. kube-proxy can use it instead of iptables for the data plane.</p>
+
+  <pre><code><span class="cm"># Enable IPVS mode in kube-proxy config</span>
+<span class="kw">apiVersion</span>: kubeproxy.config.k8s.io/v1alpha1
+<span class="kw">kind</span>: KubeProxyConfiguration
+<span class="attr">mode</span>: <span class="str">"ipvs"</span>
+<span class="attr">ipvs</span>:
+  <span class="attr">scheduler</span>: <span class="str">"rr"</span>  <span class="cm"># round-robin (default), lc, sh, etc.</span></code></pre>
+
+  <h3>iptables vs IPVS: Comparison</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">IPTABLES MODE</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Lookup:</strong> O(n) — linear chain traversal</li>
+          <li><strong>Algorithm:</strong> Random probability only</li>
+          <li><strong>Rule updates:</strong> Full rewrite of all rules</li>
+          <li><strong>Connection tracking:</strong> Via conntrack</li>
+          <li><strong>Scale:</strong> Degrades beyond ~5,000 services</li>
+          <li><strong>Kernel module:</strong> netfilter (always present)</li>
+          <li><strong>Debugging:</strong> <code>iptables-save | grep KUBE</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">IPVS MODE</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Lookup:</strong> O(1) — hash table in kernel</li>
+          <li><strong>Algorithms:</strong> rr, lc (least conn), sh (source hash), dh, sed, nq</li>
+          <li><strong>Rule updates:</strong> Incremental (add/remove single entry)</li>
+          <li><strong>Connection tracking:</strong> Built-in + conntrack</li>
+          <li><strong>Scale:</strong> Handles 10,000+ services efficiently</li>
+          <li><strong>Kernel module:</strong> Requires <code>ip_vs</code>, <code>ip_vs_rr</code>, etc.</li>
+          <li><strong>Debugging:</strong> <code>ipvsadm -Ln</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Recommendation:</strong> For clusters with more than a few hundred services, switch to IPVS mode. It's been stable since Kubernetes 1.11+. The only caveat: ensure IPVS kernel modules are loaded on all nodes (<code>ip_vs</code>, <code>ip_vs_rr</code>, <code>ip_vs_wrr</code>, <code>ip_vs_sh</code>, <code>nf_conntrack</code>).
+  </div>
+
+  <!-- ===== ENDPOINT SLICES ===== -->
+  <h2>Endpoint Slices</h2>
+
+  <p>The original <code>Endpoints</code> resource stored <em>all</em> pod IPs for a service in a single object. For a service with 5,000 pods, that's one massive object that gets fully rewritten and broadcast to all nodes on every pod change.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">ENDPOINTS (LEGACY)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Single object per Service</li>
+          <li>Contains ALL pod IPs</li>
+          <li>Full object rewrite on any change</li>
+          <li>Etcd object size limit: 1.5MB</li>
+          <li>Watch storm: every node gets full update</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">ENDPOINT SLICES</div>
+      <div class="comp-body">
+        <ul>
+          <li>Multiple slices per Service (max 100 endpoints each)</li>
+          <li>Only the affected slice is updated</li>
+          <li>Smaller watch payloads</li>
+          <li>Supports dual-stack (IPv4 + IPv6)</li>
+          <li>Topology hints for zone-aware routing</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> EndpointSlices are the default since Kubernetes 1.21. The legacy Endpoints resource still exists for backward compatibility but EndpointSlice is what kube-proxy actually consumes.
+  </div>
+
+  <!-- ===== HEADLESS SERVICES ===== -->
+  <h2>Headless Services</h2>
+
+  <p>A headless service has <code>clusterIP: None</code>. No virtual IP is allocated, and DNS behaves differently.</p>
+
+  <pre><code><span class="kw">apiVersion</span>: v1
+<span class="kw">kind</span>: Service
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">my-headless-svc</span>
+<span class="kw">spec</span>:
+  <span class="attr">clusterIP</span>: <span class="str">None</span>           <span class="cm"># This makes it headless</span>
+  <span class="attr">selector</span>:
+    <span class="attr">app</span>: <span class="str">my-stateful-app</span>
+  <span class="attr">ports</span>:
+    - <span class="attr">port</span>: <span class="num">5432</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Headless DNS Behavior</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>Normal ClusterIP Service</th>
+          <th>Headless Service</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>DNS A record</strong></td>
+          <td>Returns single ClusterIP (10.96.x.x)</td>
+          <td>Returns <em>all</em> Pod IPs (multiple A records)</td>
+        </tr>
+        <tr>
+          <td><strong>Load balancing</strong></td>
+          <td>kube-proxy (iptables/IPVS)</td>
+          <td>Client-side (DNS round-robin or app logic)</td>
+        </tr>
+        <tr>
+          <td><strong>kube-proxy involvement</strong></td>
+          <td>Yes — programs DNAT rules</td>
+          <td>None</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">StatefulSet + Headless Service</div>
+    <p>When combined with a StatefulSet, each Pod gets a <strong>stable, predictable DNS name</strong>:</p>
+    <pre><code><span class="cm"># StatefulSet "postgres" with headless service "postgres-svc"</span>
+<span class="fn">postgres-0</span>.postgres-svc.default.svc.cluster.local  <span class="cm">-> 10.244.1.5</span>
+<span class="fn">postgres-1</span>.postgres-svc.default.svc.cluster.local  <span class="cm">-> 10.244.2.3</span>
+<span class="fn">postgres-2</span>.postgres-svc.default.svc.cluster.local  <span class="cm">-> 10.244.3.8</span></code></pre>
+    <p>This gives you <strong>stable network identity</strong> — even if a Pod restarts on a different node, its DNS name stays the same. Essential for databases, Kafka brokers, etcd, ZooKeeper — anything that needs peer discovery.</p>
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Key Takeaways</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Services</div>
+      <ul>
+        <li>ClusterIP: internal VIP, the building block</li>
+        <li>NodePort: ClusterIP + port on all nodes</li>
+        <li>LoadBalancer: NodePort + cloud LB</li>
+        <li>ExternalName: DNS CNAME only</li>
+        <li>Headless: DNS returns Pod IPs directly</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Data Plane</div>
+      <ul>
+        <li>kube-proxy programs iptables or IPVS on every node</li>
+        <li>iptables: O(n), probability-based — fine up to ~5K services</li>
+        <li>IPVS: O(1), multiple LB algorithms — use at scale</li>
+        <li>EndpointSlices replaced Endpoints for efficiency</li>
+        <li><code>externalTrafficPolicy: Local</code> preserves source IP</li>
+      </ul>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 06 — TLS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 06 — TLS</h1>
+  <p class="subtitle">Transport Layer Security — encryption, authentication, integrity</p>
+
+  <!-- ===== What TLS Provides ===== -->
+  <h2>The Three Pillars of TLS</h2>
+
+  <p>TLS (Transport Layer Security) sits between the application layer and the transport layer. It wraps a reliable transport (typically TCP; embedded in QUIC for HTTP/3) and provides three guarantees:</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Confidentiality</div>
+      <p>Data is <strong>encrypted</strong> so that only the intended recipient can read it. Anyone intercepting packets on the wire sees ciphertext. Achieved via symmetric encryption (AES-GCM, ChaCha20-Poly1305) with keys established during the handshake.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Authentication</div>
+      <p>The server proves its identity via a <strong>certificate</strong> signed by a trusted Certificate Authority. The client verifies the certificate chain to confirm it's talking to the real server, not an impersonator. Optionally, the client can also authenticate (mTLS).</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Integrity</div>
+      <p>Every TLS record includes a <strong>MAC</strong> (Message Authentication Code). If any bit of the ciphertext is modified in transit, the recipient detects it and rejects the record. In TLS 1.3, AEAD ciphers (AES-GCM) provide encryption + integrity in a single operation.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Terminology:</strong> "SSL" and "TLS" are often used interchangeably in casual conversation, but SSL (Secure Sockets Layer) is the deprecated predecessor. SSL 3.0 was the last SSL version (1996). TLS 1.0 replaced it in 1999. As of 2021, only TLS 1.2 and TLS 1.3 are considered secure. TLS 1.0 and 1.1 are officially deprecated (RFC 8996).
+  </div>
+
+  <!-- ===== TLS 1.3 Handshake ===== -->
+  <h2>TLS 1.3 Handshake</h2>
+
+  <p>TLS 1.3 (RFC 8446, 2018) redesigned the handshake to be both faster and more secure than TLS 1.2. The key improvement: <strong>1-RTT handshake</strong> — the client sends its key share in the first message, enabling the server to derive the shared secret immediately.</p>
+
+  <h3>Full Handshake (1-RTT)</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ClientHello</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ServerHello + EncryptedExtensions + Cert + Finished</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">Finished + [Application Data]</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step-by-Step Breakdown</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong>Client Hello</strong> — The client sends:
+          <ul>
+            <li>Supported TLS versions (only 1.3 in the supported_versions extension)</li>
+            <li>Supported <strong>cipher suites</strong> (e.g., TLS_AES_256_GCM_SHA384)</li>
+            <li><strong>Key share</strong> — the client's ECDHE public key (this is the 1.3 innovation: send key material upfront)</li>
+            <li><strong>SNI</strong> (Server Name Indication) — the hostname (e.g., <code>api.example.com</code>)</li>
+            <li>Supported signature algorithms</li>
+            <li>ALPN list (e.g., <code>h2, http/1.1</code>)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong>Server Hello</strong> — The server responds with:
+          <ul>
+            <li>Chosen cipher suite</li>
+            <li>Server's ECDHE public key (key share)</li>
+          </ul>
+          <em>At this point, both sides can compute the shared secret via ECDHE. Everything after this is encrypted.</em>
+          <ul>
+            <li><strong>Encrypted Extensions</strong> — additional server parameters</li>
+            <li><strong>Certificate</strong> — the server's X.509 certificate</li>
+            <li><strong>Certificate Verify</strong> — signature over the handshake transcript, proving the server owns the private key for the certificate</li>
+            <li><strong>Finished</strong> — HMAC over the entire handshake transcript (integrity check)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong>Client Finished</strong> — The client sends its Finished message (HMAC over the handshake). Application data can be sent immediately in this same flight. <strong>Total: 1 round trip.</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>TLS 1.2 vs TLS 1.3 Handshake Comparison</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">TLS 1.2 (2-RTT)</div>
+      <div class="comp-body">
+        <div class="steps">
+          <div class="step"><div class="step-num">1</div><div>ClientHello (cipher suites, random)</div></div>
+          <div class="step"><div class="step-num">2</div><div>ServerHello + Cert + ServerKeyExchange + Done</div></div>
+          <div class="step"><div class="step-num">3</div><div>ClientKeyExchange + ChangeCipherSpec + Finished</div></div>
+          <div class="step"><div class="step-num">4</div><div>ChangeCipherSpec + Finished</div></div>
+          <div class="step"><div class="step-num">5</div><div>Application Data</div></div>
+        </div>
+        <p style="margin-top:10px;">Key exchange happens in messages 2-3. Encryption begins only after step 4.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">TLS 1.3 (1-RTT)</div>
+      <div class="comp-body">
+        <div class="steps">
+          <div class="step"><div class="step-num">1</div><div>ClientHello + key_share + SNI</div></div>
+          <div class="step"><div class="step-num">2</div><div>ServerHello + key_share + {Cert + Finished}</div></div>
+          <div class="step"><div class="step-num">3</div><div>Finished + Application Data</div></div>
+        </div>
+        <p style="margin-top:10px;">Client sends key material in message 1. Server encrypts from message 2 onwards. App data flows in message 3.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>0-RTT Resumption (PSK)</h3>
+
+  <p>When a client has connected to a server before, TLS 1.3 supports <strong>0-RTT resumption</strong>. During the previous session, the server sends the client a <strong>PSK (Pre-Shared Key)</strong> — essentially a session ticket. On reconnection, the client includes application data in the very first message, encrypted with the PSK.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ClientHello + PSK + early_data (0-RTT)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ServerHello + Finished</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">Finished</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>0-RTT replay attack risk:</strong> Because the 0-RTT data is sent before the handshake completes, there's no anti-replay protection from the TLS protocol itself. An attacker who captures the initial packet can replay it. Servers MUST only accept 0-RTT for idempotent requests (GET, HEAD). Non-idempotent operations (POST, PUT) must wait for the full handshake. Many servers disable 0-RTT entirely because of this.
+  </div>
+
+  <!-- ===== Cipher Suites ===== -->
+  <h2>Cipher Suites</h2>
+
+  <p>A cipher suite defines the algorithms used for the TLS session. TLS 1.3 dramatically simplified the cipher suite structure compared to TLS 1.2.</p>
+
+  <div class="panel">
+    <div class="panel-title">Anatomy of a TLS 1.3 Cipher Suite</div>
+    <pre><code><span class="type">TLS_AES_256_GCM_SHA384</span>
+ <span class="cm">│    │       │     │</span>
+ <span class="cm">│    │       │     └── Hash algorithm: SHA-384 (for HKDF key derivation)</span>
+ <span class="cm">│    │       └──────── Mode: GCM (Galois/Counter Mode — AEAD)</span>
+ <span class="cm">│    └──────────────── Cipher: AES-256 (symmetric encryption)</span>
+ <span class="cm">└───────────────────── Protocol: TLS</span></code></pre>
+  </div>
+
+  <p>TLS 1.3 only supports <strong>5 cipher suites</strong>, all using AEAD (Authenticated Encryption with Associated Data):</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Cipher Suite</th>
+        <th>AEAD Cipher</th>
+        <th>Hash</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>TLS_AES_128_GCM_SHA256</code></td>
+        <td>AES-128-GCM</td>
+        <td>SHA-256</td>
+        <td>Most common, good performance</td>
+      </tr>
+      <tr>
+        <td><code>TLS_AES_256_GCM_SHA384</code></td>
+        <td>AES-256-GCM</td>
+        <td>SHA-384</td>
+        <td>Higher security margin</td>
+      </tr>
+      <tr>
+        <td><code>TLS_CHACHA20_POLY1305_SHA256</code></td>
+        <td>ChaCha20-Poly1305</td>
+        <td>SHA-256</td>
+        <td>Fast on CPUs without AES-NI (mobile)</td>
+      </tr>
+      <tr>
+        <td><code>TLS_AES_128_CCM_SHA256</code></td>
+        <td>AES-128-CCM</td>
+        <td>SHA-256</td>
+        <td>Counter with CBC-MAC, IoT use</td>
+      </tr>
+      <tr>
+        <td><code>TLS_AES_128_CCM_8_SHA256</code></td>
+        <td>AES-128-CCM-8</td>
+        <td>SHA-256</td>
+        <td>Shorter auth tag, constrained devices</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Key point:</strong> Notice that TLS 1.3 cipher suites do NOT specify the key exchange algorithm. That's because TLS 1.3 mandates ephemeral key exchange (ECDHE or DHE) — it's not negotiable. In TLS 1.2, the cipher suite included the key exchange (e.g., <code>TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384</code>), and you could negotiate static RSA key exchange (no forward secrecy).
+  </div>
+
+  <h3>What TLS 1.3 Removed</h3>
+
+  <div class="panel">
+    <div class="panel-title">Removed in TLS 1.3 (security improvements)</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Removed</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>RSA key exchange</td>
+          <td>No forward secrecy — if the server's private key is compromised later, all past sessions can be decrypted</td>
+        </tr>
+        <tr>
+          <td>Static DH</td>
+          <td>Same problem — no forward secrecy without ephemeral keys</td>
+        </tr>
+        <tr>
+          <td>CBC mode ciphers</td>
+          <td>Vulnerable to padding oracle attacks (BEAST, POODLE, Lucky 13)</td>
+        </tr>
+        <tr>
+          <td>RC4</td>
+          <td>Broken — statistical biases in keystream allow plaintext recovery</td>
+        </tr>
+        <tr>
+          <td>MD5, SHA-1</td>
+          <td>Collision attacks practical (SHA-1 collision demonstrated by Google in 2017)</td>
+        </tr>
+        <tr>
+          <td>Compression</td>
+          <td>CRIME/BREACH attacks — compression leaks information about plaintext</td>
+        </tr>
+        <tr>
+          <td>Renegotiation</td>
+          <td>Complex, historically buggy, source of vulnerabilities</td>
+        </tr>
+        <tr>
+          <td>ChangeCipherSpec</td>
+          <td>Entire message type removed — unnecessary in 1.3's cleaner design</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== Certificates ===== -->
+  <h2>Certificates (X.509)</h2>
+
+  <p>Certificates are how TLS achieves authentication. The server presents a certificate that cryptographically binds a public key to an identity (domain name). The client verifies this certificate against a trusted set of Certificate Authorities (CAs).</p>
+
+  <h3>X.509 Certificate Structure</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="width:50%">
+      <span class="field-name">Version</span>
+      <span class="field-size">v3 (0x2)</span>
+    </div>
+    <div class="pkt-field src" style="width:50%">
+      <span class="field-name">Serial Number</span>
+      <span class="field-size">Unique per CA</span>
+    </div>
+    <div class="pkt-field flag" style="width:100%">
+      <span class="field-name">Issuer</span>
+      <span class="field-size">DN of the Certificate Authority that signed this cert</span>
+    </div>
+    <div class="pkt-field check" style="width:50%">
+      <span class="field-name">Validity (Not Before)</span>
+      <span class="field-size">Start of validity period</span>
+    </div>
+    <div class="pkt-field check" style="width:50%">
+      <span class="field-name">Validity (Not After)</span>
+      <span class="field-size">Expiration date</span>
+    </div>
+    <div class="pkt-field dst" style="width:100%">
+      <span class="field-name">Subject</span>
+      <span class="field-size">DN of the entity (e.g., CN=example.com)</span>
+    </div>
+    <div class="pkt-field data" style="width:100%">
+      <span class="field-name">Subject Public Key Info</span>
+      <span class="field-size">Algorithm (RSA/ECDSA) + Public Key</span>
+    </div>
+    <div class="pkt-field proto" style="width:100%">
+      <span class="field-name">Extensions (v3)</span>
+      <span class="field-size">SAN, Key Usage, Basic Constraints, CRL Distribution Points, OCSP, CT</span>
+    </div>
+    <div class="pkt-field flag" style="width:100%">
+      <span class="field-name">Signature Algorithm + Signature</span>
+      <span class="field-size">CA's signature over all the above fields</span>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Ops tip:</strong> The <code>Subject</code> CN (Common Name) is deprecated for hostname matching. Modern certificates use the <strong>SAN (Subject Alternative Name)</strong> extension, which supports multiple domains and wildcards: <code>DNS:example.com, DNS:*.example.com, DNS:api.example.com</code>.
+  </div>
+
+  <h3>Certificate Chain of Trust</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">End-Entity Cert</div>
+      <div class="desc">Your domain cert<br>(e.g., api.example.com)<br>Signed by Intermediate CA</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Intermediate CA</div>
+      <div class="desc">Issued by Root CA<br>Signs end-entity certs<br>Signed by Root CA</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Root CA</div>
+      <div class="desc">Self-signed<br>Pre-installed in OS/browser<br>~150 root CAs in trust stores</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why Intermediate CAs Exist</div>
+    <p>Root CA private keys are kept <strong>offline</strong> in HSMs (Hardware Security Modules) in secure facilities. They are too valuable to risk exposure. Intermediate CAs are signed by root CAs but operate online to issue certificates. If an intermediate CA is compromised, it can be revoked without invalidating the root (which would break the entire trust chain for thousands of sites).</p>
+  </div>
+
+  <h3>Certificate Validation Steps</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Chain building:</strong> Construct the chain from end-entity cert to a trusted root CA. The server should send all intermediate certs (the root is already in the trust store).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Signature verification:</strong> For each cert in the chain, verify that the issuer's public key correctly signed the certificate.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Validity period:</strong> Check that the current time is within the Not Before / Not After range for every cert in the chain.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Revocation check:</strong> Verify the cert hasn't been revoked:
+        <ul>
+          <li><strong>CRL (Certificate Revocation List):</strong> Download a list of revoked serial numbers from the CA. Downside: lists can be large, and clients must fetch and cache them.</li>
+          <li><strong>OCSP (Online Certificate Status Protocol):</strong> Query the CA in real-time for a single cert's status. Downside: adds latency, privacy concern (CA sees what sites you visit).</li>
+          <li><strong>OCSP Stapling:</strong> The server fetches its own OCSP response and "staples" it to the TLS handshake. Best of both worlds — no extra round trip, no privacy leak.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Hostname matching:</strong> Check that the requested hostname matches a SAN entry in the end-entity cert.</div>
+    </div>
+  </div>
+
+  <!-- ===== SNI ===== -->
+  <h2>SNI (Server Name Indication)</h2>
+
+  <p>Problem: a single IP address can host many TLS domains (like virtual hosts). The server needs to know which certificate to present <em>before</em> the TLS handshake completes. But without decrypting anything, the server doesn't know which domain the client wants.</p>
+
+  <p>Solution: <strong>SNI</strong> — the client includes the target hostname in the <strong>ClientHello</strong> message (which is sent in plaintext). The server uses this to select the correct certificate.</p>
+
+  <div class="panel">
+    <div class="panel-title">SNI in the TLS ClientHello</div>
+    <pre><code><span class="cm">ClientHello</span>
+  <span class="attr">TLS Version</span>: <span class="val">1.3</span>
+  <span class="attr">Cipher Suites</span>: <span class="val">[TLS_AES_256_GCM_SHA384, ...]</span>
+  <span class="attr">Extensions</span>:
+    <span class="attr">server_name (SNI)</span>: <span class="str">"api.example.com"</span>    <span class="cm">← sent in PLAINTEXT</span>
+    <span class="attr">supported_versions</span>: <span class="val">[TLS 1.3]</span>
+    <span class="attr">key_share</span>: <span class="val">[x25519: 0x...]</span>
+    <span class="attr">signature_algorithms</span>: <span class="val">[ecdsa_secp256r1_sha256, ...]</span>
+    <span class="attr">alpn</span>: <span class="val">[h2, http/1.1]</span></code></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Privacy concern:</strong> Because SNI is sent in cleartext, anyone on the network path (ISP, corporate firewall, surveillance systems) can see <em>which domains</em> you're connecting to, even though they can't see the content. This is how some censorship systems block specific sites. The solution is <strong>ECH (Encrypted Client Hello)</strong>, which encrypts the entire ClientHello using a public key published in DNS. ECH is still being standardized and rolled out.
+  </div>
+
+  <!-- ===== ALPN ===== -->
+  <h2>ALPN (Application-Layer Protocol Negotiation)</h2>
+
+  <p>ALPN is a TLS extension that lets client and server negotiate which application protocol to use <strong>during the TLS handshake</strong>, avoiding an extra round trip after the handshake.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header request">Client Offers</div>
+      <div class="comp-body">
+        <pre><code><span class="attr">alpn</span>: [<span class="str">"h2"</span>, <span class="str">"http/1.1"</span>]</code></pre>
+        <p>"I support HTTP/2 and HTTP/1.1, in order of preference."</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header response">Server Selects</div>
+      <div class="comp-body">
+        <pre><code><span class="attr">alpn</span>: <span class="str">"h2"</span></code></pre>
+        <p>"We'll use HTTP/2."</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Why this matters:</strong> Without ALPN, the client would have to complete the TLS handshake, then use the HTTP Upgrade mechanism to switch from HTTP/1.1 to HTTP/2 — adding another round trip. ALPN piggybacks on the TLS handshake, so protocol selection is free. This is also how HTTP/3 is discovered — the server advertises <code>h3</code> support via the <code>Alt-Svc</code> header in an HTTP/2 response.
+  </div>
+
+  <!-- ===== Certificate Transparency ===== -->
+  <h2>Certificate Transparency (CT)</h2>
+
+  <p>Certificate Transparency is a system of <strong>public, append-only logs</strong> that record every certificate issued by participating CAs. It's designed to detect rogue or mistakenly issued certificates.</p>
+
+  <div class="panel">
+    <div class="panel-title">How CT Works</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>CA submits cert to CT logs</strong> — Before (or shortly after) issuance, the CA submits the certificate to multiple independent CT log servers.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>Log returns SCT</strong> — The log returns a Signed Certificate Timestamp (SCT), which is a promise that the cert will appear in the log within a maximum merge delay (typically 24h).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>Server delivers SCTs</strong> — The server includes SCTs in the TLS handshake (via certificate extension, OCSP stapling, or TLS extension). Chrome requires at least 2 SCTs from different logs.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>Monitors watch logs</strong> — Domain owners, researchers, and automated systems continuously monitor CT logs for unexpected certificates issued for their domains.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Ops action:</strong> You can monitor CT logs for your domains using tools like <a href="https://crt.sh">crt.sh</a> or Google's CT search. If you see a certificate for your domain that you didn't request, it could indicate a CA compromise or a domain validation failure. Many organizations set up automated CT monitoring alerts.
+  </div>
+
+  <!-- ===== Key Exchange ===== -->
+  <h2>Key Exchange: ECDHE and Forward Secrecy</h2>
+
+  <p>TLS 1.3 mandates <strong>ephemeral key exchange</strong> — both sides generate fresh, temporary key pairs for every connection. The dominant algorithm is <strong>ECDHE (Elliptic Curve Diffie-Hellman Ephemeral)</strong>.</p>
+
+  <h3>How ECDHE Works (Conceptual)</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">Client's ephemeral public key (key_share)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Server's ephemeral public key (key_share)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">ECDHE Key Exchange Steps</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Both sides agree on an <strong>elliptic curve</strong> (e.g., x25519 or P-256).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Client generates a <strong>random ephemeral private key</strong> and computes the corresponding public key on the curve. Sends the public key in ClientHello.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Server does the same — generates its own ephemeral key pair. Sends its public key in ServerHello.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>Both sides compute the <strong>same shared secret</strong> using their private key + the other's public key. This is the ECDH math: <code>shared_secret = client_private * server_public = server_private * client_public</code>.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>The shared secret is fed into <strong>HKDF</strong> (HMAC-based Key Derivation Function) to derive the actual encryption keys, IVs, and MAC keys for the session.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Forward Secrecy</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without Forward Secrecy (RSA Key Exchange)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Client encrypts the pre-master secret with the server's <strong>long-lived RSA public key</strong></li>
+          <li>If the server's private key is compromised <em>years later</em>, an attacker can decrypt all previously recorded sessions</li>
+          <li>Passive eavesdropping + future key compromise = total exposure</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With Forward Secrecy (ECDHE)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Fresh ephemeral keys for every session</li>
+          <li>Ephemeral private keys are discarded after the session ends</li>
+          <li>Compromising the server's long-lived key only affects <strong>authentication</strong>, not past encryption</li>
+          <li>Each session's encryption key is independent</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Critical:</strong> Forward secrecy is not optional in TLS 1.3 — it's mandatory by design. This is one of the most important security improvements over TLS 1.2, where RSA key exchange (no FS) was still allowed and commonly used.
+  </div>
+
+  <div class="note">
+    <strong>Common curves:</strong> <code>x25519</code> (Curve25519, Daniel Bernstein's design — fast, constant-time, hard to misuse) is the most widely used. <code>P-256</code> (secp256r1, NIST curve) is the other common choice. TLS 1.3 implementations typically support both. Post-quantum key exchange (ML-KEM/Kyber) is being deployed as a hybrid alongside x25519 to protect against future quantum computers.
+  </div>
+
+</body>
+</html>

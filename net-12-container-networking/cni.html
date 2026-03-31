@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 12 — CNI (Container Network Interface)</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 12 — CNI (Container Network Interface)</h1>
+  <p class="subtitle">The CNCF standard that Kubernetes uses for pod networking</p>
+
+  <!-- ===== WHAT IS CNI ===== -->
+  <h2>What Is CNI?</h2>
+
+  <p>CNI (Container Network Interface) is a <strong>CNCF specification</strong> that defines a standard interface between container runtimes and network plugins. It answers one question: <em>how does a container get a network interface, an IP address, and connectivity?</em></p>
+
+  <div class="panel">
+    <div class="panel-title">Key Design Principles</div>
+    <ul>
+      <li><strong>Runtime-agnostic</strong> — not Docker-specific. Kubernetes, containerd, CRI-O, rkt, Podman all use CNI</li>
+      <li><strong>Plugin-based</strong> — network setup is delegated to external executables (binaries in <code>/opt/cni/bin/</code>)</li>
+      <li><strong>Composable</strong> — multiple plugins can be chained together (network + IPAM + portmap + bandwidth)</li>
+      <li><strong>Minimal contract</strong> — only 4 operations: ADD, DEL, CHECK, VERSION</li>
+      <li><strong>Configuration-driven</strong> — JSON config files in <code>/etc/cni/net.d/</code></li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> Kubernetes deliberately chose CNI over Docker's native networking (libnetwork/CNM) because CNI's simpler, plugin-first design aligned better with K8s's philosophy of composable, swappable components.
+  </div>
+
+  <!-- ===== PLUGIN CONTRACT ===== -->
+  <h2>The Plugin Contract</h2>
+
+  <p>CNI plugins are ordinary executables. The container runtime invokes them with environment variables and a JSON config on stdin. The plugin performs its work and returns a JSON result on stdout.</p>
+
+  <table>
+    <tr>
+      <th>Operation</th>
+      <th>Action</th>
+      <th>When Called</th>
+    </tr>
+    <tr>
+      <td><code>ADD</code></td>
+      <td>Create interface, assign IP, setup routes, configure DNS</td>
+      <td>Pod sandbox creation (new network namespace is ready)</td>
+    </tr>
+    <tr>
+      <td><code>DEL</code></td>
+      <td>Tear down interface, release IP, clean up routes</td>
+      <td>Pod termination (before namespace is destroyed)</td>
+    </tr>
+    <tr>
+      <td><code>CHECK</code></td>
+      <td>Verify networking is still correctly configured</td>
+      <td>Periodic health checks (optional, runtime-dependent)</td>
+    </tr>
+    <tr>
+      <td><code>VERSION</code></td>
+      <td>Report supported CNI specification versions</td>
+      <td>Runtime version negotiation</td>
+    </tr>
+  </table>
+
+  <h3>How the Runtime Invokes a Plugin</h3>
+
+  <div class="panel">
+    <div class="panel-title">Environment Variables Passed to Plugin</div>
+    <ul>
+      <li><code>CNI_COMMAND</code> — the operation: <code>ADD</code>, <code>DEL</code>, <code>CHECK</code>, or <code>VERSION</code></li>
+      <li><code>CNI_CONTAINERID</code> — unique container/sandbox ID</li>
+      <li><code>CNI_NETNS</code> — path to the network namespace (e.g., <code>/var/run/netns/abc123</code>)</li>
+      <li><code>CNI_IFNAME</code> — the interface name to create inside the container (e.g., <code>eth0</code>)</li>
+      <li><code>CNI_PATH</code> — search path for plugin binaries (e.g., <code>/opt/cni/bin</code>)</li>
+    </ul>
+  </div>
+
+  <div class="terminal">
+    <span class="cm"># Example: runtime invoking the bridge plugin for ADD</span><br>
+    <span class="prompt">$ </span>CNI_COMMAND=ADD \<br>
+    &nbsp; CNI_CONTAINERID=abc123def456 \<br>
+    &nbsp; CNI_NETNS=/var/run/netns/abc123 \<br>
+    &nbsp; CNI_IFNAME=eth0 \<br>
+    &nbsp; CNI_PATH=/opt/cni/bin \<br>
+    &nbsp; /opt/cni/bin/bridge &lt; /etc/cni/net.d/10-bridge.conflist<br><br>
+    <span class="cm"># Plugin returns JSON result on stdout:</span><br>
+    <span class="output">{
+  "cniVersion": "1.0.0",
+  "interfaces": [{ "name": "eth0", "sandbox": "/var/run/netns/abc123" }],
+  "ips": [{ "address": "10.244.1.5/24", "gateway": "10.244.1.1" }],
+  "routes": [{ "dst": "0.0.0.0/0", "gw": "10.244.1.1" }],
+  "dns": { "nameservers": ["10.96.0.10"] }
+}</span>
+  </div>
+
+  <h3>File Locations</h3>
+
+  <div class="file-tree">
+    <span class="dir">/opt/cni/bin/</span>            <span style="color: #888;">Plugin binaries</span><br>
+    &nbsp;&nbsp;<span class="file">bridge</span><br>
+    &nbsp;&nbsp;<span class="file">ptp</span><br>
+    &nbsp;&nbsp;<span class="file">macvlan</span><br>
+    &nbsp;&nbsp;<span class="file">ipvlan</span><br>
+    &nbsp;&nbsp;<span class="file">vlan</span><br>
+    &nbsp;&nbsp;<span class="file">host-local</span>          <span style="color: #888;">IPAM plugin</span><br>
+    &nbsp;&nbsp;<span class="file">dhcp</span>                <span style="color: #888;">IPAM plugin</span><br>
+    &nbsp;&nbsp;<span class="file">static</span>              <span style="color: #888;">IPAM plugin</span><br>
+    &nbsp;&nbsp;<span class="file">portmap</span>             <span style="color: #888;">Meta plugin</span><br>
+    &nbsp;&nbsp;<span class="file">bandwidth</span>           <span style="color: #888;">Meta plugin</span><br>
+    &nbsp;&nbsp;<span class="file">flannel</span>             <span style="color: #888;">3rd-party plugin</span><br>
+    &nbsp;&nbsp;<span class="highlight">calico</span>              <span style="color: #888;">3rd-party plugin</span><br><br>
+    <span class="dir">/etc/cni/net.d/</span>           <span style="color: #888;">Configuration files</span><br>
+    &nbsp;&nbsp;<span class="highlight">10-bridge.conflist</span>  <span style="color: #888;">Loaded in alphabetical order</span><br>
+    &nbsp;&nbsp;<span class="file">99-loopback.conf</span>
+  </div>
+
+  <div class="warn">
+    <strong>Warning:</strong> The runtime loads the <strong>first</strong> config file in <code>/etc/cni/net.d/</code> (alphabetically). If you have multiple conflist files, the naming prefix (e.g., <code>10-</code>, <code>99-</code>) determines priority. A stale config file from a previous CNI plugin installation can silently break networking.
+  </div>
+
+  <!-- ===== IPAM PLUGINS ===== -->
+  <h2>IPAM (IP Address Management) Plugins</h2>
+
+  <p>IPAM is separated from network plumbing by design. The network plugin calls the IPAM plugin to allocate/release IPs. This separation means any network plugin can work with any IPAM plugin.</p>
+
+  <table>
+    <tr>
+      <th>IPAM Plugin</th>
+      <th>Allocation Method</th>
+      <th>State Storage</th>
+      <th>Use Case</th>
+    </tr>
+    <tr>
+      <td><code>host-local</code></td>
+      <td>Allocate from configured range on the local host</td>
+      <td><code>/var/lib/cni/networks/&lt;name&gt;/</code></td>
+      <td>Default for most setups. Each node gets a subnet slice.</td>
+    </tr>
+    <tr>
+      <td><code>dhcp</code></td>
+      <td>DHCP request to network DHCP server</td>
+      <td>DHCP lease (external)</td>
+      <td>Containers needing real LAN IPs (macvlan setups)</td>
+    </tr>
+    <tr>
+      <td><code>static</code></td>
+      <td>Fixed IP from config</td>
+      <td>None (config-based)</td>
+      <td>Testing, specialized infra with known IPs</td>
+    </tr>
+  </table>
+
+  <h3>host-local Configuration Example</h3>
+
+  <pre><code>{
+  <span class="attr">"type"</span>: <span class="str">"host-local"</span>,
+  <span class="attr">"ranges"</span>: [
+    [{
+      <span class="attr">"subnet"</span>: <span class="str">"10.244.1.0/24"</span>,
+      <span class="attr">"rangeStart"</span>: <span class="str">"10.244.1.10"</span>,
+      <span class="attr">"rangeEnd"</span>: <span class="str">"10.244.1.250"</span>,
+      <span class="attr">"gateway"</span>: <span class="str">"10.244.1.1"</span>
+    }]
+  ],
+  <span class="attr">"routes"</span>: [{ <span class="attr">"dst"</span>: <span class="str">"0.0.0.0/0"</span> }],
+  <span class="attr">"dataDir"</span>: <span class="str">"/var/lib/cni/networks"</span>
+}</code></pre>
+
+  <div class="tip">
+    <strong>Tip:</strong> If pods get stuck in <code>ContainerCreating</code> with IPAM errors, check <code>/var/lib/cni/networks/&lt;name&gt;/</code> on the node. Stale IP reservations from crashed pods accumulate here. Safe to clear if the pods are gone (but let the CNI plugin handle cleanup if possible).
+  </div>
+
+  <!-- ===== NETWORK PLUGINS ===== -->
+  <h2>Network Plugins (Reference Implementations)</h2>
+
+  <p>The CNI project ships several reference plugins that handle the actual network plumbing. Third-party plugins (Calico, Cilium, Flannel) often build on or replace these.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">bridge</div>
+      <ul>
+        <li>Creates a Linux bridge on the host</li>
+        <li>Creates a veth pair: one end in pod, other on bridge</li>
+        <li>Functionally identical to Docker's bridge mode</li>
+        <li>Used by Flannel (in bridge mode) and standalone K8s</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">ptp (point-to-point)</div>
+      <ul>
+        <li>Creates a veth pair with <strong>no bridge</strong></li>
+        <li>Host-side veth gets a route to the pod IP</li>
+        <li>Used by Calico — each pod gets a /32 route on the host</li>
+        <li>More scalable than bridge (no ARP, no broadcast domain)</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">macvlan / ipvlan</div>
+      <ul>
+        <li>Attach containers directly to host's physical interface</li>
+        <li>macvlan: unique MAC per container (real L2 identity)</li>
+        <li>ipvlan: shared MAC, unique IP (better for cloud/switch limits)</li>
+        <li>Zero overlay overhead — native L2/L3 performance</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">VXLAN-based (via Flannel, Weave)</div>
+      <ul>
+        <li>Overlay networking: encapsulate L2 frames in UDP</li>
+        <li>Enables pod-to-pod communication across hosts</li>
+        <li>~50 byte overhead per packet (VXLAN header)</li>
+        <li>Works anywhere — no special network infrastructure needed</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== PLUGIN CHAINING ===== -->
+  <h2>Plugin Chaining</h2>
+
+  <p>CNI supports executing multiple plugins in sequence via a <strong>conflist</strong> (configuration list). Each plugin receives the result of the previous plugin and can augment it. This is how additional features like port mapping and bandwidth limiting are layered on.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">bridge</div>
+      <div class="desc">Create veth, attach to bridge, assign IP</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">portmap</div>
+      <div class="desc">Setup iptables DNAT for hostPort</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">bandwidth</div>
+      <div class="desc">Apply tc (traffic control) rate limits</div>
+    </div>
+  </div>
+
+  <h3>Conflist Example</h3>
+
+  <pre><code>{
+  <span class="attr">"cniVersion"</span>: <span class="str">"1.0.0"</span>,
+  <span class="attr">"name"</span>: <span class="str">"my-k8s-network"</span>,
+  <span class="attr">"plugins"</span>: [
+    {
+      <span class="attr">"type"</span>: <span class="str">"bridge"</span>,
+      <span class="attr">"bridge"</span>: <span class="str">"cni0"</span>,
+      <span class="attr">"isGateway"</span>: <span class="num">true</span>,
+      <span class="attr">"ipMasq"</span>: <span class="num">true</span>,
+      <span class="attr">"ipam"</span>: {
+        <span class="attr">"type"</span>: <span class="str">"host-local"</span>,
+        <span class="attr">"ranges"</span>: [[{ <span class="attr">"subnet"</span>: <span class="str">"10.244.1.0/24"</span> }]],
+        <span class="attr">"routes"</span>: [{ <span class="attr">"dst"</span>: <span class="str">"0.0.0.0/0"</span> }]
+      }
+    },
+    {
+      <span class="attr">"type"</span>: <span class="str">"portmap"</span>,
+      <span class="attr">"capabilities"</span>: { <span class="attr">"portMappings"</span>: <span class="num">true</span> }
+    },
+    {
+      <span class="attr">"type"</span>: <span class="str">"bandwidth"</span>,
+      <span class="attr">"capabilities"</span>: { <span class="attr">"bandwidth"</span>: <span class="num">true</span> }
+    }
+  ]
+}</code></pre>
+
+  <div class="note">
+    <strong>Note:</strong> Plugins in the chain are executed in order for ADD and in <strong>reverse order</strong> for DEL. This ensures clean teardown — bandwidth limits are removed before the interface is deleted.
+  </div>
+
+  <!-- ===== HOW CNI WIRES A POD ===== -->
+  <h2>How CNI Wires a Pod (Detailed Flow)</h2>
+
+  <p>This is the full sequence from kubelet deciding to create a pod to the pod having a working network interface. Understanding this flow is essential for debugging networking failures.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong style="color: #fff;">kubelet creates pod sandbox</strong><br>
+        <span style="color: #999;">kubelet calls CRI <code>RunPodSandbox()</code>. The CRI runtime (containerd/CRI-O) creates a <strong>pause container</strong> — a minimal container whose sole purpose is to hold the network namespace. All other containers in the pod will share this namespace.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong style="color: #fff;">CRI creates network namespace</strong><br>
+        <span style="color: #999;">The runtime calls <code>unshare(CLONE_NEWNET)</code> to create a new network namespace for the sandbox. At this point it has only a loopback interface.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong style="color: #fff;">CRI invokes CNI ADD</strong><br>
+        <span style="color: #999;">The runtime sets <code>CNI_COMMAND=ADD</code>, <code>CNI_NETNS=/proc/&lt;pid&gt;/ns/net</code>, <code>CNI_IFNAME=eth0</code>, and pipes the conflist JSON to the first plugin binary on stdin.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong style="color: #fff;">CNI plugin creates veth pair</strong><br>
+        <span style="color: #999;">The plugin creates a veth pair. One end stays in the host namespace (attached to a bridge or routed), the other is moved into the pod's network namespace.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong style="color: #fff;">Attach to bridge or setup routing</strong><br>
+        <span style="color: #999;">Bridge plugins attach the host-side veth to a bridge (e.g., <code>cni0</code>). Routing plugins (Calico/ptp) add a host route for the pod IP instead.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong style="color: #fff;">Call IPAM plugin</strong><br>
+        <span style="color: #999;">The network plugin invokes the IPAM plugin (e.g., <code>host-local</code>) to allocate an IP address from the configured range. IPAM writes the allocation to its state file.</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong style="color: #fff;">Configure pod namespace</strong><br>
+        <span style="color: #999;">The plugin enters the pod's namespace and configures: IP address on eth0, default route to the gateway, DNS in <code>/etc/resolv.conf</code> (typically pointing to kube-dns at <code>10.96.0.10</code>).</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div>
+        <strong style="color: #fff;">Return result to CRI / kubelet</strong><br>
+        <span style="color: #999;">The plugin chain returns a JSON result (IPs, routes, interfaces, DNS) to stdout. The CRI runtime passes this back to kubelet, which records the pod's IP in the API server.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detailed flow diagram -->
+  <div style="padding: 30px; background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 12px; margin: 20px 0;">
+    <div style="text-align: center; margin-bottom: 15px;">
+      <span style="color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Pod Network Setup Flow</span>
+    </div>
+
+    <!-- Row 1: kubelet -> CRI -> namespace -->
+    <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;">
+      <div style="background: #3b82f620; border: 2px solid #3b82f6; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #60a5fa; font-weight: bold; font-size: 13px;">kubelet</div>
+        <div style="color: #888; font-size: 11px;">RunPodSandbox()</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #a78bfa20; border: 2px solid #a78bfa; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #a78bfa; font-weight: bold; font-size: 13px;">CRI (containerd)</div>
+        <div style="color: #888; font-size: 11px;">Create pause container</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #34d399; font-weight: bold; font-size: 13px;">New netns</div>
+        <div style="color: #888; font-size: 11px;">CLONE_NEWNET</div>
+      </div>
+    </div>
+
+    <div style="text-align: center; color: #555; font-size: 18px; margin: 8px 0;">|</div>
+    <div style="text-align: center; color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">CNI_COMMAND=ADD</div>
+    <div style="text-align: center; color: #555; font-size: 18px; margin: 8px 0;">v</div>
+
+    <!-- Row 2: CNI plugin chain -->
+    <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;">
+      <div style="background: #fbbf2420; border: 2px solid #fbbf24; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #fbbf24; font-weight: bold; font-size: 13px;">CNI Plugin</div>
+        <div style="color: #888; font-size: 11px;">Create veth pair</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #22d3ee20; border: 2px solid #22d3ee; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #22d3ee; font-weight: bold; font-size: 13px;">IPAM Plugin</div>
+        <div style="color: #888; font-size: 11px;">Allocate IP</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #34d399; font-weight: bold; font-size: 13px;">Configure netns</div>
+        <div style="color: #888; font-size: 11px;">IP + routes + DNS</div>
+      </div>
+    </div>
+
+    <div style="text-align: center; color: #555; font-size: 18px; margin: 8px 0;">|</div>
+    <div style="text-align: center; color: #34d399; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">JSON result (IPs, routes, DNS)</div>
+    <div style="text-align: center; color: #555; font-size: 18px; margin: 8px 0;">v</div>
+
+    <!-- Row 3: Result path -->
+    <div style="display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
+      <div style="background: #a78bfa20; border: 2px solid #a78bfa; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #a78bfa; font-weight: bold; font-size: 13px;">CRI</div>
+        <div style="color: #888; font-size: 11px;">Returns result</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #3b82f620; border: 2px solid #3b82f6; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #60a5fa; font-weight: bold; font-size: 13px;">kubelet</div>
+        <div style="color: #888; font-size: 11px;">Records pod IP</div>
+      </div>
+      <div style="color: #555; font-size: 18px;">-></div>
+      <div style="background: #e9456020; border: 2px solid #e94560; border-radius: 8px; padding: 10px 16px; text-align: center;">
+        <div style="color: #e94560; font-weight: bold; font-size: 13px;">API Server</div>
+        <div style="color: #888; font-size: 11px;">status.podIP set</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Warning:</strong> If the CNI ADD call fails, the pod stays in <code>ContainerCreating</code>. Common causes: missing CNI binaries in <code>/opt/cni/bin/</code>, missing or malformed config in <code>/etc/cni/net.d/</code>, IPAM range exhaustion, or the CNI plugin's backend (e.g., etcd for Calico) being unreachable.
+  </div>
+
+  <!-- ===== CNI vs DOCKER NETWORKING ===== -->
+  <h2>CNI vs Docker Networking</h2>
+
+  <p>Docker has its own networking model called <strong>CNM</strong> (Container Network Model), implemented by <code>libnetwork</code>. Kubernetes chose CNI instead. Understanding why illuminates fundamental design differences.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header docker">Docker Networking (CNM/libnetwork)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Tightly coupled to Docker daemon</li>
+          <li>Containers are behind NAT by default</li>
+          <li>Cross-container communication requires port mapping or links</li>
+          <li>Port conflicts are the caller's problem</li>
+          <li>Discovery via Docker's embedded DNS (per-network)</li>
+          <li>Multi-host: Docker Swarm overlay (VXLAN)</li>
+          <li>More complex spec (Network, Endpoint, Sandbox abstractions)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">Kubernetes Networking (CNI)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Runtime-agnostic (containerd, CRI-O, etc.)</li>
+          <li>Every pod gets a <strong>routable IP</strong> — no NAT between pods</li>
+          <li>Any pod can reach any other pod by IP directly</li>
+          <li>Flat network model — simpler, more like real networking</li>
+          <li>Discovery via kube-dns / CoreDNS (cluster-wide)</li>
+          <li>Multi-host: pluggable (Flannel, Calico, Cilium, etc.)</li>
+          <li>Minimal spec (4 operations, stdin/stdout JSON)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why Kubernetes Chose CNI</div>
+    <ul>
+      <li><strong>Simpler spec</strong> — CNI is just exec a binary, pass JSON. CNM has a complex plugin registration and lifecycle model.</li>
+      <li><strong>No Docker dependency</strong> — K8s didn't want to be locked to Docker's daemon. CNI works with any OCI-compliant runtime.</li>
+      <li><strong>Flat network model</strong> — K8s requires pod-to-pod communication without NAT. Docker's NAT-by-default model conflicts with this.</li>
+      <li><strong>Pluggable</strong> — swapping network backends is just replacing a binary and a config file. No daemon restart needed.</li>
+      <li><strong>Overlay AND native routing</strong> — CNI supports both VXLAN overlays (Flannel) and BGP-based routing (Calico) equally well. Docker's model is overlay-centric.</li>
+    </ul>
+  </div>
+
+  <table>
+    <tr>
+      <th>Aspect</th>
+      <th>Docker (CNM)</th>
+      <th>Kubernetes (CNI)</th>
+    </tr>
+    <tr>
+      <td>IP model</td>
+      <td>Private IPs, NAT to host</td>
+      <td>Routable IPs, no inter-pod NAT</td>
+    </tr>
+    <tr>
+      <td>Inbound traffic</td>
+      <td>Port mapping (<code>-p</code>)</td>
+      <td>Direct to pod IP (via Service/Ingress)</td>
+    </tr>
+    <tr>
+      <td>Service discovery</td>
+      <td>Embedded DNS per network</td>
+      <td>CoreDNS cluster-wide</td>
+    </tr>
+    <tr>
+      <td>Plugin interface</td>
+      <td>Go library (linked into daemon)</td>
+      <td>Executable binary (exec'd per operation)</td>
+    </tr>
+    <tr>
+      <td>Plugin swap</td>
+      <td>Daemon restart</td>
+      <td>Replace binary + config</td>
+    </tr>
+    <tr>
+      <td>NetworkPolicy</td>
+      <td>Not supported</td>
+      <td>Supported (Calico, Cilium, etc.)</td>
+    </tr>
+  </table>
+
+  <!-- ===== POPULAR CNI PLUGINS ===== -->
+  <h2>Popular CNI Plugins</h2>
+
+  <table>
+    <tr>
+      <th>Plugin</th>
+      <th>Data Plane</th>
+      <th>Routing</th>
+      <th>NetworkPolicy</th>
+      <th>Encryption</th>
+      <th>Complexity</th>
+    </tr>
+    <tr>
+      <td><strong>Flannel</strong></td>
+      <td>Linux kernel (bridge + VXLAN)</td>
+      <td>VXLAN overlay (default), host-gw</td>
+      <td>No (needs Calico for policy)</td>
+      <td>WireGuard (experimental)</td>
+      <td>Low</td>
+    </tr>
+    <tr>
+      <td><strong>Calico</strong></td>
+      <td>Linux kernel (iptables) or eBPF</td>
+      <td>BGP native routing (no overlay) or VXLAN</td>
+      <td>Yes (full K8s + extended)</td>
+      <td>WireGuard</td>
+      <td>Medium</td>
+    </tr>
+    <tr>
+      <td><strong>Cilium</strong></td>
+      <td>eBPF (kernel bypass)</td>
+      <td>Native routing, VXLAN, or GENEVE</td>
+      <td>Yes (L3/L4 + L7 + DNS-aware)</td>
+      <td>WireGuard / IPsec</td>
+      <td>Medium-High</td>
+    </tr>
+    <tr>
+      <td><strong>Weave Net</strong></td>
+      <td>Linux kernel (OVS/VXLAN)</td>
+      <td>Mesh overlay</td>
+      <td>Yes (basic)</td>
+      <td>NaCl (built-in)</td>
+      <td>Low</td>
+    </tr>
+  </table>
+
+  <h3>Plugin Deep Dive</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color: #fbbf24;">Flannel</div>
+      <ul>
+        <li>Simplest CNI plugin — great for learning/dev clusters</li>
+        <li>Default mode: <strong>VXLAN</strong> — encapsulates L2 frames in UDP between nodes</li>
+        <li><strong>host-gw</strong> mode: no overlay, adds host routes directly (requires L2 adjacency between nodes)</li>
+        <li>Assigns a <code>/24</code> subnet per node from a configured <code>/16</code> supernet</li>
+        <li>Stores subnet allocation in etcd (via Kubernetes API)</li>
+        <li>No NetworkPolicy support — often paired with Calico ("Canal" = Calico policy + Flannel networking)</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title" style="color: #ef4444;">Calico</div>
+      <ul>
+        <li>Production-grade, used by major cloud providers (EKS, AKS, GKE)</li>
+        <li>Default mode: <strong>BGP native routing</strong> — each node is a BGP speaker, advertises pod CIDRs</li>
+        <li>No overlay overhead — pods are reachable at native line rate</li>
+        <li>Falls back to <strong>VXLAN</strong> or <strong>IP-in-IP</strong> when BGP isn't possible (cross-subnet, cloud VPC)</li>
+        <li>Full <strong>NetworkPolicy</strong> implementation (plus Calico-specific extensions for DNS, service accounts, global policies)</li>
+        <li>Uses ptp plugin internally — each pod gets a /32 route on the host</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title" style="color: #a78bfa;">Cilium</div>
+      <ul>
+        <li><strong>eBPF-based</strong> data plane — bypasses iptables entirely</li>
+        <li>Replaces kube-proxy for service load balancing (eBPF-based ClusterIP, NodePort, LoadBalancer)</li>
+        <li><strong>L7-aware NetworkPolicy</strong> — can filter by HTTP method, path, DNS name, gRPC service</li>
+        <li>Hubble: built-in observability platform (flow logs, service map, DNS visibility)</li>
+        <li>Identity-based security — labels, not IPs (handles pod IP churn gracefully)</li>
+        <li>Covered in detail in <a href="../net-10-ebpf/ebpf.html">Net 10 — eBPF</a></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Weave Net</div>
+      <ul>
+        <li>Mesh overlay — every node connects to every other node</li>
+        <li>Auto-discovers peers via gossip protocol (no external coordination)</li>
+        <li>Built-in <strong>encryption</strong> (NaCl-based, enabled by default)</li>
+        <li>Simple to install — single DaemonSet, zero config</li>
+        <li>Basic NetworkPolicy support</li>
+        <li>Less actively developed; Cilium and Calico are preferred for production</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Topology: how different plugins wire pods -->
+  <h3>Comparison: Bridge vs Routing Data Planes</h3>
+
+  <div style="padding: 30px; background: #1a1a2e; border: 2px solid #2a2a4a; border-radius: 12px; margin: 20px 0;">
+    <div style="display: flex; gap: 30px; flex-wrap: wrap;">
+      <!-- Bridge mode (Flannel) -->
+      <div style="flex: 1; min-width: 280px;">
+        <div style="text-align: center; color: #fbbf24; font-weight: bold; margin-bottom: 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">Bridge Mode (Flannel)</div>
+        <div style="padding: 15px; border: 1px dashed #fbbf24; border-radius: 8px;">
+          <div style="display: flex; justify-content: center; gap: 15px; margin-bottom: 10px;">
+            <div style="background: #3b82f620; border: 1px solid #3b82f6; border-radius: 6px; padding: 6px 12px; text-align: center;">
+              <div style="color: #60a5fa; font-size: 11px; font-weight: bold;">Pod A</div>
+              <div style="color: #888; font-size: 10px;">eth0</div>
+            </div>
+            <div style="background: #3b82f620; border: 1px solid #3b82f6; border-radius: 6px; padding: 6px 12px; text-align: center;">
+              <div style="color: #60a5fa; font-size: 11px; font-weight: bold;">Pod B</div>
+              <div style="color: #888; font-size: 10px;">eth0</div>
+            </div>
+          </div>
+          <div style="text-align: center; color: #555; font-size: 14px;">| veth &nbsp;&nbsp; | veth</div>
+          <div style="display: flex; justify-content: center; margin: 8px 0;">
+            <div style="background: #fbbf2420; border: 2px solid #fbbf24; border-radius: 6px; padding: 8px 30px; text-align: center;">
+              <div style="color: #fbbf24; font-weight: bold; font-size: 12px;">cni0 (bridge)</div>
+            </div>
+          </div>
+          <div style="text-align: center; color: #555; font-size: 14px;">| flannel.1 (VXLAN)</div>
+          <div style="text-align: center; color: #888; font-size: 11px; margin-top: 4px;">L2 forwarding within node, VXLAN to remote</div>
+        </div>
+      </div>
+
+      <!-- Routing mode (Calico) -->
+      <div style="flex: 1; min-width: 280px;">
+        <div style="text-align: center; color: #ef4444; font-weight: bold; margin-bottom: 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">Routing Mode (Calico)</div>
+        <div style="padding: 15px; border: 1px dashed #ef4444; border-radius: 8px;">
+          <div style="display: flex; justify-content: center; gap: 15px; margin-bottom: 10px;">
+            <div style="background: #3b82f620; border: 1px solid #3b82f6; border-radius: 6px; padding: 6px 12px; text-align: center;">
+              <div style="color: #60a5fa; font-size: 11px; font-weight: bold;">Pod A</div>
+              <div style="color: #888; font-size: 10px;">eth0</div>
+            </div>
+            <div style="background: #3b82f620; border: 1px solid #3b82f6; border-radius: 6px; padding: 6px 12px; text-align: center;">
+              <div style="color: #60a5fa; font-size: 11px; font-weight: bold;">Pod B</div>
+              <div style="color: #888; font-size: 10px;">eth0</div>
+            </div>
+          </div>
+          <div style="text-align: center; color: #555; font-size: 14px;">| veth &nbsp;&nbsp; | veth</div>
+          <div style="display: flex; justify-content: center; margin: 8px 0;">
+            <div style="background: #34d39920; border: 2px solid #34d399; border-radius: 6px; padding: 8px 30px; text-align: center;">
+              <div style="color: #34d399; font-weight: bold; font-size: 12px;">Host routing table</div>
+            </div>
+          </div>
+          <div style="text-align: center; color: #555; font-size: 14px;">| BGP to other nodes</div>
+          <div style="text-align: center; color: #888; font-size: 11px; margin-top: 4px;">L3 routing, no bridge, /32 routes per pod</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Tip:</strong> For production clusters: use <strong>Calico</strong> if you need NetworkPolicy and BGP routing (most common choice). Use <strong>Cilium</strong> if you need L7 policies, advanced observability, or want to replace kube-proxy entirely. Use <strong>Flannel</strong> for simplicity in dev/test environments.
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> Many managed Kubernetes services ship with their own CNI: AWS VPC CNI (assigns ENI secondary IPs to pods — real VPC IPs), Azure CNI, GKE's native CNI. These integrate directly with the cloud's SDN and skip overlay networking entirely.
+  </div>
+
+</body>
+</html>

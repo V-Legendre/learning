@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 04 — TCP Deep Dive</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 04 — TCP Deep Dive</h1>
+  <p class="subtitle">Reliable, ordered, connection-oriented transport</p>
+
+  <!-- ===== TCP SEGMENT HEADER ===== -->
+  <h2>TCP Segment Header</h2>
+
+  <p>Every TCP segment carries a <strong>20-byte minimum header</strong> (up to 60 bytes with options). This header is the control plane of the entire protocol — sequence tracking, acknowledgments, flow control, and connection management all live here.</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1 1 50%;">
+      <span class="field-name">Source Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1 1 50%;">
+      <span class="field-name">Destination Port</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1 1 100%;">
+      <span class="field-name">Sequence Number</span>
+      <span class="field-size">32 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 1 1 100%;">
+      <span class="field-name">Acknowledgment Number</span>
+      <span class="field-size">32 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1 1 12%;">
+      <span class="field-name">Data Offset</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field" style="flex: 1 1 8%;">
+      <span class="field-name">Reserved</span>
+      <span class="field-size">3 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1 1 30%;">
+      <span class="field-name">Flags: NS CWR ECE URG ACK PSH RST SYN FIN</span>
+      <span class="field-size">9 bits</span>
+    </div>
+    <div class="pkt-field src" style="flex: 1 1 50%;">
+      <span class="field-name">Window Size</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field check" style="flex: 1 1 50%;">
+      <span class="field-name">Checksum</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 1 1 50%;">
+      <span class="field-name">Urgent Pointer</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1 1 50%;">
+      <span class="field-name">Options + Padding</span>
+      <span class="field-size">variable (0-320 bits)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Header Field Roles</div>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Sequence Number</code></td><td>Byte offset of the first data byte in this segment within the stream</td></tr>
+        <tr><td><code>Acknowledgment Number</code></td><td>Next byte the sender expects to receive (cumulative ACK)</td></tr>
+        <tr><td><code>Data Offset</code></td><td>Header length in 32-bit words (min 5 = 20 bytes, max 15 = 60 bytes)</td></tr>
+        <tr><td><code>Window Size</code></td><td>Receive buffer space available (flow control)</td></tr>
+        <tr><td><code>Checksum</code></td><td>Covers header + data + pseudo-header (source/dest IP, protocol, length)</td></tr>
+        <tr><td><code>Urgent Pointer</code></td><td>Offset to end of urgent data (rarely used, mostly legacy)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">TCP Flags Breakdown</div>
+    <table>
+      <thead>
+        <tr><th>Flag</th><th>Meaning</th><th>When Used</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>SYN</code></td><td>Synchronize sequence numbers</td><td>Connection establishment</td></tr>
+        <tr><td><code>ACK</code></td><td>Acknowledgment field is valid</td><td>Almost every segment after SYN</td></tr>
+        <tr><td><code>FIN</code></td><td>No more data from sender</td><td>Connection teardown</td></tr>
+        <tr><td><code>RST</code></td><td>Reset the connection</td><td>Abort, rejected connection, half-open detection</td></tr>
+        <tr><td><code>PSH</code></td><td>Push data to application immediately</td><td>Interactive traffic (SSH keystrokes)</td></tr>
+        <tr><td><code>URG</code></td><td>Urgent pointer field is valid</td><td>Out-of-band data (rarely used today)</td></tr>
+        <tr><td><code>ECE</code></td><td>ECN-Echo</td><td>Explicit Congestion Notification</td></tr>
+        <tr><td><code>CWR</code></td><td>Congestion Window Reduced</td><td>Sender acknowledges ECE</td></tr>
+        <tr><td><code>NS</code></td><td>Nonce Sum</td><td>ECN nonce protection (experimental)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== 3-WAY HANDSHAKE ===== -->
+  <h2>3-Way Handshake</h2>
+
+  <p>TCP connections are <strong>full-duplex</strong> and require a negotiation before data flows. The 3-way handshake synchronizes sequence numbers in both directions and negotiates options (MSS, window scaling, SACK, timestamps).</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <span class="seq-entity">Client</span>
+      <span class="seq-entity">Server</span>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">SYN &nbsp; seq=1000</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">SYN+ACK &nbsp; seq=5000, ack=1001</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">ACK &nbsp; seq=1001, ack=5001</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What Happens at Each Step</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>SYN:</strong> Client picks a random Initial Sequence Number (ISN = 1000) and sends it. The SYN itself consumes one sequence number.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>SYN+ACK:</strong> Server picks its own ISN (5000), acknowledges the client's ISN+1 (<code>ack=1001</code>), and sends both flags in one segment.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>ACK:</strong> Client acknowledges the server's ISN+1 (<code>ack=5001</code>). Connection is ESTABLISHED. Data can now flow in both directions.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Why random ISNs?</strong> Predictable ISNs allow TCP sequence prediction attacks (blind spoofing). Modern kernels use cryptographically random ISNs (RFC 6528).
+  </div>
+
+  <!-- ===== SEQUENCE AND ACK NUMBERS ===== -->
+  <h2>Sequence & Acknowledgment Numbers</h2>
+
+  <p>A critical distinction: TCP sequence numbers count <strong>bytes, not packets</strong>. TCP is a byte-stream protocol — the receiver reconstructs an ordered byte stream, not a sequence of messages.</p>
+
+  <div class="panel">
+    <div class="panel-title">Byte-Stream Semantics</div>
+    <ul>
+      <li>If <code>seq=1001</code> and the segment carries 500 bytes of data, the bytes span positions 1001-1500</li>
+      <li>The receiver's ACK will be <code>ack=1501</code> — "I have all bytes up to 1500, send me byte 1501 next"</li>
+      <li>ACKs are <strong>cumulative</strong>: <code>ack=3000</code> means "I have everything up to byte 2999"</li>
+      <li>Out-of-order segments are buffered by the receiver and ACKed only when the gap is filled (unless SACK is in use)</li>
+    </ul>
+  </div>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <span class="seq-entity">Sender</span>
+      <span class="seq-entity">Receiver</span>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">seq=1001, len=500 (bytes 1001-1500)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">seq=1501, len=500 (bytes 1501-2000)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">ack=2001 (got everything up to 2000)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Wireshark note:</strong> Wireshark shows "relative sequence numbers" by default (starting from 0). The actual ISN is random and 32-bit. Toggle this in Edit > Preferences > Protocols > TCP.
+  </div>
+
+  <!-- ===== FLOW CONTROL ===== -->
+  <h2>Flow Control: Sliding Window</h2>
+
+  <p>Flow control prevents a fast sender from overwhelming a slow receiver. The receiver advertises how much buffer space it has available — the <strong>receive window (rwnd)</strong> — in every ACK segment's Window Size field.</p>
+
+  <div class="panel">
+    <div class="panel-title">Sliding Window Mechanism</div>
+    <ul>
+      <li>The sender can have at most <code>rwnd</code> bytes of unacknowledged data in flight</li>
+      <li>As the receiver processes data and frees buffer space, it increases <code>rwnd</code> in subsequent ACKs</li>
+      <li>If <code>rwnd=0</code>, the sender must stop and periodically send <strong>window probes</strong> (1-byte segments) to check if space has opened up</li>
+      <li>The Window Size field is 16 bits = max 65,535 bytes. On modern networks, this is far too small</li>
+    </ul>
+  </div>
+
+  <h3>Window Scaling Option (RFC 7323)</h3>
+
+  <p>Negotiated during the handshake via TCP options. The scale factor is a power of 2 (0-14), allowing windows up to <strong>65,535 x 2^14 = ~1 GB</strong>.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>ss -i dst 10.0.0.5<br>
+    <span class="output">ESTAB  0  0  10.0.0.1:44832  10.0.0.5:443</span><br>
+    <span class="output">&nbsp;&nbsp;cubic wscale:7,7 rto:204 rtt:1.5/0.5 ato:40 mss:1448</span><br>
+    <span class="output">&nbsp;&nbsp;rcvmss:1448 advmss:1448 cwnd:10 ssthresh:7</span><br>
+    <span class="output">&nbsp;&nbsp;bytes_sent:1024 bytes_acked:1025 bytes_received:8192</span><br>
+    <span class="output">&nbsp;&nbsp;send 77.2Mbps rcv_space:14480 rcv_ssthresh:64088</span>
+  </div>
+
+  <div class="note">
+    <strong>wscale:7,7</strong> means both sides use a scale factor of 7 (multiply the Window Size field by 128). Effective max window = 65,535 x 128 = ~8 MB.
+  </div>
+
+  <!-- ===== CONGESTION CONTROL ===== -->
+  <h2>Congestion Control</h2>
+
+  <p>Flow control protects the <em>receiver</em>. Congestion control protects the <em>network</em>. The sender maintains a <strong>congestion window (cwnd)</strong> that limits how much unacknowledged data can be in flight. The effective window is <code>min(cwnd, rwnd)</code>.</p>
+
+  <h3>Classic Congestion Control (Reno/NewReno)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Slow Start</div>
+      <div class="desc">cwnd doubles every RTT (exponential growth)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Congestion Avoidance</div>
+      <div class="desc">cwnd += 1 MSS per RTT (linear growth)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Loss Detected</div>
+      <div class="desc">Timeout or 3 duplicate ACKs</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Recovery</div>
+      <div class="desc">Adjust cwnd, retransmit</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Phases in Detail</div>
+    <table>
+      <thead>
+        <tr><th>Phase</th><th>Trigger</th><th>cwnd Behavior</th><th>ssthresh Change</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Slow Start</strong></td>
+          <td>Connection start, or timeout recovery</td>
+          <td>cwnd starts at IW (typically 10 MSS on Linux), doubles each RTT</td>
+          <td>N/A (continues until cwnd >= ssthresh)</td>
+        </tr>
+        <tr>
+          <td><strong>Congestion Avoidance</strong></td>
+          <td>cwnd >= ssthresh</td>
+          <td>cwnd grows by ~1 MSS per RTT (additive increase)</td>
+          <td>N/A</td>
+        </tr>
+        <tr>
+          <td><strong>Fast Retransmit</strong></td>
+          <td>3 duplicate ACKs received</td>
+          <td>Retransmit the lost segment immediately (don't wait for timeout)</td>
+          <td>ssthresh = cwnd / 2</td>
+        </tr>
+        <tr>
+          <td><strong>Fast Recovery</strong></td>
+          <td>After fast retransmit</td>
+          <td>cwnd = ssthresh + 3 MSS, then congestion avoidance (skip slow start!)</td>
+          <td>Already set by fast retransmit</td>
+        </tr>
+        <tr>
+          <td><strong>Timeout</strong></td>
+          <td>Retransmission timer expires</td>
+          <td>cwnd = 1 MSS, back to slow start (the nuclear option)</td>
+          <td>ssthresh = cwnd / 2</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Why fast recovery matters:</strong> A timeout is catastrophic — cwnd drops to 1 MSS. Fast retransmit + fast recovery detect loss via duplicate ACKs and cut cwnd only in half, skipping the slow start phase entirely. This is the difference between a brief throughput dip and a complete stall.
+  </div>
+
+  <h3>Modern Congestion Control Algorithms</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">CUBIC (Linux Default)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Loss-based</strong> — reacts to packet loss</li>
+          <li>Uses a cubic function for window growth (not linear)</li>
+          <li>After loss: cwnd drops, then rapidly recovers to the pre-loss level, then grows cautiously beyond</li>
+          <li>Better than Reno for high-BDP (bandwidth-delay product) networks</li>
+          <li>Default on Linux since kernel 2.6.19 (2006)</li>
+          <li>Problem: fills buffers before detecting loss (<strong>bufferbloat</strong>)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header k8s">BBR (Google)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Model-based</strong> — estimates bottleneck bandwidth and RTT</li>
+          <li>Tries to send at the rate the bottleneck can handle, no more</li>
+          <li>Does NOT use loss as the primary signal</li>
+          <li>Significantly better on lossy links (wireless, intercontinental)</li>
+          <li>Available on Linux since kernel 4.9 (2016)</li>
+          <li>BBRv2 addresses fairness issues with CUBIC coexistence</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Check current congestion control algorithm<br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_congestion_control<br>
+    <span class="output">net.ipv4.tcp_congestion_control = cubic</span><br><br>
+    <span class="prompt"># </span>Switch to BBR (requires kernel >= 4.9)<br>
+    <span class="prompt">$ </span>sysctl -w net.ipv4.tcp_congestion_control=bbr<br>
+    <span class="prompt">$ </span>sysctl -w net.core.default_qdisc=fq
+  </div>
+
+  <div class="tip">
+    <strong>DevOps tip:</strong> If you run services over high-latency links (cross-region, CDN origins), switching to BBR can dramatically improve throughput. Many cloud providers (GCP, some AWS instances) already default to BBR.
+  </div>
+
+  <!-- ===== NAGLE'S ALGORITHM ===== -->
+  <h2>Nagle's Algorithm</h2>
+
+  <p>Nagle's algorithm (RFC 896) coalesces small writes into larger segments to reduce the overhead of tiny packets on the network. The rule is simple:</p>
+
+  <div class="panel">
+    <div class="panel-title">Nagle's Rule</div>
+    <p>If there is unacknowledged data in flight <strong>AND</strong> the new data is smaller than MSS, buffer it — wait for the ACK (or enough data to fill an MSS) before sending.</p>
+    <p style="margin-top: 10px;">If there is no unacknowledged data in flight, send immediately regardless of size.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Nagle Enabled (default)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Reduces small-packet overhead (fewer headers per payload byte)</li>
+          <li>Good for bulk transfers, general-purpose traffic</li>
+          <li>Reduces network congestion from "tinygram" floods</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Nagle Disabled (TCP_NODELAY)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Every <code>write()</code> sends immediately</li>
+          <li>Essential for latency-sensitive apps: SSH, gaming, real-time APIs</li>
+          <li>Required when application does its own buffering (e.g., HTTP/2 framing)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DELAYED ACKS ===== -->
+  <h2>Delayed ACKs</h2>
+
+  <p>Rather than ACKing every segment immediately, the receiver can <strong>delay the ACK up to ~200ms</strong> (Linux default: 40ms), hoping to piggyback the ACK on a response data segment. This reduces the number of pure-ACK packets on the wire.</p>
+
+  <div class="warn">
+    <strong>The Nagle + Delayed ACK Problem:</strong> When Nagle is enabled on the sender and delayed ACKs on the receiver, you get a pathological interaction. The sender has a small write buffered (Nagle is waiting for the ACK). The receiver has data to ACK but is delaying (waiting to piggyback). Both sides wait for each other — the result is a 40-200ms latency spike on every small write. This is one of the most common TCP performance gotchas.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Solutions</div>
+    <ul>
+      <li><code>TCP_NODELAY</code> on the sender — disables Nagle, send immediately. Most common fix.</li>
+      <li><code>TCP_QUICKACK</code> on the receiver (Linux-specific) — disables delayed ACKs temporarily. Less common.</li>
+      <li>Application-level buffering: batch small writes into a single <code>write()</code> call, then let it send as one segment.</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> If your application is request-response (HTTP, gRPC, database protocols), set <code>TCP_NODELAY</code>. If your application streams bulk data, leave Nagle enabled.
+  </div>
+
+  <!-- ===== TCP OPTIONS ===== -->
+  <h2>TCP Options</h2>
+
+  <p>TCP options are negotiated during the handshake (in SYN and SYN-ACK segments) and carried in the variable-length Options field of the header.</p>
+
+  <table>
+    <thead>
+      <tr><th>Option</th><th>Size</th><th>Purpose</th><th>Negotiated In</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>MSS</strong> (Maximum Segment Size)</td>
+        <td>4 bytes</td>
+        <td>Largest payload each side can receive (typically 1460 bytes for Ethernet: 1500 MTU - 20 IP - 20 TCP)</td>
+        <td>SYN, SYN-ACK</td>
+      </tr>
+      <tr>
+        <td><strong>Window Scale</strong></td>
+        <td>3 bytes</td>
+        <td>Multiplier for the 16-bit Window Size field (scale factor 0-14, allows windows up to ~1 GB)</td>
+        <td>SYN, SYN-ACK</td>
+      </tr>
+      <tr>
+        <td><strong>SACK Permitted</strong></td>
+        <td>2 bytes</td>
+        <td>Enables Selective Acknowledgment — receiver can report non-contiguous blocks it has received</td>
+        <td>SYN, SYN-ACK</td>
+      </tr>
+      <tr>
+        <td><strong>SACK Blocks</strong></td>
+        <td>Variable</td>
+        <td>Actual SACK data: up to 4 block ranges of received-but-not-yet-acked bytes</td>
+        <td>Any segment</td>
+      </tr>
+      <tr>
+        <td><strong>Timestamps</strong></td>
+        <td>10 bytes</td>
+        <td>TSval/TSecr: enables precise RTT measurement and PAWS (Protection Against Wrapped Sequence numbers)</td>
+        <td>SYN, SYN-ACK (then every segment)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>SACK in practice:</strong> Without SACK, a single lost segment forces the sender to retransmit everything from the lost segment onward (go-back-N). With SACK, the sender knows exactly which segments arrived and retransmits only the gaps. This is critical for performance on lossy networks. SACK is enabled by default on virtually all modern OS kernels.
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># </span>Check SACK and timestamps settings on Linux<br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_sack<br>
+    <span class="output">net.ipv4.tcp_sack = 1</span><br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_timestamps<br>
+    <span class="output">net.ipv4.tcp_timestamps = 1</span><br>
+    <span class="prompt">$ </span>sysctl net.ipv4.tcp_window_scaling<br>
+    <span class="output">net.ipv4.tcp_window_scaling = 1</span>
+  </div>
+
+  <div class="tip">
+    <strong>Troubleshooting tip:</strong> If you see poor TCP performance through a middlebox (load balancer, firewall), check whether it strips TCP options. Some older devices strip timestamps or window scaling, silently crippling performance.
+  </div>
+
+</body>
+</html>

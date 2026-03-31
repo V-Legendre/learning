@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 01 — The TCP/IP Model</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 01 — The TCP/IP Model</h1>
+  <p class="subtitle">The 4-layer model that actually runs the internet</p>
+
+  <!-- ===== OVERVIEW ===== -->
+  <h2>What Is the TCP/IP Model?</h2>
+
+  <p>The TCP/IP model (also called the Internet Protocol Suite) is the <strong>practical, implementation-driven</strong> networking model that powers the actual internet. Unlike the OSI model, which was designed by committee as a theoretical framework, TCP/IP was developed by <strong>DARPA researchers</strong> (Vint Cerf and Bob Kahn) in the 1970s by building working software first and describing the model after.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Core Philosophy</div>
+    <p>TCP/IP follows the <strong>end-to-end principle:</strong> keep the network core simple (just forward packets) and push complexity to the endpoints. The network doesn't need to understand what's inside your packets — it just delivers them. This is the opposite of the telephone network (circuit-switched), where the network manages the entire call state.</p>
+  </div>
+
+  <div class="note">
+    <strong>Naming:</strong> "TCP/IP" refers to the two most important protocols in the suite (TCP at the transport layer, IP at the internet layer), but the model encompasses hundreds of protocols. The more precise name is the "Internet Protocol Suite."
+  </div>
+
+  <!-- ===== THE 4-LAYER DIAGRAM ===== -->
+  <h2>The 4 Layers</h2>
+
+  <div class="layer-diagram">
+    <div class="layer l7">
+      <span class="layer-num">4</span>
+      <span class="layer-name">Application</span>
+      <span class="layer-pdu">Data / Messages</span>
+      <span class="layer-protocols">HTTP, DNS, SSH, SMTP, FTP, TLS, SNMP, DHCP, gRPC</span>
+    </div>
+    <div class="layer l4">
+      <span class="layer-num">3</span>
+      <span class="layer-name">Transport</span>
+      <span class="layer-pdu">Segment / Datagram</span>
+      <span class="layer-protocols">TCP, UDP, SCTP, QUIC</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num">2</span>
+      <span class="layer-name">Internet</span>
+      <span class="layer-pdu">Packet</span>
+      <span class="layer-protocols">IPv4, IPv6, ICMP, ICMPv6, IGMP, IPsec</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num">1</span>
+      <span class="layer-name">Link (Network Access)</span>
+      <span class="layer-pdu">Frame</span>
+      <span class="layer-protocols">Ethernet, Wi-Fi, ARP, PPP, VLAN, NDP</span>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Layer numbering:</strong> Some references number TCP/IP layers 1-4 (as above). Others skip numbering and just use names. There is <strong>no official numbering standard</strong> for TCP/IP layers — unlike OSI where "Layer 3" always means Network. When people say "Layer 4 load balancer," they mean OSI Layer 4 (Transport), not TCP/IP layer 4 (Application). Industry always uses OSI numbering.
+  </div>
+
+  <!-- ===== LAYER BY LAYER ===== -->
+  <h2>Layer-by-Layer Deep Dive</h2>
+
+  <!-- --- Link Layer --- -->
+  <h3>Layer 1 — Link (Network Access)</h3>
+
+  <div class="panel">
+    <div class="panel-title">What It Does</div>
+    <p>Combines OSI Layers 1 and 2 into a single layer that handles everything required to send a frame across a <strong>single physical link</strong>. The TCP/IP model deliberately treats this as opaque — the upper layers don't care whether you're running on Ethernet, Wi-Fi, cellular, or carrier pigeon.</p>
+    <ul>
+      <li>Frames packets for the specific physical medium</li>
+      <li>Handles hardware (MAC) addressing for local delivery</li>
+      <li>Manages media access, error detection, and physical signaling</li>
+      <li>Provides ARP (IPv4) or NDP (IPv6) for address resolution</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>Why combine L1 and L2?</strong> The TCP/IP architects didn't think the distinction between "signaling voltages on a wire" and "framing bits into Ethernet frames" was important for the model. To IP, a link is a link — it either delivers a frame to the next hop or it doesn't.
+  </div>
+
+  <table>
+    <tr><th>Protocol / Technology</th><th>Scope</th><th>Description</th></tr>
+    <tr><td><code>Ethernet (802.3)</code></td><td>LAN</td><td>Dominant wired technology; frame-based with MAC addressing</td></tr>
+    <tr><td><code>Wi-Fi (802.11)</code></td><td>WLAN</td><td>Wireless frames with CSMA/CA media access</td></tr>
+    <tr><td><code>ARP</code></td><td>LAN</td><td>Maps IPv4 addresses to MAC addresses via broadcast</td></tr>
+    <tr><td><code>NDP (ICMPv6)</code></td><td>LAN</td><td>IPv6 equivalent of ARP — uses multicast instead of broadcast</td></tr>
+    <tr><td><code>PPP</code></td><td>Point-to-point</td><td>Used on serial links, DSL, some VPN tunnels</td></tr>
+    <tr><td><code>802.1Q</code></td><td>LAN</td><td>VLAN tagging for logical network segmentation</td></tr>
+  </table>
+
+  <!-- --- Internet Layer --- -->
+  <h3>Layer 2 — Internet</h3>
+
+  <div class="panel">
+    <div class="panel-title">What It Does</div>
+    <p>The <strong>heart of the model.</strong> Responsible for <strong>addressing, routing, and forwarding packets</strong> across network boundaries. IP is the single protocol at this layer, and everything above and below must interface with it. This is the "narrow waist" of the hourglass.</p>
+    <ul>
+      <li><strong>Logical addressing:</strong> IP addresses provide globally unique, hierarchical identifiers</li>
+      <li><strong>Routing:</strong> Each router independently makes a forwarding decision based on the destination IP</li>
+      <li><strong>Best-effort delivery:</strong> IP makes no guarantees — packets can be dropped, duplicated, or reordered</li>
+      <li><strong>Fragmentation:</strong> Breaks oversized packets (though Path MTU Discovery avoids this in practice)</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Best-effort:</strong> IP intentionally provides <strong>no reliability, no ordering, and no delivery guarantees</strong>. This is a feature, not a bug. It keeps the network layer simple and pushes reliability to the endpoints (TCP) — exactly per the end-to-end principle.
+  </div>
+
+  <table>
+    <tr><th>Protocol</th><th>Description</th></tr>
+    <tr><td><code>IPv4</code></td><td>32-bit addressing, header checksum, optional fragmentation</td></tr>
+    <tr><td><code>IPv6</code></td><td>128-bit addressing, simplified header, no fragmentation by routers, flow labels</td></tr>
+    <tr><td><code>ICMP / ICMPv6</code></td><td>Error reporting and diagnostics (ping, traceroute, destination unreachable)</td></tr>
+    <tr><td><code>IGMP / MLD</code></td><td>Multicast group management (IPv4 / IPv6 respectively)</td></tr>
+    <tr><td><code>IPsec</code></td><td>Encryption (ESP) and authentication (AH) at the network layer</td></tr>
+  </table>
+
+  <!-- --- Transport Layer --- -->
+  <h3>Layer 3 — Transport</h3>
+
+  <div class="panel">
+    <div class="panel-title">What It Does</div>
+    <p>Provides <strong>end-to-end communication between processes</strong>. Uses port numbers (16-bit, 0-65535) to demultiplex traffic to the correct application on a host. The two dominant protocols offer very different trade-offs.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header tcp">TCP</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Connection-oriented:</strong> 3-way handshake (SYN, SYN-ACK, ACK)</li>
+          <li><strong>Reliable:</strong> Sequence numbers, ACKs, retransmission</li>
+          <li><strong>Ordered:</strong> Data delivered in sequence</li>
+          <li><strong>Flow control:</strong> Receiver advertises window size</li>
+          <li><strong>Congestion control:</strong> CUBIC (Linux default), BBR (Google)</li>
+          <li><strong>Byte-stream:</strong> No message boundaries</li>
+          <li>20-byte minimum header</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header udp">UDP</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Connectionless:</strong> No handshake, no state</li>
+          <li><strong>Unreliable:</strong> No ACKs, no retransmission</li>
+          <li><strong>Unordered:</strong> Packets may arrive out of order</li>
+          <li><strong>No flow control:</strong> Sender can blast at any rate</li>
+          <li><strong>No congestion control:</strong> Unless the app implements it</li>
+          <li><strong>Message-oriented:</strong> Preserves datagram boundaries</li>
+          <li>8-byte header (minimal overhead)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">QUIC — The Modern Hybrid</div>
+    <p>QUIC (used by HTTP/3) is a transport protocol built <strong>on top of UDP</strong> that provides TCP-like reliability with significant improvements:</p>
+    <ul>
+      <li>Encrypted by default (TLS 1.3 integrated into the transport)</li>
+      <li>0-RTT connection establishment (vs TCP's 1-RTT + TLS 1-2 RTT)</li>
+      <li>Multiplexed streams without head-of-line blocking</li>
+      <li>Connection migration (change IPs without dropping the connection — useful for mobile)</li>
+      <li>Implemented in userspace, not the kernel — faster iteration</li>
+    </ul>
+  </div>
+
+  <!-- --- Application Layer --- -->
+  <h3>Layer 4 — Application</h3>
+
+  <div class="panel">
+    <div class="panel-title">What It Does</div>
+    <p>Absorbs OSI Layers 5, 6, and 7 into a single layer. Any protocol that sits on top of TCP or UDP lives here. This layer handles <strong>session management, data encoding, encryption, and application semantics</strong> — all combined.</p>
+  </div>
+
+  <table>
+    <tr><th>Protocol</th><th>Transport</th><th>Port(s)</th><th>Description</th></tr>
+    <tr><td><code>HTTP/1.1</code></td><td>TCP</td><td>80</td><td>Text-based request/response protocol for the web</td></tr>
+    <tr><td><code>HTTP/2</code></td><td>TCP</td><td>443</td><td>Binary framing, multiplexing, server push, header compression</td></tr>
+    <tr><td><code>HTTP/3</code></td><td>QUIC (UDP)</td><td>443</td><td>HTTP over QUIC — eliminates TCP head-of-line blocking</td></tr>
+    <tr><td><code>DNS</code></td><td>UDP (TCP for zone transfers)</td><td>53</td><td>Domain name to IP resolution</td></tr>
+    <tr><td><code>SSH</code></td><td>TCP</td><td>22</td><td>Secure remote shell, tunneling, file transfer</td></tr>
+    <tr><td><code>TLS 1.3</code></td><td>TCP</td><td>443</td><td>Transport-layer encryption (OSI would call this L5/L6)</td></tr>
+    <tr><td><code>DHCP</code></td><td>UDP</td><td>67/68</td><td>Dynamic IP configuration (DORA: Discover, Offer, Request, Ack)</td></tr>
+    <tr><td><code>SNMP</code></td><td>UDP</td><td>161/162</td><td>Network device monitoring</td></tr>
+    <tr><td><code>gRPC</code></td><td>HTTP/2 (TCP)</td><td>varies</td><td>Google's RPC framework using Protocol Buffers</td></tr>
+    <tr><td><code>BGP</code></td><td>TCP</td><td>179</td><td>Border Gateway Protocol — inter-AS routing (often considered L3 in OSI)</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>Note:</strong> In TCP/IP, there's no distinction between "application protocol" and "presentation/session protocol." TLS, which OSI would split across L5-L6, is just another application-layer protocol in TCP/IP that sits between the transport and the higher application protocols (HTTPS = HTTP + TLS).
+  </div>
+
+  <!-- ===== OSI vs TCP/IP MAPPING ===== -->
+  <h2>OSI vs. TCP/IP — Side by Side</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">OSI Model (7 Layers)</div>
+      <div class="comp-body">
+        <div class="layer-diagram">
+          <div class="layer l7">
+            <span class="layer-num">7</span>
+            <span class="layer-name">Application</span>
+          </div>
+          <div class="layer l6">
+            <span class="layer-num">6</span>
+            <span class="layer-name">Presentation</span>
+          </div>
+          <div class="layer l5">
+            <span class="layer-num">5</span>
+            <span class="layer-name">Session</span>
+          </div>
+          <div class="layer l4">
+            <span class="layer-num">4</span>
+            <span class="layer-name">Transport</span>
+          </div>
+          <div class="layer l3">
+            <span class="layer-num">3</span>
+            <span class="layer-name">Network</span>
+          </div>
+          <div class="layer l2">
+            <span class="layer-num">2</span>
+            <span class="layer-name">Data Link</span>
+          </div>
+          <div class="layer l1">
+            <span class="layer-num">1</span>
+            <span class="layer-name">Physical</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">TCP/IP Model (4 Layers)</div>
+      <div class="comp-body">
+        <div class="layer-diagram">
+          <div class="layer l7" style="min-height: 108px; align-items: center;">
+            <span class="layer-num">4</span>
+            <span class="layer-name">Application</span>
+            <span class="layer-protocols" style="font-size: 11px;">Merges OSI L5 + L6 + L7</span>
+          </div>
+          <div class="layer l4">
+            <span class="layer-num">3</span>
+            <span class="layer-name">Transport</span>
+            <span class="layer-protocols" style="font-size: 11px;">Same as OSI L4</span>
+          </div>
+          <div class="layer l3">
+            <span class="layer-num">2</span>
+            <span class="layer-name">Internet</span>
+            <span class="layer-protocols" style="font-size: 11px;">Same as OSI L3</span>
+          </div>
+          <div class="layer l2" style="min-height: 68px; align-items: center;">
+            <span class="layer-num">1</span>
+            <span class="layer-name">Link</span>
+            <span class="layer-protocols" style="font-size: 11px;">Merges OSI L1 + L2</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>OSI Layer(s)</th><th>TCP/IP Layer</th><th>What Changed</th></tr>
+    <tr><td>7 + 6 + 5</td><td>Application</td><td>Session and Presentation were rarely implemented as separate layers — merged into Application</td></tr>
+    <tr><td>4</td><td>Transport</td><td>Direct 1:1 mapping — both define TCP and UDP</td></tr>
+    <tr><td>3</td><td>Internet</td><td>Direct 1:1 mapping — both define IP</td></tr>
+    <tr><td>2 + 1</td><td>Link</td><td>TCP/IP treats everything below IP as a single "link" — doesn't care about physical vs data link distinction</td></tr>
+  </table>
+
+  <!-- ===== THE HOURGLASS MODEL ===== -->
+  <h2>The Hourglass Model — IP as the Narrow Waist</h2>
+
+  <p>The TCP/IP architecture has a distinctive <strong>hourglass shape</strong>. There are many application protocols on top, many link technologies on the bottom, but only <strong>one protocol in the middle: IP</strong>.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app" style="max-width: 700px;">
+      HTTP &nbsp; DNS &nbsp; SSH &nbsp; SMTP &nbsp; gRPC &nbsp; SNMP &nbsp; DHCP &nbsp; FTP &nbsp; QUIC
+    </div>
+    <div class="encap-layer tcp" style="max-width: 500px;">
+      TCP &nbsp;&nbsp;&nbsp; UDP &nbsp;&nbsp;&nbsp; SCTP
+    </div>
+    <div class="encap-layer ip" style="max-width: 300px; font-size: 16px; padding: 16px 24px;">
+      IP (v4 / v6)
+    </div>
+    <div class="encap-layer eth" style="max-width: 500px;">
+      Ethernet &nbsp; Wi-Fi &nbsp; LTE/5G &nbsp; PPP &nbsp; Fiber
+    </div>
+    <div class="encap-layer phys" style="max-width: 700px;">
+      Copper &nbsp; Fiber Optic &nbsp; Radio &nbsp; Satellite &nbsp; Coaxial &nbsp; DSL
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Why the Narrow Waist Matters</div>
+    <ul>
+      <li><strong>Universal interoperability:</strong> Any application that speaks IP can run over any link technology. HTTP doesn't care if you're on Ethernet, Wi-Fi, or 5G.</li>
+      <li><strong>Innovation at the edges:</strong> New application protocols (HTTP/3, gRPC) and new link technologies (5G, Starlink) can be added without changing IP.</li>
+      <li><strong>The cost:</strong> Changing IP itself is extraordinarily hard — IPv6 adoption has taken <strong>decades</strong> precisely because IP is the narrow waist everything depends on.</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>DevOps context:</strong> The hourglass model explains why container networking "just works" across different environments. Containers speak IP. Whether the underlying link is a VXLAN overlay, a cloud VPC, or bare-metal Ethernet — IP abstracts it all away. This is also why Kubernetes networking mandates that every pod gets a routable IP address.
+  </div>
+
+  <!-- ===== WHY TCP/IP WON ===== -->
+  <h2>Why TCP/IP Won Over OSI</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header new">TCP/IP — The Winner</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Built by implementors:</strong> Designed by engineers building ARPANET, refined through working code</li>
+          <li><strong>Running code first:</strong> "Rough consensus and running code" (IETF motto)</li>
+          <li><strong>Free and open:</strong> RFCs are free, implementations in BSD Unix were open source</li>
+          <li><strong>Simple:</strong> 4 layers, minimal assumptions, pragmatic design</li>
+          <li><strong>BSD sockets API:</strong> Shipped with 4.2BSD Unix (1983) — immediate adoption by every Unix system</li>
+          <li><strong>Funded by DARPA:</strong> Government funding kickstarted adoption in universities</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header old">OSI — The Loser</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Built by committee:</strong> ISO standardization process — slow, political, bureaucratic</li>
+          <li><strong>Spec first, then implement:</strong> Massive specifications before working code existed</li>
+          <li><strong>Expensive:</strong> Standards documents cost money, implementations were proprietary</li>
+          <li><strong>Complex:</strong> 7 layers with multiple protocol options at each layer</li>
+          <li><strong>Late to market:</strong> By the time OSI protocols were ready, TCP/IP had already won</li>
+          <li><strong>Feature creep:</strong> Tried to be everything to everyone, ended up pleasing no one</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Historical irony:</strong> The U.S. government initially mandated OSI protocol adoption (GOSIP — Government OSI Profile, 1990). By 1995 they dropped the mandate because TCP/IP had already won the market. The internet's explosive growth in the early 1990s sealed OSI's fate as a protocol suite.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Takeaway</div>
+    <p>OSI survives as a <strong>teaching tool and shared vocabulary</strong>. TCP/IP survives as the <strong>actual implementation</strong>. In practice, you'll use OSI layer numbers (L2, L3, L4, L7) to talk about TCP/IP concepts. Nobody says "TCP/IP Layer 2" — they say "Layer 3" (meaning OSI Layer 3 = IP = TCP/IP Internet layer).</p>
+  </div>
+
+  <!-- ===== KEY RFCs ===== -->
+  <h2>Key RFCs to Know</h2>
+
+  <table>
+    <tr><th>RFC</th><th>Title</th><th>Why It Matters</th></tr>
+    <tr><td><code>RFC 791</code></td><td>Internet Protocol (IPv4)</td><td>The foundational protocol — defines the packet format and addressing</td></tr>
+    <tr><td><code>RFC 793</code></td><td>Transmission Control Protocol (TCP)</td><td>Defines reliable, ordered byte-stream delivery</td></tr>
+    <tr><td><code>RFC 768</code></td><td>User Datagram Protocol (UDP)</td><td>The simplest transport protocol — 1 page RFC</td></tr>
+    <tr><td><code>RFC 8200</code></td><td>Internet Protocol Version 6 (IPv6)</td><td>The eventual successor to IPv4</td></tr>
+    <tr><td><code>RFC 1122</code></td><td>Requirements for Internet Hosts</td><td>Defines the TCP/IP model layers and host behavior</td></tr>
+    <tr><td><code>RFC 1958</code></td><td>Architectural Principles of the Internet</td><td>The end-to-end principle and design philosophy</td></tr>
+    <tr><td><code>RFC 9000</code></td><td>QUIC: A UDP-Based Multiplexed Transport</td><td>The modern transport protocol powering HTTP/3</td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>Useful skill:</strong> When debugging or learning protocols, read the RFC. They're surprisingly readable. <code>curl https://www.rfc-editor.org/rfc/rfc793.txt</code> gives you the complete TCP specification in plain text.
+  </div>
+
+</body>
+</html>

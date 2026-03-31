@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 02 — VLANs</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 02 — VLANs</h1>
+  <p class="subtitle">Logical network segmentation at Layer 2</p>
+
+  <!-- ===== WHAT AND WHY ===== -->
+  <h2>What VLANs Are and Why They Exist</h2>
+
+  <p>A VLAN (Virtual LAN) is a <strong>logical partition of a physical switch into multiple independent broadcast domains</strong>. Without VLANs, every port on a switch belongs to one broadcast domain — a broadcast frame on port 1 reaches every other port. VLANs break that up so broadcast traffic stays contained within each VLAN, even though the hosts share the same physical switch.</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Broadcast Domain Segmentation</div>
+      <p>A 48-port switch without VLANs is one broadcast domain — every ARP, DHCP, and mDNS packet hits all 48 ports. With VLANs, you can split it into multiple isolated domains. VLAN 10 traffic never reaches VLAN 20 at Layer 2.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Security Isolation</div>
+      <p>VLANs enforce <strong>L2 segmentation</strong>. Hosts on different VLANs cannot communicate without a router or L3 switch that explicitly routes between them — and that routing point is where you apply ACLs and firewall rules.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Traffic Management</div>
+      <p>Separate VLANs for different traffic types: user data, VoIP, management, storage. Each can have different QoS policies, and issues in one VLAN (broadcast storm, misbehaving host) don't cascade to others.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>The mental model:</strong> Think of a VLAN as turning one physical switch into multiple virtual switches. Each VLAN behaves exactly like a separate physical switch — its own MAC table, its own broadcast domain, its own STP instance (if using PVST+ / MSTP).
+  </div>
+
+  <!-- ===== 802.1Q TAG STRUCTURE ===== -->
+  <h2>802.1Q Tag Structure</h2>
+
+  <p>IEEE 802.1Q defines how VLAN membership is carried inside Ethernet frames. A 4-byte tag is inserted between the Source MAC and the original EtherType field.</p>
+
+  <h3>Untagged Frame (Standard Ethernet)</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 6;">
+      <span class="field-name">Dest MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field src" style="flex: 6;">
+      <span class="field-name">Source MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 2;">
+      <span class="field-name">EtherType</span>
+      <span class="field-size">2 bytes</span>
+    </div>
+    <div class="pkt-field data" style="flex: 15;">
+      <span class="field-name">Payload</span>
+      <span class="field-size">46–1500 bytes</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">FCS</span>
+      <span class="field-size">4 bytes</span>
+    </div>
+  </div>
+
+  <h3>Tagged Frame (802.1Q)</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 6;">
+      <span class="field-name">Dest MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field src" style="flex: 6;">
+      <span class="field-name">Source MAC</span>
+      <span class="field-size">6 bytes</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 4;">
+      <span class="field-name">802.1Q Tag</span>
+      <span class="field-size">4 bytes (inserted)</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 2;">
+      <span class="field-name">EtherType</span>
+      <span class="field-size">2 bytes</span>
+    </div>
+    <div class="pkt-field data" style="flex: 15;">
+      <span class="field-name">Payload</span>
+      <span class="field-size">46–1500 bytes</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">FCS</span>
+      <span class="field-size">4 bytes (recalculated)</span>
+    </div>
+  </div>
+
+  <h3>Inside the 802.1Q Tag (4 bytes / 32 bits)</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 16;">
+      <span class="field-name">TPID</span>
+      <span class="field-size">16 bits — always 0x8100</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 3;">
+      <span class="field-name">PCP</span>
+      <span class="field-size">3 bits</span>
+    </div>
+    <div class="pkt-field check" style="flex: 1;">
+      <span class="field-name">DEI</span>
+      <span class="field-size">1 bit</span>
+    </div>
+    <div class="pkt-field src" style="flex: 12;">
+      <span class="field-name">VID (VLAN ID)</span>
+      <span class="field-size">12 bits</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Tag Field Details</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Size</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>TPID</strong> (Tag Protocol Identifier)</td>
+          <td>16 bits</td>
+          <td>Always <code>0x8100</code> — this is what tells the receiver "this frame is VLAN-tagged." It occupies the position where EtherType normally sits, so the receiver knows to parse the next 2 bytes as TCI before finding the real EtherType.</td>
+        </tr>
+        <tr>
+          <td><strong>PCP</strong> (Priority Code Point)</td>
+          <td>3 bits</td>
+          <td>QoS priority (0–7). Used by switches for traffic prioritization. 0 = best effort, 5 = voice, 6 = internetwork control, 7 = network control. Maps to CoS (Class of Service).</td>
+        </tr>
+        <tr>
+          <td><strong>DEI</strong> (Drop Eligible Indicator)</td>
+          <td>1 bit</td>
+          <td>Marks the frame as eligible to be dropped during congestion. Formerly CFI (Canonical Format Indicator).</td>
+        </tr>
+        <tr>
+          <td><strong>VID</strong> (VLAN Identifier)</td>
+          <td>12 bits</td>
+          <td>The VLAN number: 0–4095. VID 0 = priority tagged (no VLAN), VID 1 = default VLAN, VID 4095 = reserved. Usable range: <strong>1–4094</strong> (4,094 VLANs per switch).</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Frame size impact:</strong> The 4-byte 802.1Q tag increases the maximum frame size from 1518 bytes to <strong>1522 bytes</strong>. This is called a "baby giant" frame. All 802.1Q-compliant switches handle this transparently, but some older equipment or misconfigured interfaces may drop 1522-byte frames as oversized.
+  </div>
+
+  <!-- ===== ACCESS VS TRUNK ===== -->
+  <h2>Access Ports vs. Trunk Ports</h2>
+
+  <p>Every switch port operates in one of two modes, and understanding the difference is fundamental to VLAN configuration.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l2">Access Port</div>
+      <div class="comp-body">
+        <ul>
+          <li>Belongs to <strong>exactly one VLAN</strong></li>
+          <li>Connected to end devices (servers, workstations, printers)</li>
+          <li>Frames are <strong>untagged</strong> — the end device has no VLAN awareness</li>
+          <li>The switch adds the VLAN tag on ingress and strips it on egress</li>
+          <li>Configuration: <code>switchport mode access</code> + <code>switchport access vlan 10</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">Trunk Port</div>
+      <div class="comp-body">
+        <ul>
+          <li>Carries <strong>multiple VLANs</strong> simultaneously</li>
+          <li>Connected to other switches, routers, or VLAN-aware hosts</li>
+          <li>Frames are <strong>tagged</strong> with 802.1Q headers</li>
+          <li>One VLAN can be "native" (sent untagged) — see below</li>
+          <li>Configuration: <code>switchport mode trunk</code> + <code>switchport trunk allowed vlan 10,20,30</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Host (VLAN 10)</div>
+      <div class="desc">Sends untagged frame</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Access Port</div>
+      <div class="desc">Switch tags: VLAN 10</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Trunk Port</div>
+      <div class="desc">Forwards with 802.1Q tag</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Remote Switch</div>
+      <div class="desc">Reads tag, forwards to VLAN 10 port</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Access Port</div>
+      <div class="desc">Strips tag, delivers untagged</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Linux hosts are VLAN-aware.</strong> Unlike a traditional "dumb" endpoint, Linux servers can handle 802.1Q tags directly. You create VLAN sub-interfaces with <code>ip link add link eth0 name eth0.10 type vlan id 10</code>. This means a single server NIC connected to a trunk port can participate in multiple VLANs — a pattern used heavily in virtualization, containers, and multi-tenant environments.
+  </div>
+
+  <!-- ===== NATIVE VLAN ===== -->
+  <h2>Native VLAN</h2>
+
+  <p>On a trunk port, one VLAN is designated as the <strong>native VLAN</strong>. Frames belonging to the native VLAN are sent <strong>untagged</strong> across the trunk — no 802.1Q header is inserted. All other VLANs are sent tagged.</p>
+
+  <div class="panel">
+    <div class="panel-title">How Native VLAN Works</div>
+    <ul>
+      <li>Default native VLAN is <strong>VLAN 1</strong> on most switches.</li>
+      <li>When a switch receives an <strong>untagged</strong> frame on a trunk port, it assigns it to the native VLAN.</li>
+      <li>The native VLAN <strong>must match on both ends</strong> of a trunk link. A mismatch causes traffic to leak between VLANs — this is both a connectivity issue and a security vulnerability.</li>
+      <li>Control-plane protocols like CDP, VTP, and DTP are sent untagged on the native VLAN.</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Security risk — VLAN hopping:</strong> If an attacker sends 802.1Q-tagged frames into an access port configured for the native VLAN (typically VLAN 1), those frames may be double-tagged and forwarded across trunk links into a different VLAN. This is the classic "double-tagging" VLAN hopping attack. Mitigations: (1) Never use VLAN 1 as the native VLAN for user traffic. (2) Set a dedicated, unused VLAN as the native VLAN. (3) On Cisco: <code>switchport trunk native vlan 999</code> + <code>vlan dot1q tag native</code> (forces tagging of native VLAN).
+  </div>
+
+  <!-- ===== INTER-VLAN ROUTING ===== -->
+  <h2>Inter-VLAN Routing</h2>
+
+  <p>VLANs isolate broadcast domains at Layer 2, which means hosts on different VLANs <strong>cannot communicate by default</strong>. To enable cross-VLAN traffic, you need a Layer 3 device (router or L3 switch) that routes between the VLAN subnets.</p>
+
+  <h3>Option 1: Router-on-a-Stick</h3>
+
+  <div class="topology">
+    <div class="topo-node router">
+      <div class="topo-icon">R</div>
+      <div class="topo-label">Router</div>
+      <div class="topo-detail">Gi0/0.10 — 10.0.10.1/24<br>Gi0/0.20 — 10.0.20.1/24</div>
+    </div>
+    <div class="topo-link">===<br><span style="font-size: 11px; color: #888;">trunk</span></div>
+    <div class="topo-node switch">
+      <div class="topo-icon">SW</div>
+      <div class="topo-label">Switch</div>
+      <div class="topo-detail">VLAN 10 + VLAN 20</div>
+    </div>
+    <div class="topo-link">===</div>
+    <div class="topo-node host">
+      <div class="topo-icon">H</div>
+      <div class="topo-label">Hosts</div>
+      <div class="topo-detail">VLAN 10 &amp; 20</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How It Works</div>
+    <ul>
+      <li>A single physical router interface connects to the switch via a <strong>trunk link</strong>.</li>
+      <li>The router creates <strong>subinterfaces</strong> — one per VLAN (e.g., <code>Gi0/0.10</code> for VLAN 10, <code>Gi0/0.20</code> for VLAN 20).</li>
+      <li>Each subinterface has its own IP address and acts as the <strong>default gateway</strong> for that VLAN's subnet.</li>
+      <li>Traffic between VLANs traverses the trunk link twice: up to the router, routed, and back down the same trunk — hence "router-on-a-stick."</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Limitation:</strong> The single trunk link is a bandwidth bottleneck. All inter-VLAN traffic competes for the same 1G or 10G link. Suitable for small deployments, but not for production environments with significant east-west traffic.
+  </div>
+
+  <h3>Option 2: L3 Switch (SVI — Switch Virtual Interface)</h3>
+
+  <div class="topology">
+    <div class="topo-node switch" style="border-color: #34d399;">
+      <div class="topo-icon">L3</div>
+      <div class="topo-label">L3 Switch</div>
+      <div class="topo-detail">SVI VLAN 10: 10.0.10.1/24<br>SVI VLAN 20: 10.0.20.1/24</div>
+    </div>
+    <div class="topo-link">===</div>
+    <div class="topo-node host">
+      <div class="topo-icon">H</div>
+      <div class="topo-label">VLAN 10 Hosts</div>
+      <div class="topo-detail">10.0.10.0/24</div>
+    </div>
+    <div class="topo-link" style="margin-left: 20px;">===</div>
+    <div class="topo-node host">
+      <div class="topo-icon">H</div>
+      <div class="topo-label">VLAN 20 Hosts</div>
+      <div class="topo-detail">10.0.20.0/24</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How It Works</div>
+    <ul>
+      <li>An L3 switch has a built-in routing engine alongside its switching ASIC.</li>
+      <li>An <strong>SVI (Switch Virtual Interface)</strong> is created for each VLAN that needs routing: <code>interface vlan 10</code> + <code>ip address 10.0.10.1 255.255.255.0</code>.</li>
+      <li>Routing between VLANs happens <strong>in hardware</strong> at wire speed — no hairpin through an external router.</li>
+      <li>The SVI IP address serves as the default gateway for hosts in that VLAN.</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Router-on-a-Stick</div>
+      <div class="comp-body">
+        <ul>
+          <li>Single trunk = bandwidth bottleneck</li>
+          <li>Routing in software (CPU-bound)</li>
+          <li>Adds latency</li>
+          <li>Suitable for small/lab environments</li>
+          <li>Uses existing router hardware</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">L3 Switch (SVI)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Wire-speed routing via hardware ASIC</li>
+          <li>No bottleneck — traffic stays on backplane</li>
+          <li>Microsecond latency</li>
+          <li>Standard in production networks</li>
+          <li>Requires L3-capable switch (virtually all modern switches)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== VLAN TOPOLOGY ACROSS SWITCHES ===== -->
+  <h2>VLANs Across Multiple Switches</h2>
+
+  <p>VLANs span across switches via trunk links. Each switch maintains the same VLAN definitions, and trunk ports carry tagged frames between them.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">H1</div>
+      <div class="topo-label">Host A</div>
+      <div class="topo-detail">VLAN 10 (access)</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node switch">
+      <div class="topo-icon">SW1</div>
+      <div class="topo-label">Switch 1</div>
+      <div class="topo-detail">VLAN 10, 20, 30</div>
+    </div>
+    <div class="topo-link">===<br><span style="font-size: 11px; color: #888;">trunk</span></div>
+    <div class="topo-node switch">
+      <div class="topo-icon">SW2</div>
+      <div class="topo-label">Switch 2</div>
+      <div class="topo-detail">VLAN 10, 20, 30</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node host">
+      <div class="topo-icon">H2</div>
+      <div class="topo-label">Host B</div>
+      <div class="topo-detail">VLAN 10 (access)</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Traffic Flow: Host A to Host B (same VLAN, different switches)</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Host A sends an untagged frame to Switch 1's access port (VLAN 10).</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Switch 1 knows Host B's MAC is reachable via the trunk port. It adds an 802.1Q tag (VID 10) and sends the frame out the trunk.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Switch 2 receives the tagged frame, reads VID 10, and looks up the destination MAC in its VLAN 10 MAC table.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>Switch 2 strips the 802.1Q tag and forwards the untagged frame out Host B's access port.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WHY VLANs MATTER ===== -->
+  <h2>Why VLANs Matter: Real-World Use Cases</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Broadcast Domain Reduction</div>
+      <p>A flat L2 network with 1000 hosts generates enormous broadcast traffic (ARP, DHCP, mDNS, NetBIOS). Segmenting into VLANs of 100–250 hosts each keeps broadcast traffic manageable and reduces CPU load on every host.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Security — PCI-DSS Segmentation</div>
+      <p>PCI-DSS <strong>requires</strong> network segmentation to isolate cardholder data environments (CDE) from the rest of the network. VLANs provide the L2 boundary, combined with firewall rules between VLAN subnets. Without proper segmentation, your entire network is in-scope for PCI audits.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Traffic Isolation</div>
+      <p>Separate VLANs for different traffic types: user workstations (VLAN 10), VoIP phones (VLAN 20), server/storage (VLAN 30), management/iLO (VLAN 99). A broadcast storm in the user VLAN doesn't take down iLO access to your servers.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Multi-Tenancy</div>
+      <p>Co-location and shared infrastructure use VLANs to isolate tenants at Layer 2. Each tenant gets their own VLAN(s), ensuring traffic isolation without dedicated physical switches. In cloud/K8s contexts, this maps to network namespaces and CNI plugin VLAN modes.</p>
+    </div>
+  </div>
+
+  <!-- ===== VLAN BEST PRACTICES ===== -->
+  <h2>VLAN Best Practices</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Practice</th>
+        <th>Rationale</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Don't use VLAN 1 for user traffic</strong></td>
+        <td>VLAN 1 is the default VLAN on all switch ports and is used for control-plane protocols (CDP, VTP, DTP, STP). It cannot be deleted. Put all user traffic on explicitly created VLANs. Leave VLAN 1 for switch-to-switch control traffic only.</td>
+      </tr>
+      <tr>
+        <td><strong>Dedicate a management VLAN</strong></td>
+        <td>SSH access to switch management interfaces (SVIs), iLO/iDRAC/BMC traffic, and SNMP monitoring should be on a dedicated VLAN with strict ACLs. If the user VLAN is compromised, the management plane is isolated.</td>
+      </tr>
+      <tr>
+        <td><strong>Use a dedicated voice VLAN</strong></td>
+        <td>VoIP phones need QoS guarantees (low latency, no jitter). A separate VLAN allows PCP/DSCP marking and priority queuing on switch ports. Cisco supports "switchport voice vlan 20" which configures the phone port as a mini-trunk.</td>
+      </tr>
+      <tr>
+        <td><strong>Set a non-default native VLAN</strong></td>
+        <td>Change the native VLAN on all trunk ports to an unused VLAN (e.g., VLAN 999) to prevent VLAN hopping attacks via double-tagging. Tag native VLAN traffic explicitly where possible.</td>
+      </tr>
+      <tr>
+        <td><strong>Prune trunk links</strong></td>
+        <td>Only allow VLANs on a trunk that are actually needed on the other side. <code>switchport trunk allowed vlan 10,20,30</code>. Don't trunk "all" — it defeats the purpose of segmentation and extends broadcast domains unnecessarily.</td>
+      </tr>
+      <tr>
+        <td><strong>Document VLAN assignments</strong></td>
+        <td>Maintain a VLAN allocation table: VLAN ID, name, subnet, purpose, which switches carry it. Without documentation, VLAN sprawl quickly becomes unmanageable. Treat it like a Terraform state file — it's the source of truth.</td>
+      </tr>
+      <tr>
+        <td><strong>Limit VLAN size to ~250 hosts</strong></td>
+        <td>Larger broadcast domains generate proportionally more broadcast traffic. A /24 subnet (254 hosts) per VLAN is a good balance. Larger VLANs (/22, /20) should be reserved for specific use cases with justified broadcast tolerance.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Kubernetes context:</strong> In bare-metal K8s clusters, you'll often see a VLAN for the node management network (SSH, K8s API), a separate VLAN for Pod overlay traffic (VXLAN/Geneve underlay), and sometimes a third VLAN for storage (Ceph, NFS). The CNI plugin (Calico, Cilium, Multus) may use VLAN sub-interfaces to attach Pods directly to specific VLANs — this is common for SR-IOV and DPDK workloads that need native L2 access.
+  </div>
+
+  <div class="warn">
+    <strong>VLANs are not a firewall.</strong> VLANs provide Layer 2 isolation, but they are not a substitute for firewalling. An L3 switch routing between VLANs will happily forward all traffic unless you configure ACLs. In security-sensitive environments (PCI, HIPAA), VLANs are a segmentation mechanism, but the enforcement point is the firewall/ACL at the L3 boundary. Defense in depth: VLANs + ACLs + firewall rules + microsegmentation (Calico NetworkPolicy, Cilium).
+  </div>
+
+</body>
+</html>

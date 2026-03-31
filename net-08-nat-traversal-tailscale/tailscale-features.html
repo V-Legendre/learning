@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 08 — Tailscale Features</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 08 — Tailscale Features</h1>
+  <p class="subtitle">MagicDNS, ACLs, subnet routers, and the full feature set</p>
+
+  <!-- ===== MAGICDNS ===== -->
+  <h2>MagicDNS</h2>
+
+  <p>Every device on a tailnet gets a stable DNS name automatically. No manual DNS records, no editing <code>/etc/hosts</code>, no running your own DNS server. This is one of Tailscale's most practically useful features for day-to-day operations.</p>
+
+  <div class="panel">
+    <div class="panel-title">DNS Name Format</div>
+    <p>Each device is reachable at: <code>&lt;hostname&gt;.&lt;tailnet-name&gt;.ts.net</code></p>
+    <pre><code><span class="cm"># Full qualified name</span>
+<span class="str">workstation.tail1234.ts.net</span>
+
+<span class="cm"># Short name (within the same tailnet, MagicDNS resolves this)</span>
+<span class="str">workstation</span></code></pre>
+  </div>
+
+  <h3>100.x.y.z Addressing</h3>
+
+  <div class="panel">
+    <div class="panel-title">CGNAT Address Space (100.64.0.0/10)</div>
+    <p>Tailscale assigns each device an IP from the <code>100.64.0.0/10</code> range (RFC 6598 — Shared Address Space, originally allocated for CGNAT). This is a deliberate choice:</p>
+    <ul>
+      <li><strong>Won't conflict with your LAN:</strong> Your office uses <code>10.0.0.0/8</code>? Home uses <code>192.168.0.0/16</code>? Neither overlaps with <code>100.64.0.0/10</code>.</li>
+      <li><strong>Won't conflict with cloud VPCs:</strong> AWS, GCP, Azure VPCs typically use RFC 1918 space. No overlap.</li>
+      <li><strong>Stable across networks:</strong> Your device keeps its 100.x.y.z address whether you're on WiFi, cellular, ethernet, or roaming between them.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>The one edge case:</strong> If your ISP uses CGNAT, you might see <code>100.64.x.x</code> addresses on your WAN interface too. In practice this rarely causes issues because Tailscale's WireGuard interface has higher routing priority for Tailscale-specific IPs, but it's worth knowing if you're debugging routing.
+  </div>
+
+  <h3>Split DNS</h3>
+
+  <div class="panel">
+    <div class="panel-title">Route Specific Domains to Specific Nameservers</div>
+    <p>Split DNS lets you configure the tailnet so that queries for specific domains are resolved by specific nameservers — routed through the tailnet.</p>
+    <pre><code><span class="cm">// In Tailscale DNS settings:</span>
+{
+  <span class="prop">"dns"</span>: {
+    <span class="prop">"nameservers"</span>: [<span class="str">"100.100.100.100"</span>],  <span class="cm">// MagicDNS</span>
+    <span class="prop">"routes"</span>: {
+      <span class="prop">"corp.example.com"</span>: [<span class="str">"10.0.0.53"</span>],     <span class="cm">// Corporate DNS for internal domains</span>
+      <span class="prop">"staging.internal"</span>: [<span class="str">"10.1.0.53"</span>]      <span class="cm">// Staging environment DNS</span>
+    }
+  }
+}</code></pre>
+    <p>Use case: You're at a coffee shop, but <code>api.corp.example.com</code> still resolves correctly because the query is routed through your tailnet to the corporate DNS server.</p>
+  </div>
+
+  <!-- ===== ACLs ===== -->
+  <h2>ACLs (Access Control Lists)</h2>
+
+  <p>Tailscale ACLs are policy-as-code, defined in HuJSON (JSON with comments and trailing commas). They control which devices and users can communicate with which other devices and services. ACLs are evaluated on each node — there's no central chokepoint.</p>
+
+  <div class="warn">
+    <strong>Default deny:</strong> If you define any ACL rules, the default policy becomes deny-all. Only explicitly allowed traffic passes. This is the opposite of the default (without ACLs) where all nodes in a tailnet can reach all other nodes.
+  </div>
+
+  <h3>Building Blocks</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Concept</th>
+        <th>Purpose</th>
+        <th>Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Groups</strong></td>
+        <td>Named collections of users</td>
+        <td><code>"group:engineering": ["alice@", "bob@"]</code></td>
+      </tr>
+      <tr>
+        <td><strong>Tags</strong></td>
+        <td>Labels for devices (replace user ownership)</td>
+        <td><code>"tag:server"</code>, <code>"tag:k8s-node"</code></td>
+      </tr>
+      <tr>
+        <td><strong>Tag Owners</strong></td>
+        <td>Who can apply a tag to a device</td>
+        <td><code>"tag:server": ["group:ops"]</code></td>
+      </tr>
+      <tr>
+        <td><strong>Hosts</strong></td>
+        <td>Named aliases for specific IPs/CIDRs</td>
+        <td><code>"prod-db": "100.64.0.50"</code></td>
+      </tr>
+      <tr>
+        <td><strong>autoApprovers</strong></td>
+        <td>Auto-approve routes/exit nodes by tag</td>
+        <td><code>"routes": {"10.0.0.0/8": ["tag:router"]}</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>ACL Example</h3>
+
+  <pre><code>{
+  <span class="cm">// Groups: named user collections</span>
+  <span class="prop">"groups"</span>: {
+    <span class="prop">"group:engineering"</span>: [<span class="str">"alice@example.com"</span>, <span class="str">"bob@example.com"</span>],
+    <span class="prop">"group:ops"</span>:         [<span class="str">"carol@example.com"</span>, <span class="str">"dave@example.com"</span>],
+  },
+
+  <span class="cm">// Tag owners: who can assign which tags</span>
+  <span class="prop">"tagOwners"</span>: {
+    <span class="prop">"tag:server"</span>:    [<span class="str">"group:ops"</span>],
+    <span class="prop">"tag:k8s-node"</span>:  [<span class="str">"group:ops"</span>],
+    <span class="prop">"tag:monitoring"</span>: [<span class="str">"group:ops"</span>],
+  },
+
+  <span class="cm">// ACL rules: who can reach what</span>
+  <span class="prop">"acls"</span>: [
+    <span class="cm">// Ops can reach everything</span>
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"group:ops"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"*:*"</span>],
+    },
+
+    <span class="cm">// Engineering can reach servers on specific ports</span>
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"group:engineering"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"tag:server:22,80,443"</span>],
+    },
+
+    <span class="cm">// Monitoring can reach all nodes on prometheus port</span>
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"tag:monitoring"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"*:9090,9100"</span>],
+    },
+
+    <span class="cm">// K8s nodes can talk to each other on all ports</span>
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"tag:k8s-node"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"tag:k8s-node:*"</span>],
+    },
+  ],
+
+  <span class="cm">// Auto-approve subnet routes and exit nodes</span>
+  <span class="prop">"autoApprovers"</span>: {
+    <span class="prop">"routes"</span>: {
+      <span class="prop">"10.0.0.0/8"</span>:      [<span class="str">"tag:server"</span>],
+      <span class="prop">"192.168.0.0/16"</span>:   [<span class="str">"tag:server"</span>],
+    },
+    <span class="prop">"exitNode"</span>: [<span class="str">"tag:server"</span>],
+  },
+}</code></pre>
+
+  <div class="tip">
+    <strong>Tags vs Users:</strong> Tags are particularly important for server infrastructure. A tagged device (<code>tag:server</code>) is no longer owned by a specific user — it's "owned" by the tag. This means ACLs don't break when an employee leaves. If Carol tagged the server and then leaves the company, the server's ACL access is unchanged because it's governed by the tag, not Carol's account.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Where ACLs Are Evaluated</div>
+    <p>Tailscale distributes ACL rules to every node. Each node enforces the policy locally using packet filtering in the WireGuard layer. This means:</p>
+    <ul>
+      <li><strong>No central bottleneck:</strong> ACL enforcement is distributed, not a single firewall in the path.</li>
+      <li><strong>Offline-capable:</strong> If the coordination server is temporarily unreachable, the last-pushed ACLs remain in effect.</li>
+      <li><strong>Fast updates:</strong> ACL changes are pushed to all nodes via the control plane connection (long-polling/WebSocket). Typical propagation: seconds.</li>
+    </ul>
+  </div>
+
+  <!-- ===== SUBNET ROUTERS ===== -->
+  <h2>Subnet Routers</h2>
+
+  <p>Not every device can run the Tailscale agent. Subnet routers let you bridge between Tailscale and non-Tailscale networks, making entire subnets reachable through the tailnet.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Your Laptop</div>
+      <div class="topo-detail">100.64.0.1 (Tailscale)</div>
+    </div>
+    <div class="topo-link">&rarr; WireGuard &rarr;</div>
+    <div class="topo-node router">
+      <div class="topo-label">Subnet Router</div>
+      <div class="topo-detail">100.64.0.10 + 192.168.1.0/24</div>
+    </div>
+    <div class="topo-link">&rarr; LAN &rarr;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Office Printer</div>
+      <div class="topo-detail">192.168.1.50 (no Tailscale)</div>
+    </div>
+  </div>
+
+  <h3>Setting Up a Subnet Router</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Advertise routes</strong> on the machine that will act as the subnet router:
+        <div class="terminal">
+          <span class="prompt">$ </span>sudo tailscale up --advertise-routes=192.168.1.0/24,10.0.0.0/24<br>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Enable IP forwarding</strong> on the subnet router (Linux):
+        <div class="terminal">
+          <span class="prompt">$ </span>echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf<br>
+          <span class="prompt">$ </span>echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf<br>
+          <span class="prompt">$ </span>sudo sysctl -p /etc/sysctl.d/99-tailscale.conf<br>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Approve routes</strong> in the Tailscale admin console (or via <code>autoApprovers</code> in ACLs). Unapproved routes are ignored by other nodes.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Done:</strong> Other tailnet nodes can now reach <code>192.168.1.50</code> as if they were on the same LAN. Traffic flows: Laptop &rarr; WireGuard &rarr; Subnet Router &rarr; LAN &rarr; Printer.</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Use case — accessing on-prem from anywhere:</strong> Put a subnet router in your office or datacenter. Now every tailnet member (working from home, a coffee shop, or traveling) can reach the entire office network. No traditional VPN concentrator, no port forwarding, no exposing services to the internet.
+  </div>
+
+  <div class="tip">
+    <strong>High availability:</strong> Run two subnet routers advertising the same routes. Tailscale will use the one with lower latency and failover to the other if the primary becomes unreachable. No special configuration needed — just advertise the same routes from both.
+  </div>
+
+  <!-- ===== EXIT NODES ===== -->
+  <h2>Exit Nodes</h2>
+
+  <p>Subnet routers expose specific subnets. Exit nodes route <strong>all</strong> traffic (the default route, <code>0.0.0.0/0</code>) through a specific node. This is the traditional "VPN" behavior — all your internet traffic goes through the exit node.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">Subnet Router</div>
+      <div class="comp-body">
+        <ul>
+          <li>Routes specific subnets (e.g., <code>192.168.1.0/24</code>)</li>
+          <li>Internet traffic goes out your local connection</li>
+          <li>Use case: access internal networks</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l7">Exit Node</div>
+      <div class="comp-body">
+        <ul>
+          <li>Routes <strong>ALL</strong> traffic (<code>0.0.0.0/0</code>)</li>
+          <li>Internet traffic exits via the exit node's connection</li>
+          <li>Use case: secure untrusted networks, geo-location</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Setting Up an Exit Node</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Server Side (the exit node)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>sudo tailscale up --advertise-exit-node<br>
+      </div>
+      <p style="margin-top: 8px; font-size: 13px; color: #888;">Then approve in the admin console or via autoApprovers.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Client Side (use the exit node)</div>
+      <div class="terminal">
+        <span class="prompt">$ </span>sudo tailscale up --exit-node=myserver<br>
+        <br>
+        <span class="cm"># To stop using the exit node:</span><br>
+        <span class="prompt">$ </span>sudo tailscale up --exit-node=<br>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Bandwidth consideration:</strong> All your traffic flows through the exit node, which means the exit node's bandwidth is your bandwidth limit. A Raspberry Pi on a residential connection is a poor exit node for heavy usage. A cloud VM with 1 Gbps+ is ideal.
+  </div>
+
+  <!-- ===== TAILDROP ===== -->
+  <h2>Taildrop</h2>
+
+  <p>Peer-to-peer file transfer between tailnet devices. No cloud storage intermediary, no size limits, no file type restrictions. Files transfer directly over the WireGuard connection.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale file cp ./backup.tar.gz myserver:<br>
+    <span class="output">Sending backup.tar.gz to myserver... 100% (2.4 GB)</span><br>
+    <br>
+    <span class="cm"># On the receiving end:</span><br>
+    <span class="prompt">$ </span>tailscale file get ~/received/<br>
+    <span class="output">Received backup.tar.gz (2.4 GB) from workstation</span><br>
+  </div>
+
+  <div class="tip">
+    <strong>Like AirDrop, but cross-platform and anywhere:</strong> Works between Linux, macOS, Windows, iOS, Android. Files go peer-to-peer (or through DERP if direct fails), encrypted end-to-end by WireGuard. No file size limits.
+  </div>
+
+  <!-- ===== FUNNEL ===== -->
+  <h2>Tailscale Funnel</h2>
+
+  <p>Funnel is the reverse of everything else Tailscale does. Instead of making private services reachable within the tailnet, Funnel exposes a local port to the <strong>public internet</strong> via Tailscale's infrastructure.</p>
+
+  <div class="topology">
+    <div class="topo-node cloud">
+      <div class="topo-label">Public Internet</div>
+      <div class="topo-detail">Anyone</div>
+    </div>
+    <div class="topo-link">&rarr; HTTPS &rarr;</div>
+    <div class="topo-node server">
+      <div class="topo-label">Tailscale Funnel</div>
+      <div class="topo-detail">hostname.ts.net:443</div>
+    </div>
+    <div class="topo-link">&rarr; WireGuard &rarr;</div>
+    <div class="topo-node host">
+      <div class="topo-label">Your Device</div>
+      <div class="topo-detail">localhost:3000</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale funnel 3000<br>
+    <span class="output">Available on the internet:</span><br>
+    <span class="output">  https://mydevice.tail1234.ts.net/</span><br>
+    <span class="output">  |-- proxy http://127.0.0.1:3000</span><br>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Funnel Details</div>
+    <ul>
+      <li><strong>HTTPS only:</strong> Tailscale terminates TLS with a Let's Encrypt certificate for <code>*.ts.net</code></li>
+      <li><strong>Port limitations:</strong> Only ports 443, 8443, and 10000 are available for Funnel</li>
+      <li><strong>Use cases:</strong> Webhook receivers, demo deployments, sharing local dev server, CI/CD callbacks</li>
+      <li><strong>Not a CDN:</strong> Traffic goes through Tailscale's infrastructure to your device. Latency and bandwidth depend on your connection.</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l4">Tailscale Serve (tailnet only)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Exposes a local port to <strong>your tailnet</strong></li>
+          <li>Only reachable by tailnet members</li>
+          <li>No public DNS/TLS needed</li>
+          <li><code>tailscale serve 3000</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l7">Tailscale Funnel (public internet)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Exposes a local port to the <strong>public internet</strong></li>
+          <li>Anyone with the URL can reach it</li>
+          <li>TLS terminated by Tailscale (Let's Encrypt)</li>
+          <li><code>tailscale funnel 3000</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TAILSCALE SSH ===== -->
+  <h2>Tailscale SSH</h2>
+
+  <p>Replaces SSH key management entirely. Authentication is handled by Tailscale identity — no <code>authorized_keys</code>, no key rotation, no SSH CA infrastructure.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale ssh user@myserver<br>
+    <span class="output">Welcome to myserver (Ubuntu 24.04)</span><br>
+    <span class="output">user@myserver:~$</span><br>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How Tailscale SSH Works</div>
+    <ul>
+      <li><strong>Server side:</strong> Tailscale runs an SSH server embedded in the Tailscale daemon. When enabled, it intercepts SSH connections on the Tailscale interface.</li>
+      <li><strong>Authentication:</strong> Instead of SSH keys, the server verifies the connecting peer's Tailscale identity (which user, which device, which tags). This is enforced via ACLs.</li>
+      <li><strong>Authorization:</strong> SSH ACLs in the Tailscale policy define who can SSH into what, with what user:</li>
+    </ul>
+    <pre><code>{
+  <span class="prop">"ssh"</span>: [
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"group:ops"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"tag:server"</span>],
+      <span class="prop">"users"</span>:  [<span class="str">"root"</span>, <span class="str">"deploy"</span>],
+    },
+    {
+      <span class="prop">"action"</span>: <span class="str">"accept"</span>,
+      <span class="prop">"src"</span>:    [<span class="str">"group:engineering"</span>],
+      <span class="prop">"dst"</span>:    [<span class="str">"tag:server"</span>],
+      <span class="prop">"users"</span>:  [<span class="str">"deploy"</span>],  <span class="cm">// No root for eng</span>
+    },
+  ],
+}</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Session recording:</strong> Tailscale SSH can record SSH sessions (audit logs) and require re-authentication for sensitive commands. This gives you compliance-friendly audit trails without deploying a bastion host or SSH CA.
+  </div>
+
+  <!-- ===== KEY EXPIRY & NODE AUTHORIZATION ===== -->
+  <h2>Key Expiry &amp; Node Authorization</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Key Expiry</div>
+      <ul>
+        <li>Each node's WireGuard key has an expiration (default: 180 days)</li>
+        <li>Expired nodes must re-authenticate (OAuth login again)</li>
+        <li>Configurable per node or by tag</li>
+        <li>Can disable key expiry for servers (<code>--auth-key</code> with no expiry flag)</li>
+        <li>Prevents stale/compromised devices from maintaining access indefinitely</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Node Authorization</div>
+      <ul>
+        <li>New devices need admin approval before joining the tailnet</li>
+        <li>Pre-authorized keys: <code>tailscale up --auth-key=tskey-...</code> for headless servers</li>
+        <li>Auto-approve by tag via <code>autoApprovers</code> in ACLs</li>
+        <li>Prevents unauthorized devices from joining even if they have valid credentials</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$ </span><span class="cm"># Generate a pre-auth key for automated server provisioning</span><br>
+    <span class="prompt">$ </span>tailscale up --auth-key=tskey-auth-kAbCdEf123-ABCdef123456789<br>
+    <br>
+    <span class="cm"># Reusable keys (for provisioning multiple servers):</span><br>
+    <span class="cm"># Created in admin console with "reusable" flag</span><br>
+    <span class="cm"># Can also be tagged: --auth-key auto-assigns tag:server</span><br>
+  </div>
+
+  <!-- ===== DEVICE POSTURE ===== -->
+  <h2>Device Posture &amp; Compliance</h2>
+
+  <p>Tailscale can restrict access based on device state — not just identity. This is useful for compliance-heavy environments (SOC 2, HIPAA, etc.).</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Posture Check</th>
+        <th>What It Verifies</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>OS Version</strong></td>
+        <td>Minimum OS version (e.g., macOS 14+)</td>
+        <td>Ensure devices have recent security patches</td>
+      </tr>
+      <tr>
+        <td><strong>Tailscale Version</strong></td>
+        <td>Minimum client version</td>
+        <td>Ensure latest security fixes are deployed</td>
+      </tr>
+      <tr>
+        <td><strong>Disk Encryption</strong></td>
+        <td>FileVault (macOS), BitLocker (Windows)</td>
+        <td>Compliance: data at rest must be encrypted</td>
+      </tr>
+      <tr>
+        <td><strong>Screen Lock</strong></td>
+        <td>Screen lock is enabled</td>
+        <td>Prevent physical access to unlocked devices</td>
+      </tr>
+      <tr>
+        <td><strong>Identity Provider</strong></td>
+        <td>Valid, active IDP session</td>
+        <td>Revoked IDP accounts lose tailnet access immediately</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Integration with MDM:</strong> Device posture works best alongside mobile device management (MDM). Tailscale checks what the MDM reports about the device, and ACLs can reference posture attributes. This bridges the gap between network access control and endpoint management.
+  </div>
+
+  <!-- ===== FEATURE OVERVIEW TABLE ===== -->
+  <h2>Feature Overview</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>What It Does</th>
+        <th>Key Command / Config</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>MagicDNS</strong></td>
+        <td>Automatic DNS for all tailnet devices</td>
+        <td><code>hostname.tailnet.ts.net</code></td>
+      </tr>
+      <tr>
+        <td><strong>ACLs</strong></td>
+        <td>Fine-grained access control (tags, groups, ports)</td>
+        <td>HuJSON policy file</td>
+      </tr>
+      <tr>
+        <td><strong>Subnet Routers</strong></td>
+        <td>Bridge tailnet to non-Tailscale networks</td>
+        <td><code>--advertise-routes=10.0.0.0/24</code></td>
+      </tr>
+      <tr>
+        <td><strong>Exit Nodes</strong></td>
+        <td>Route all traffic through a node</td>
+        <td><code>--advertise-exit-node</code> / <code>--exit-node=host</code></td>
+      </tr>
+      <tr>
+        <td><strong>Taildrop</strong></td>
+        <td>P2P file transfer between tailnet devices</td>
+        <td><code>tailscale file cp ./f host:</code></td>
+      </tr>
+      <tr>
+        <td><strong>Funnel</strong></td>
+        <td>Expose local port to public internet</td>
+        <td><code>tailscale funnel 3000</code></td>
+      </tr>
+      <tr>
+        <td><strong>Serve</strong></td>
+        <td>Expose local port within tailnet</td>
+        <td><code>tailscale serve 3000</code></td>
+      </tr>
+      <tr>
+        <td><strong>Tailscale SSH</strong></td>
+        <td>Identity-based SSH (no keys needed)</td>
+        <td><code>tailscale ssh user@host</code></td>
+      </tr>
+      <tr>
+        <td><strong>Key Expiry</strong></td>
+        <td>Force periodic re-authentication</td>
+        <td>Configurable per node/tag (default 180 days)</td>
+      </tr>
+      <tr>
+        <td><strong>Device Posture</strong></td>
+        <td>Restrict access based on device state</td>
+        <td>Admin console posture policies</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

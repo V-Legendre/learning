@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 03 — IP Routing</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 03 — IP Routing</h1>
+  <p class="subtitle">How routers make forwarding decisions</p>
+
+  <!-- ===== ROUTING TABLE ===== -->
+  <h2>What a Routing Table Contains</h2>
+
+  <p>Every host and router maintains a <strong>routing table</strong> (also called a FIB — Forwarding Information Base). When a packet arrives, the destination IP is looked up in this table to determine where to send it next.</p>
+
+  <div class="panel">
+    <div class="panel-title">Routing Table Fields</div>
+    <table>
+      <tr>
+        <th>Field</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><strong>Destination Network</strong></td>
+        <td>The network prefix being matched (e.g., <code>10.0.1.0/24</code>)</td>
+      </tr>
+      <tr>
+        <td><strong>Netmask / Prefix Length</strong></td>
+        <td>Defines how many bits of the destination address to match</td>
+      </tr>
+      <tr>
+        <td><strong>Next-Hop</strong></td>
+        <td>IP address of the next router to forward to. May be "directly connected" if on the same link.</td>
+      </tr>
+      <tr>
+        <td><strong>Interface</strong></td>
+        <td>The outgoing network interface (e.g., <code>eth0</code>, <code>ens5</code>, <code>wlan0</code>)</td>
+      </tr>
+      <tr>
+        <td><strong>Metric</strong></td>
+        <td>Cost of the route. Lower is preferred. Used to break ties between routes from the <strong>same</strong> source (e.g., two OSPF paths).</td>
+      </tr>
+      <tr>
+        <td><strong>Administrative Distance (AD)</strong></td>
+        <td>Trustworthiness of the route source. Lower is preferred. Used to break ties between routes from <strong>different</strong> sources (e.g., OSPF vs BGP).</td>
+      </tr>
+      <tr>
+        <td><strong>Route Source / Protocol</strong></td>
+        <td>How the route was learned: connected, static, OSPF, BGP, etc.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Example: Linux Routing Table</div>
+    <pre><code><span class="cm"># Standard Linux routing table output</span>
+$ ip route show
+<span class="val">default</span> via <span class="num">10.0.0.1</span> dev eth0 proto dhcp metric 100
+<span class="val">10.0.0.0/24</span> dev eth0 proto kernel scope link src 10.0.0.5 metric 100
+<span class="val">10.0.1.0/24</span> via <span class="num">10.0.0.254</span> dev eth0 proto static metric 50
+<span class="val">172.17.0.0/16</span> dev docker0 proto kernel scope link src 172.17.0.1 linkdown
+<span class="val">10.244.0.0/24</span> dev cni0 proto kernel scope link src 10.244.0.1
+
+<span class="cm"># More detailed view</span>
+$ ip route show table all | head -20
+
+<span class="cm"># IPv6 routing table</span>
+$ ip -6 route show
+::1 dev lo proto kernel metric 256
+2001:db8:1::/64 dev eth0 proto ra metric 100
+fe80::/64 dev eth0 proto kernel metric 256
+default via fe80::1 dev eth0 proto ra metric 100</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Reading the Linux Route Output</div>
+    <table>
+      <tr>
+        <th>Entry</th>
+        <th>Meaning</th>
+      </tr>
+      <tr>
+        <td><code>default via 10.0.0.1 dev eth0</code></td>
+        <td><strong>Default route</strong> (0.0.0.0/0). If no more specific route matches, send to 10.0.0.1 via eth0.</td>
+      </tr>
+      <tr>
+        <td><code>10.0.0.0/24 dev eth0 ... scope link</code></td>
+        <td><strong>Connected route</strong>. This host is directly on the 10.0.0.0/24 network. No next-hop needed — just ARP and send.</td>
+      </tr>
+      <tr>
+        <td><code>10.0.1.0/24 via 10.0.0.254 ... proto static</code></td>
+        <td><strong>Static route</strong>. To reach 10.0.1.0/24, forward to 10.0.0.254 (a router on the local network).</td>
+      </tr>
+      <tr>
+        <td><code>172.17.0.0/16 dev docker0 ... linkdown</code></td>
+        <td><strong>Docker bridge</strong> network. Connected route for the docker0 bridge interface.</td>
+      </tr>
+      <tr>
+        <td><code>10.244.0.0/24 dev cni0</code></td>
+        <td><strong>K8s pod network</strong>. Connected route for the local pod CIDR (created by the CNI plugin).</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ===== DEFAULT GATEWAY ===== -->
+  <h2>Default Gateway (0.0.0.0/0)</h2>
+
+  <p>The <strong>default route</strong> matches <em>any</em> destination that no more-specific route covers. It has the shortest prefix length (/0), so it is always the last resort in longest prefix match.</p>
+
+  <div class="note">
+    <strong>Every host must have a default gateway</strong> to communicate with networks beyond its own subnet. Without one, the host can only reach directly connected networks. The default gateway is typically the local router's IP address.
+  </div>
+
+  <pre><code><span class="cm"># Set default gateway</span>
+$ ip route add default via 10.0.0.1 dev eth0
+
+<span class="cm"># Or equivalently</span>
+$ ip route add 0.0.0.0/0 via 10.0.0.1 dev eth0
+
+<span class="cm"># Check current default route</span>
+$ ip route get 8.8.8.8
+8.8.8.8 via 10.0.0.1 dev eth0 src 10.0.0.5 uid 0</code></pre>
+
+  <!-- ===== STATIC ROUTES ===== -->
+  <h2>Static Routes</h2>
+
+  <p>Manually configured routes. Simple, deterministic, no protocol overhead — but they don't adapt to topology changes.</p>
+
+  <pre><code><span class="cm"># Add a static route: "to reach 10.1.0.0/16, send via 10.0.0.254"</span>
+$ ip route add 10.1.0.0/16 via 10.0.0.254 dev eth0
+
+<span class="cm"># Add a route with a specific metric</span>
+$ ip route add 10.2.0.0/16 via 10.0.0.253 dev eth0 metric 200
+
+<span class="cm"># Delete a static route</span>
+$ ip route del 10.1.0.0/16 via 10.0.0.254
+
+<span class="cm"># Persistent routes (varies by distro)</span>
+<span class="cm"># Netplan (Ubuntu): /etc/netplan/*.yaml</span>
+<span class="cm"># NetworkManager: nmcli connection modify "eth0" +ipv4.routes "10.1.0.0/16 10.0.0.254"</span>
+<span class="cm"># systemd-networkd: [Route] section in .network files</span></code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">When to Use Static Routes</div>
+      <div class="comp-body">
+        <ul>
+          <li>Small networks with predictable topology</li>
+          <li>Stub networks with a single exit point</li>
+          <li>Default route to the upstream ISP</li>
+          <li>Host routes (/32) for specific overrides</li>
+          <li>Container/VM networking (routes to overlay networks)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">When Static Routes Fail</div>
+      <div class="comp-body">
+        <ul>
+          <li>Large or complex topologies (hundreds of routes)</li>
+          <li>Networks that change frequently</li>
+          <li>Redundant paths requiring automatic failover</li>
+          <li>When you need loop-free convergence guarantees</li>
+          <li>Multi-datacenter connectivity</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LONGEST PREFIX MATCH ===== -->
+  <h2>Longest Prefix Match</h2>
+
+  <p>The <strong>fundamental routing algorithm</strong>. When multiple routes match a destination, the route with the <strong>longest (most specific) prefix</strong> wins. This is how the entire internet works.</p>
+
+  <div class="panel">
+    <div class="panel-title">Example: Which Route Wins?</div>
+    <p>Given this routing table:</p>
+    <pre><code>0.0.0.0/0       via 10.0.0.1     <span class="cm"># default route</span>
+10.0.0.0/8      via 10.0.0.2     <span class="cm"># summary route</span>
+10.1.0.0/16     via 10.0.0.3     <span class="cm"># more specific</span>
+10.1.1.0/24     via 10.0.0.4     <span class="cm"># even more specific</span>
+10.1.1.128/25   via 10.0.0.5     <span class="cm"># most specific</span></code></pre>
+    <table>
+      <tr>
+        <th>Destination</th>
+        <th>Matching Routes</th>
+        <th>Winner (Longest Prefix)</th>
+        <th>Next-Hop</th>
+      </tr>
+      <tr>
+        <td><code>10.1.1.200</code></td>
+        <td>/0, /8, /16, /24, /25</td>
+        <td><strong>/25</strong> (10.1.1.128/25)</td>
+        <td>10.0.0.5</td>
+      </tr>
+      <tr>
+        <td><code>10.1.1.50</code></td>
+        <td>/0, /8, /16, /24</td>
+        <td><strong>/24</strong> (10.1.1.0/24)</td>
+        <td>10.0.0.4</td>
+      </tr>
+      <tr>
+        <td><code>10.1.2.5</code></td>
+        <td>/0, /8, /16</td>
+        <td><strong>/16</strong> (10.1.0.0/16)</td>
+        <td>10.0.0.3</td>
+      </tr>
+      <tr>
+        <td><code>10.5.0.1</code></td>
+        <td>/0, /8</td>
+        <td><strong>/8</strong> (10.0.0.0/8)</td>
+        <td>10.0.0.2</td>
+      </tr>
+      <tr>
+        <td><code>8.8.8.8</code></td>
+        <td>/0</td>
+        <td><strong>/0</strong> (default)</td>
+        <td>10.0.0.1</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Why this matters:</strong> Longest prefix match lets you have broad summary routes (for efficiency) and specific overrides (for exceptions). A /32 host route always wins over any network route. This is how K8s service routing works — kube-proxy installs /32 routes for ClusterIPs that override the broader service CIDR.
+  </div>
+
+  <div class="tip">
+    <strong>Implementation detail:</strong> High-performance routers use <strong>tries</strong> (prefix trees) or <strong>TCAM</strong> (Ternary Content-Addressable Memory) for O(1) longest-prefix-match lookups. The Linux kernel uses <strong>LC-trie</strong> (Level-Compressed trie) in the FIB. eBPF-based datapaths (Cilium) can do LPM lookups using <code>BPF_MAP_TYPE_LPM_TRIE</code>.
+  </div>
+
+  <!-- ===== FORWARDING DECISION ===== -->
+  <h2>Router Forwarding Decision: Step by Step</h2>
+
+  <p>When a router receives an IP packet, it performs this sequence:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Receive Frame</div>
+      <div class="desc">L2 frame arrives, router checks dest MAC is its own</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Extract IP Packet</div>
+      <div class="desc">Strip L2 header, validate IP header checksum</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Check TTL</div>
+      <div class="desc">If TTL = 0 or 1 --> drop, send ICMP Time Exceeded</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Decrement TTL</div>
+      <div class="desc">TTL = TTL - 1, recompute header checksum</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Route Lookup</div>
+      <div class="desc">Longest prefix match on destination IP in FIB</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Determine Next-Hop</div>
+      <div class="desc">Match found: get next-hop IP + egress interface</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">7</div>
+      <div class="label">ARP / NDP</div>
+      <div class="desc">Resolve next-hop IP to MAC address (check cache first)</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">8</div>
+      <div class="label">Re-encapsulate</div>
+      <div class="desc">New L2 frame: src MAC = router, dst MAC = next-hop</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step" style="max-width: 300px;">
+      <div class="num">9</div>
+      <div class="label">Forward</div>
+      <div class="desc">Transmit frame out the egress interface</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Critical Detail: L2 Headers Change, L3 Headers (Mostly) Don't</div>
+    <p>At each hop, the <strong>source and destination MAC addresses change</strong> (the frame is re-encapsulated), but the <strong>source and destination IP addresses stay the same</strong> throughout the journey (unless NAT is involved). Only TTL and checksum change in the IP header.</p>
+  </div>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Data Payload (unchanged)</div>
+    <div class="encap-layer tcp">TCP/UDP Header (unchanged)</div>
+    <div class="encap-layer ip">IP Header: Src=10.0.0.5, Dst=10.2.0.10 (TTL decremented, checksum updated)</div>
+    <div class="encap-layer eth">Ethernet: Src MAC = Router egress MAC, Dst MAC = Next-hop MAC (NEW at each hop)</div>
+  </div>
+
+  <div class="warn">
+    <strong>No match?</strong> If no route matches (including no default route), the router drops the packet and sends <strong>ICMP Destination Unreachable</strong> (Type 3, Code 0 — Network Unreachable) back to the source. You'll see this as <code>RTNETLINK answers: Network is unreachable</code> on Linux.
+  </div>
+
+  <!-- ===== ROUTE TYPES ===== -->
+  <h2>Route Types</h2>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>How Installed</th>
+      <th>Example</th>
+      <th>Characteristics</th>
+    </tr>
+    <tr>
+      <td><strong>Connected</strong></td>
+      <td>Automatically when you configure an IP on an interface</td>
+      <td><code>10.0.0.0/24 dev eth0 scope link</code></td>
+      <td>No next-hop needed (directly attached network). Highest trust (AD = 0).</td>
+    </tr>
+    <tr>
+      <td><strong>Static</strong></td>
+      <td>Manually by admin (<code>ip route add</code>)</td>
+      <td><code>10.1.0.0/16 via 10.0.0.254</code></td>
+      <td>Simple, deterministic. AD = 1. Doesn't adapt to failures.</td>
+    </tr>
+    <tr>
+      <td><strong>Dynamic</strong></td>
+      <td>Learned from routing protocols (OSPF, BGP, etc.)</td>
+      <td><code>10.2.0.0/16 via 10.0.0.253 proto ospf</code></td>
+      <td>Automatically adapts to topology changes. AD varies by protocol.</td>
+    </tr>
+  </table>
+
+  <!-- ===== ADMINISTRATIVE DISTANCE ===== -->
+  <h2>Administrative Distance</h2>
+
+  <p>When <strong>multiple routing sources</strong> provide a route to the same destination, <strong>administrative distance (AD)</strong> breaks the tie. It represents the trustworthiness of the route source — <strong>lower is better</strong>.</p>
+
+  <table>
+    <tr>
+      <th>Route Source</th>
+      <th>AD (Cisco)</th>
+      <th>AD (Linux equivalent)</th>
+    </tr>
+    <tr>
+      <td>Directly connected</td>
+      <td>0</td>
+      <td>proto kernel, scope link</td>
+    </tr>
+    <tr>
+      <td>Static route</td>
+      <td>1</td>
+      <td>proto static</td>
+    </tr>
+    <tr>
+      <td>eBGP</td>
+      <td>20</td>
+      <td>proto bgp</td>
+    </tr>
+    <tr>
+      <td>OSPF</td>
+      <td>110</td>
+      <td>proto ospf</td>
+    </tr>
+    <tr>
+      <td>IS-IS</td>
+      <td>115</td>
+      <td>proto isis</td>
+    </tr>
+    <tr>
+      <td>RIP</td>
+      <td>120</td>
+      <td>proto rip</td>
+    </tr>
+    <tr>
+      <td>iBGP</td>
+      <td>200</td>
+      <td>proto bgp</td>
+    </tr>
+    <tr>
+      <td>Unknown / unreachable</td>
+      <td>255</td>
+      <td>(route not installed)</td>
+    </tr>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Example: AD in Action</div>
+    <p>Suppose two routing protocols both know about <code>10.5.0.0/16</code>:</p>
+    <pre><code>OSPF says:  10.5.0.0/16 via 10.0.0.2   (AD = 110, metric = 20)
+eBGP says:  10.5.0.0/16 via 10.0.0.3   (AD = 20, metric = 0)
+
+Winner: <span class="val">eBGP route</span> (AD 20 < AD 110)
+The OSPF route is kept in OSPF's database but not installed in the FIB.</code></pre>
+  </div>
+
+  <div class="note">
+    <strong>AD vs Metric:</strong> AD selects <em>between</em> different routing protocols. Metric selects <em>within</em> the same routing protocol (e.g., which of two OSPF paths is shorter). AD is checked first; metric only matters when AD is tied.
+  </div>
+
+  <!-- ===== TOPOLOGY DIAGRAM ===== -->
+  <h2>Multi-Router Network Example</h2>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Host A</div>
+      <div class="topo-detail">10.0.1.10/24</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128752;</div>
+      <div class="topo-label">R1</div>
+      <div class="topo-detail">10.0.1.1 | 10.0.12.1</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128752;</div>
+      <div class="topo-label">R2</div>
+      <div class="topo-detail">10.0.12.2 | 10.0.23.1</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128752;</div>
+      <div class="topo-label">R3</div>
+      <div class="topo-detail">10.0.23.2 | 10.0.3.1</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Server B</div>
+      <div class="topo-detail">10.0.3.50/24</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">R1's Routing Table</div>
+      <pre><code>10.0.1.0/24   dev eth0 (connected)
+10.0.12.0/30  dev eth1 (connected)
+10.0.23.0/30  via 10.0.12.2  <span class="cm"># next hop is R2</span>
+10.0.3.0/24   via 10.0.12.2  <span class="cm"># next hop is R2</span>
+default       via 10.0.12.2</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">R2's Routing Table</div>
+      <pre><code>10.0.12.0/30  dev eth0 (connected)
+10.0.23.0/30  dev eth1 (connected)
+10.0.1.0/24   via 10.0.12.1  <span class="cm"># next hop is R1</span>
+10.0.3.0/24   via 10.0.23.2  <span class="cm"># next hop is R3</span></code></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Tracing: Host A (10.0.1.10) --> Server B (10.0.3.50)</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>Host A:</strong> Destination 10.0.3.50 is not on 10.0.1.0/24 (not local). Send to default gateway <code>10.0.1.1</code> (R1). ARP for R1's MAC, encapsulate, send.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>R1:</strong> Receives frame (MAC matches). Extracts IP packet. Dest = 10.0.3.50. Lookup: matches <code>10.0.3.0/24 via 10.0.12.2</code>. Decrement TTL. ARP for R2's MAC on eth1. New frame: src=R1-eth1-MAC, dst=R2-eth0-MAC. Forward.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>R2:</strong> Receives frame. Dest = 10.0.3.50. Lookup: matches <code>10.0.3.0/24 via 10.0.23.2</code>. Decrement TTL. ARP for R3's MAC on eth1. New frame. Forward.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>R3:</strong> Receives frame. Dest = 10.0.3.50. Lookup: matches <code>10.0.3.0/24 dev eth1</code> (connected). ARP for Server B's MAC directly. New frame. Forward.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div><strong>Server B:</strong> Receives frame (MAC matches). Extracts IP packet. Dest = 10.0.3.50 = its own address. Delivers to the appropriate upper-layer protocol (TCP/UDP).</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>K8s routing context:</strong> In a K8s cluster, each node has routes for pod CIDRs on other nodes. With Calico (BGP mode), nodes peer via BGP and exchange routes like <code>10.244.1.0/24 via 192.168.1.11</code>. With Cilium (eBPF), the forwarding is done in the kernel datapath, bypassing iptables — but the same longest-prefix-match logic applies at the FIB level.
+  </div>
+
+</body>
+</html>

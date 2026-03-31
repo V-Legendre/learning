@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 03 — IPv4</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 03 — IPv4</h1>
+  <p class="subtitle">32-bit addressing, subnetting, and the protocol that built the internet</p>
+
+  <!-- ===== DOTTED DECIMAL & BINARY ===== -->
+  <h2>IPv4 Address Notation</h2>
+
+  <p>An IPv4 address is a <strong>32-bit number</strong>, written as four octets in <strong>dotted-decimal notation</strong>. Each octet is 8 bits (0-255).</p>
+
+  <div class="panel">
+    <div class="panel-title">Binary ↔ Decimal Conversion</div>
+    <table>
+      <tr>
+        <th>Dotted Decimal</th>
+        <th>Binary (each octet)</th>
+        <th>Full 32-bit Binary</th>
+      </tr>
+      <tr>
+        <td><code>192.168.1.10</code></td>
+        <td><code>11000000 . 10101000 . 00000001 . 00001010</code></td>
+        <td><code>11000000101010000000000100001010</code></td>
+      </tr>
+      <tr>
+        <td><code>10.0.0.1</code></td>
+        <td><code>00001010 . 00000000 . 00000000 . 00000001</code></td>
+        <td><code>00001010000000000000000000000001</code></td>
+      </tr>
+      <tr>
+        <td><code>255.255.255.0</code></td>
+        <td><code>11111111 . 11111111 . 11111111 . 00000000</code></td>
+        <td><code>11111111111111111111111100000000</code></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Octet-to-Binary Quick Reference</div>
+    <p>Each bit position has a power-of-2 value. Sum the "on" bits to get the decimal value:</p>
+    <table>
+      <tr>
+        <th>Bit position</th>
+        <td>7</td><td>6</td><td>5</td><td>4</td><td>3</td><td>2</td><td>1</td><td>0</td>
+      </tr>
+      <tr>
+        <th>Value</th>
+        <td>128</td><td>64</td><td>32</td><td>16</td><td>8</td><td>4</td><td>2</td><td>1</td>
+      </tr>
+      <tr>
+        <th>Example: 192</th>
+        <td><strong>1</strong></td><td><strong>1</strong></td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td>
+      </tr>
+      <tr>
+        <th>Example: 168</th>
+        <td><strong>1</strong></td><td>0</td><td><strong>1</strong></td><td>0</td><td><strong>1</strong></td><td>0</td><td>0</td><td>0</td>
+      </tr>
+    </table>
+    <p style="margin-top: 8px; color: #888;">192 = 128 + 64 &nbsp;|&nbsp; 168 = 128 + 32 + 8</p>
+  </div>
+
+  <!-- ===== NETWORK/HOST SPLIT ===== -->
+  <h2>Network/Host Split: Subnet Masks &amp; CIDR</h2>
+
+  <p>Every IPv4 address has two parts: <strong>network portion</strong> (identifies the subnet) and <strong>host portion</strong> (identifies the device within the subnet). The <strong>subnet mask</strong> defines where the split happens.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">Subnet Mask Notation</div>
+      <div class="comp-body">
+        <p><strong>Dotted decimal:</strong> <code>255.255.255.0</code></p>
+        <p>All network bits = 1, all host bits = 0</p>
+        <pre><code>11111111.11111111.11111111.00000000
+|-------- network --------|-host--|</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">CIDR Notation</div>
+      <div class="comp-body">
+        <p><strong>Prefix length:</strong> <code>/24</code></p>
+        <p>The number after the slash = count of network bits</p>
+        <pre><code>192.168.1.0/24
+= 24 bits for network, 8 bits for hosts
+= 2^8 - 2 = 254 usable hosts</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Common Subnet Masks</div>
+    <table>
+      <tr>
+        <th>CIDR</th>
+        <th>Subnet Mask</th>
+        <th>Network Bits</th>
+        <th>Host Bits</th>
+        <th>Total Addresses</th>
+        <th>Usable Hosts</th>
+      </tr>
+      <tr>
+        <td><code>/8</code></td>
+        <td><code>255.0.0.0</code></td>
+        <td>8</td>
+        <td>24</td>
+        <td>16,777,216</td>
+        <td>16,777,214</td>
+      </tr>
+      <tr>
+        <td><code>/16</code></td>
+        <td><code>255.255.0.0</code></td>
+        <td>16</td>
+        <td>16</td>
+        <td>65,536</td>
+        <td>65,534</td>
+      </tr>
+      <tr>
+        <td><code>/24</code></td>
+        <td><code>255.255.255.0</code></td>
+        <td>24</td>
+        <td>8</td>
+        <td>256</td>
+        <td>254</td>
+      </tr>
+      <tr>
+        <td><code>/25</code></td>
+        <td><code>255.255.255.128</code></td>
+        <td>25</td>
+        <td>7</td>
+        <td>128</td>
+        <td>126</td>
+      </tr>
+      <tr>
+        <td><code>/26</code></td>
+        <td><code>255.255.255.192</code></td>
+        <td>26</td>
+        <td>6</td>
+        <td>64</td>
+        <td>62</td>
+      </tr>
+      <tr>
+        <td><code>/27</code></td>
+        <td><code>255.255.255.224</code></td>
+        <td>27</td>
+        <td>5</td>
+        <td>32</td>
+        <td>30</td>
+      </tr>
+      <tr>
+        <td><code>/28</code></td>
+        <td><code>255.255.255.240</code></td>
+        <td>28</td>
+        <td>4</td>
+        <td>16</td>
+        <td>14</td>
+      </tr>
+      <tr>
+        <td><code>/30</code></td>
+        <td><code>255.255.255.252</code></td>
+        <td>30</td>
+        <td>2</td>
+        <td>4</td>
+        <td>2</td>
+      </tr>
+      <tr>
+        <td><code>/32</code></td>
+        <td><code>255.255.255.255</code></td>
+        <td>32</td>
+        <td>0</td>
+        <td>1</td>
+        <td>1 (host route)</td>
+      </tr>
+    </table>
+    <div class="note">
+      <strong>Why "-2" for usable hosts?</strong> Every subnet reserves the first address (all host bits = 0) as the <strong>network address</strong> and the last address (all host bits = 1) as the <strong>broadcast address</strong>. Neither can be assigned to a host.
+    </div>
+  </div>
+
+  <!-- ===== SUBNETTING BY HAND ===== -->
+  <h2>Subnetting by Hand</h2>
+
+  <p>Task: <strong>Split <code>192.168.1.0/24</code> into four <code>/26</code> subnets.</strong></p>
+
+  <div class="panel">
+    <div class="panel-title">Step 1 — Determine the new prefix length</div>
+    <p>We need 4 subnets. 2<sup>n</sup> >= 4, so n = 2. Borrow 2 bits from the host portion:</p>
+    <pre><code>Original:  /24 = 24 network bits + 8 host bits
+New:       /26 = 24 + 2 network bits + 6 host bits
+
+Each /26 subnet: 2^6 = 64 addresses, 62 usable hosts</code></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step 2 — Calculate subnet boundaries</div>
+    <p>Block size = 2<sup>host bits</sup> = 2<sup>6</sup> = <strong>64</strong>. Subnets start at multiples of 64 in the last octet:</p>
+    <table>
+      <tr>
+        <th>Subnet #</th>
+        <th>Network Address</th>
+        <th>First Usable</th>
+        <th>Last Usable</th>
+        <th>Broadcast</th>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><code>192.168.1.0/26</code></td>
+        <td><code>192.168.1.1</code></td>
+        <td><code>192.168.1.62</code></td>
+        <td><code>192.168.1.63</code></td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>192.168.1.64/26</code></td>
+        <td><code>192.168.1.65</code></td>
+        <td><code>192.168.1.126</code></td>
+        <td><code>192.168.1.127</code></td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>192.168.1.128/26</code></td>
+        <td><code>192.168.1.129</code></td>
+        <td><code>192.168.1.190</code></td>
+        <td><code>192.168.1.191</code></td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><code>192.168.1.192/26</code></td>
+        <td><code>192.168.1.193</code></td>
+        <td><code>192.168.1.254</code></td>
+        <td><code>192.168.1.255</code></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Step 3 — Verify in binary</div>
+    <pre><code>192.168.1.0   = 11000000.10101000.00000001.<strong>00</strong>|000000  (subnet bits = 00)
+192.168.1.64  = 11000000.10101000.00000001.<strong>01</strong>|000000  (subnet bits = 01)
+192.168.1.128 = 11000000.10101000.00000001.<strong>10</strong>|000000  (subnet bits = 10)
+192.168.1.192 = 11000000.10101000.00000001.<strong>11</strong>|000000  (subnet bits = 11)
+                                            ^^
+                         2 borrowed bits → 4 subnets</code></pre>
+  </div>
+
+  <!-- ===== SUPERNETTING / CIDR AGGREGATION ===== -->
+  <h2>Supernetting / CIDR Aggregation</h2>
+
+  <p>The reverse of subnetting: <strong>combine contiguous smaller networks into a larger summary route</strong>. Essential for reducing routing table size.</p>
+
+  <div class="panel">
+    <div class="panel-title">Example: Aggregate four /24s into one /22</div>
+    <pre><code>10.1.0.0/24   = 00001010.00000001.000000<strong>00</strong>.00000000
+10.1.1.0/24   = 00001010.00000001.000000<strong>01</strong>.00000000
+10.1.2.0/24   = 00001010.00000001.000000<strong>10</strong>.00000000
+10.1.3.0/24   = 00001010.00000001.000000<strong>11</strong>.00000000
+                                  ^^^^^^
+                 First 22 bits are identical → <strong>10.1.0.0/22</strong></code></pre>
+    <p>One /22 summary route replaces four /24 routing entries.</p>
+  </div>
+
+  <div class="note">
+    <strong>Aggregation requirement:</strong> The networks must be contiguous and aligned to a power-of-2 boundary. You cannot aggregate <code>10.1.1.0/24</code> + <code>10.1.2.0/24</code> + <code>10.1.3.0/24</code> + <code>10.1.4.0/24</code> into a single /22 because they don't share the same first 22 bits.
+  </div>
+
+  <!-- ===== PRIVATE ADDRESS RANGES ===== -->
+  <h2>Private Address Ranges (RFC 1918)</h2>
+
+  <p>These ranges are <strong>not routable on the public internet</strong>. Reserved for internal networks. NAT translates them to public addresses at the network edge.</p>
+
+  <table>
+    <tr>
+      <th>Range</th>
+      <th>CIDR</th>
+      <th>Total Addresses</th>
+      <th>Typical Use</th>
+    </tr>
+    <tr>
+      <td><code>10.0.0.0</code> — <code>10.255.255.255</code></td>
+      <td><code>10.0.0.0/8</code></td>
+      <td>16,777,216</td>
+      <td>Large enterprises, cloud VPCs (AWS default VPC uses 172.31.0.0/16, but custom VPCs often use 10.x)</td>
+    </tr>
+    <tr>
+      <td><code>172.16.0.0</code> — <code>172.31.255.255</code></td>
+      <td><code>172.16.0.0/12</code></td>
+      <td>1,048,576</td>
+      <td>Docker default bridge (172.17.0.0/16), K8s pod CIDRs</td>
+    </tr>
+    <tr>
+      <td><code>192.168.0.0</code> — <code>192.168.255.255</code></td>
+      <td><code>192.168.0.0/16</code></td>
+      <td>65,536</td>
+      <td>Home routers, small labs, kind clusters</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>K8s note:</strong> In a typical cluster, pod CIDR (e.g., <code>10.244.0.0/16</code> for Flannel) and service CIDR (e.g., <code>10.96.0.0/12</code>) are carved from RFC 1918 space. Calico, Cilium, and other CNIs let you customize these.
+  </div>
+
+  <!-- ===== SPECIAL ADDRESSES ===== -->
+  <h2>Special Addresses</h2>
+
+  <table>
+    <tr>
+      <th>Address / Range</th>
+      <th>Purpose</th>
+      <th>Details</th>
+    </tr>
+    <tr>
+      <td><code>127.0.0.0/8</code></td>
+      <td>Loopback</td>
+      <td>Traffic never leaves the host. <code>127.0.0.1</code> is "localhost". The entire /8 is reserved, but only .1 is typically used. Packets sent here are routed internally by the kernel's loopback interface (<code>lo</code>).</td>
+    </tr>
+    <tr>
+      <td><code>169.254.0.0/16</code></td>
+      <td>Link-local (APIPA)</td>
+      <td>Auto-assigned when DHCP fails. Not routable. Also used by AWS for instance metadata (<code>169.254.169.254</code>) and by K8s node-local DNS cache.</td>
+    </tr>
+    <tr>
+      <td><code>0.0.0.0</code></td>
+      <td>Unspecified / default route</td>
+      <td>As a source: "I don't have an address yet" (DHCP discover). As a route destination: the default route (<code>0.0.0.0/0</code>). As a listen address: bind to all interfaces.</td>
+    </tr>
+    <tr>
+      <td><code>255.255.255.255</code></td>
+      <td>Limited broadcast</td>
+      <td>Broadcast to all hosts on the local network segment. Not forwarded by routers. Used by DHCP.</td>
+    </tr>
+    <tr>
+      <td><code>100.64.0.0/10</code></td>
+      <td>Carrier-grade NAT (CGN)</td>
+      <td>RFC 6598. Shared address space for ISP-level NAT. Also used by some overlay networks (Tailscale uses <code>100.x.y.z</code>).</td>
+    </tr>
+  </table>
+
+  <!-- ===== IPv4 HEADER ===== -->
+  <h2>IPv4 Header Format</h2>
+
+  <p>The IPv4 header is 20 bytes minimum (without options). Every field matters for routing, fragmentation, and protocol demuxing.</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Version</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">IHL</span>
+      <span class="field-size">4 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1.5;">
+      <span class="field-name">DSCP</span>
+      <span class="field-size">6 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 0.5;">
+      <span class="field-name">ECN</span>
+      <span class="field-size">2 bits</span>
+    </div>
+    <div class="pkt-field data" style="flex: 4;">
+      <span class="field-name">Total Length</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field" style="flex: 4;">
+      <span class="field-name">Identification</span>
+      <span class="field-size">16 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Flags</span>
+      <span class="field-size">3 bits</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 3;">
+      <span class="field-name">Fragment Offset</span>
+      <span class="field-size">13 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field check" style="flex: 2;">
+      <span class="field-name">TTL</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 2;">
+      <span class="field-name">Protocol</span>
+      <span class="field-size">8 bits</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">Header Checksum</span>
+      <span class="field-size">16 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field src" style="flex: 1;">
+      <span class="field-name">Source IP Address</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field dst" style="flex: 1;">
+      <span class="field-name">Destination IP Address</span>
+      <span class="field-size">32 bits</span>
+    </div>
+  </div>
+
+  <div class="packet-diagram">
+    <div class="pkt-field" style="flex: 1;">
+      <span class="field-name">Options (if IHL > 5)</span>
+      <span class="field-size">Variable, 0-40 bytes</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Header Fields Explained</div>
+    <table>
+      <tr>
+        <th>Field</th>
+        <th>Purpose</th>
+      </tr>
+      <tr>
+        <td><strong>Version</strong></td>
+        <td>Always <code>4</code> for IPv4. Tells the router which header format to parse.</td>
+      </tr>
+      <tr>
+        <td><strong>IHL</strong> (Internet Header Length)</td>
+        <td>Header length in 32-bit words. Minimum = 5 (20 bytes). If options present, can be up to 15 (60 bytes).</td>
+      </tr>
+      <tr>
+        <td><strong>DSCP</strong> (Differentiated Services)</td>
+        <td>QoS marking. Used by routers to prioritize traffic (e.g., EF for VoIP, AF for streaming).</td>
+      </tr>
+      <tr>
+        <td><strong>Total Length</strong></td>
+        <td>Entire packet size (header + payload) in bytes. Max = 65,535 bytes.</td>
+      </tr>
+      <tr>
+        <td><strong>Identification + Flags + Fragment Offset</strong></td>
+        <td>Used for IP fragmentation and reassembly (see below).</td>
+      </tr>
+      <tr>
+        <td><strong>TTL</strong> (Time to Live)</td>
+        <td>Hop counter. Decremented by each router. Packet discarded when TTL = 0. Prevents routing loops.</td>
+      </tr>
+      <tr>
+        <td><strong>Protocol</strong></td>
+        <td>Identifies the encapsulated upper-layer protocol. Tells the OS which handler to invoke.</td>
+      </tr>
+      <tr>
+        <td><strong>Header Checksum</strong></td>
+        <td>Verifies header integrity. Recomputed at every hop (because TTL changes). Removed in IPv6.</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ===== TTL ===== -->
+  <h2>TTL: Loop Prevention &amp; Traceroute</h2>
+
+  <p><strong>TTL (Time to Live)</strong> is set by the sender (typically 64 or 128) and decremented by 1 at each router hop. If TTL reaches 0, the router drops the packet and sends an <strong>ICMP Time Exceeded</strong> (Type 11) message back to the source.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Sender sets TTL=64</div>
+      <div class="desc">Packet leaves the host</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Router A: TTL=63</div>
+      <div class="desc">Decrements, forwards</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Router B: TTL=62</div>
+      <div class="desc">Decrements, forwards</div>
+    </div>
+    <div class="arrow">--></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Destination</div>
+      <div class="desc">Receives packet (TTL=62)</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">How traceroute works</div>
+    <p><code>traceroute</code> exploits TTL to discover the path to a destination:</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Send a packet with <strong>TTL=1</strong>. The first router drops it and returns ICMP Time Exceeded, revealing its IP.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Send a packet with <strong>TTL=2</strong>. The second router drops it and returns ICMP Time Exceeded.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Repeat, incrementing TTL by 1 each time, until the packet reaches the destination (which replies with ICMP Port Unreachable for UDP-based traceroute, or Echo Reply for ICMP-based).</div>
+      </div>
+    </div>
+    <pre><code><span class="cm"># Linux uses UDP by default, macOS also uses UDP</span>
+$ traceroute 8.8.8.8
+ 1  192.168.1.1    1.2 ms   1.1 ms   1.0 ms   <span class="cm"># Your gateway</span>
+ 2  10.0.0.1       5.4 ms   5.2 ms   5.3 ms   <span class="cm"># ISP router</span>
+ 3  72.14.236.1   10.1 ms  10.0 ms  10.2 ms   <span class="cm"># Google edge</span>
+ 4  8.8.8.8       10.5 ms  10.3 ms  10.4 ms   <span class="cm"># Destination</span>
+
+<span class="cm"># Use -I for ICMP-based (some firewalls block UDP)</span>
+$ traceroute -I 8.8.8.8</code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>DevOps tip:</strong> <code>mtr</code> (My Traceroute) combines traceroute + ping into a continuous diagnostic. It shows per-hop packet loss and jitter — invaluable for diagnosing network issues. <code>mtr -z</code> shows ASN numbers too.
+  </div>
+
+  <!-- ===== FRAGMENTATION ===== -->
+  <h2>Fragmentation</h2>
+
+  <p>When a packet is larger than the <strong>MTU (Maximum Transmission Unit)</strong> of the next link (typically 1500 bytes for Ethernet), the router must either <strong>fragment it</strong> or <strong>drop it</strong>.</p>
+
+  <div class="panel">
+    <div class="panel-title">Fragmentation Fields</div>
+    <table>
+      <tr>
+        <th>Field</th>
+        <th>Role</th>
+      </tr>
+      <tr>
+        <td><strong>Identification</strong> (16 bits)</td>
+        <td>All fragments of the same original packet share the same ID</td>
+      </tr>
+      <tr>
+        <td><strong>Flags</strong> (3 bits)</td>
+        <td>Bit 0: Reserved. Bit 1: <strong>DF (Don't Fragment)</strong>. Bit 2: <strong>MF (More Fragments)</strong></td>
+      </tr>
+      <tr>
+        <td><strong>Fragment Offset</strong> (13 bits)</td>
+        <td>Position of this fragment's data in the original packet (in 8-byte units)</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Why Fragmentation Is Bad</div>
+      <div class="comp-body">
+        <ul>
+          <li>If <strong>any</strong> fragment is lost, the <strong>entire packet</strong> must be retransmitted</li>
+          <li>Reassembly is CPU-intensive and consumes memory buffers</li>
+          <li>Increases latency and jitter</li>
+          <li>Some firewalls/NATs drop fragments (security risk: overlapping fragment attacks)</li>
+          <li>Fragments bypass stateful firewall port inspection</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Path MTU Discovery (PMTUD)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Set the <strong>DF (Don't Fragment) bit</strong> on all packets</li>
+          <li>If a router can't forward (packet > link MTU), it drops the packet and sends <strong>ICMP Fragmentation Needed</strong> (Type 3, Code 4) back</li>
+          <li>The sender reduces packet size and retransmits</li>
+          <li>Discovers the smallest MTU across the entire path</li>
+          <li><strong>All modern OSes use PMTUD by default</strong></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>ICMP black hole:</strong> If a firewall blocks ICMP (including "Fragmentation Needed"), PMTUD breaks. Packets get silently dropped. This is a common cause of mysterious connectivity issues, especially with VPNs/tunnels that reduce the effective MTU. Always allow ICMP Type 3 Code 4 in your firewall rules.
+  </div>
+
+  <div class="tip">
+    <strong>K8s/tunnel note:</strong> Overlay networks (VXLAN, Geneve, WireGuard) add encapsulation headers, reducing the effective MTU. For example, VXLAN adds 50 bytes of overhead, so the inner MTU is 1450 instead of 1500. Calico VXLAN mode and Cilium both handle this — but mismatched MTU settings across nodes cause exactly the PMTUD black hole described above.
+  </div>
+
+  <!-- ===== PROTOCOL FIELD ===== -->
+  <h2>Protocol Field Values</h2>
+
+  <p>The Protocol field in the IPv4 header tells the receiving host which transport-layer (or other) protocol is encapsulated in the payload.</p>
+
+  <table>
+    <tr>
+      <th>Value</th>
+      <th>Protocol</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td><code>1</code></td>
+      <td><strong>ICMP</strong></td>
+      <td>Internet Control Message Protocol — ping, traceroute, error messages. Not a transport protocol; operates alongside IP.</td>
+    </tr>
+    <tr>
+      <td><code>2</code></td>
+      <td><strong>IGMP</strong></td>
+      <td>Internet Group Management Protocol — multicast group membership.</td>
+    </tr>
+    <tr>
+      <td><code>6</code></td>
+      <td><strong>TCP</strong></td>
+      <td>Transmission Control Protocol — reliable, ordered, connection-oriented. HTTP, SSH, databases.</td>
+    </tr>
+    <tr>
+      <td><code>17</code></td>
+      <td><strong>UDP</strong></td>
+      <td>User Datagram Protocol — unreliable, connectionless. DNS, DHCP, QUIC, media streaming.</td>
+    </tr>
+    <tr>
+      <td><code>41</code></td>
+      <td><strong>IPv6 encapsulation</strong></td>
+      <td>IPv6 packet encapsulated inside IPv4 (6in4 tunneling).</td>
+    </tr>
+    <tr>
+      <td><code>47</code></td>
+      <td><strong>GRE</strong></td>
+      <td>Generic Routing Encapsulation — tunnel protocol. Used by some VPNs and overlay networks.</td>
+    </tr>
+    <tr>
+      <td><code>50</code></td>
+      <td><strong>ESP</strong></td>
+      <td>Encapsulating Security Payload — IPsec encryption.</td>
+    </tr>
+    <tr>
+      <td><code>51</code></td>
+      <td><strong>AH</strong></td>
+      <td>Authentication Header — IPsec integrity/authentication (rarely used without ESP).</td>
+    </tr>
+    <tr>
+      <td><code>132</code></td>
+      <td><strong>SCTP</strong></td>
+      <td>Stream Control Transmission Protocol — multi-stream, message-oriented. Used in telecom (SS7 over IP).</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Full list:</strong> IANA maintains the authoritative registry of IP protocol numbers at <a href="https://www.iana.org/assignments/protocol-numbers/">iana.org/assignments/protocol-numbers</a>.
+  </div>
+
+</body>
+</html>

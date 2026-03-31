@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 07 — NAT</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 07 — NAT</h1>
+  <p class="subtitle">Network Address Translation — the IPv4 survival hack</p>
+
+  <!-- ===== WHY NAT EXISTS ===== -->
+  <h2>Why NAT Exists</h2>
+
+  <p>IPv4 has ~4.3 billion addresses. There are ~20+ billion connected devices. NAT is the hack that made this work — it lets thousands of devices share a single public IP address. Without NAT, IPv4 would have been exhausted in the late 1990s.</p>
+
+  <div class="panel">
+    <div class="panel-title">RFC 1918 — Private Address Ranges</div>
+    <table>
+      <tr><th>Range</th><th>CIDR</th><th>Addresses</th><th>Common Usage</th></tr>
+      <tr>
+        <td><code>10.0.0.0</code> – <code>10.255.255.255</code></td>
+        <td><code>10.0.0.0/8</code></td>
+        <td>16.7M</td>
+        <td>Cloud VPCs, large enterprise networks, K8s pod CIDRs</td>
+      </tr>
+      <tr>
+        <td><code>172.16.0.0</code> – <code>172.31.255.255</code></td>
+        <td><code>172.16.0.0/12</code></td>
+        <td>1M</td>
+        <td>Docker default bridge (172.17.0.0/16), some VPCs</td>
+      </tr>
+      <tr>
+        <td><code>192.168.0.0</code> – <code>192.168.255.255</code></td>
+        <td><code>192.168.0.0/16</code></td>
+        <td>65K</td>
+        <td>Home routers, small office networks</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>These addresses are not routable on the public internet.</strong> Any router on the internet will drop packets with RFC 1918 source/destination addresses. NAT is the translation layer that maps these private addresses to public ones.
+  </div>
+
+  <!-- ===== SNAT / MASQUERADE ===== -->
+  <h2>SNAT (Source NAT) / Masquerading</h2>
+
+  <p>SNAT rewrites the <strong>source IP</strong> of outbound packets. This is how many private hosts share one public IP for internet access — the most common form of NAT.</p>
+
+  <h3>How SNAT Works — Step by Step</h3>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Host A</div>
+      <div class="topo-detail">192.168.1.10</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Host B</div>
+      <div class="topo-detail">192.168.1.11</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128232;</div>
+      <div class="topo-label">NAT Router</div>
+      <div class="topo-detail">LAN: 192.168.1.1<br>WAN: 203.0.113.5</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">Internet</div>
+      <div class="topo-detail">Public</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Web Server</div>
+      <div class="topo-detail">93.184.216.34</div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Host A sends a packet:</strong><br>
+        <code>src=192.168.1.10:44820 → dst=93.184.216.34:443</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>NAT router rewrites source and records mapping:</strong><br>
+        <code>src=203.0.113.5:61234 → dst=93.184.216.34:443</code><br>
+        Conntrack entry: <code>192.168.1.10:44820 ↔ 203.0.113.5:61234</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Web server replies to the public IP:</strong><br>
+        <code>src=93.184.216.34:443 → dst=203.0.113.5:61234</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>NAT router looks up conntrack, rewrites destination:</strong><br>
+        <code>src=93.184.216.34:443 → dst=192.168.1.10:44820</code>
+      </div>
+    </div>
+  </div>
+
+  <h3>Packet Transformation</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Before NAT (LAN side)</div>
+      <div class="comp-body">
+        <div class="packet-diagram">
+          <div class="pkt-field src" style="flex: 1;">
+            <span class="field-name">Src: 192.168.1.10</span>
+            <span class="field-size">Private IP</span>
+          </div>
+          <div class="pkt-field dst" style="flex: 1;">
+            <span class="field-name">Dst: 93.184.216.34</span>
+            <span class="field-size">Public IP</span>
+          </div>
+          <div class="pkt-field src" style="flex: 0.6;">
+            <span class="field-name">Sport: 44820</span>
+            <span class="field-size">Ephemeral</span>
+          </div>
+          <div class="pkt-field dst" style="flex: 0.6;">
+            <span class="field-name">Dport: 443</span>
+            <span class="field-size">HTTPS</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">After NAT (WAN side)</div>
+      <div class="comp-body">
+        <div class="packet-diagram">
+          <div class="pkt-field src" style="flex: 1;">
+            <span class="field-name">Src: 203.0.113.5</span>
+            <span class="field-size">Public IP (rewritten!)</span>
+          </div>
+          <div class="pkt-field dst" style="flex: 1;">
+            <span class="field-name">Dst: 93.184.216.34</span>
+            <span class="field-size">Unchanged</span>
+          </div>
+          <div class="pkt-field src" style="flex: 0.6;">
+            <span class="field-name">Sport: 61234</span>
+            <span class="field-size">Remapped</span>
+          </div>
+          <div class="pkt-field dst" style="flex: 0.6;">
+            <span class="field-name">Dport: 443</span>
+            <span class="field-size">Unchanged</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>MASQUERADE vs SNAT</h3>
+
+  <table>
+    <tr><th>Feature</th><th><code>SNAT</code></th><th><code>MASQUERADE</code></th></tr>
+    <tr>
+      <td>Source IP</td>
+      <td>Explicitly specified (<code>--to-source 203.0.113.5</code>)</td>
+      <td>Auto-detected from outbound interface</td>
+    </tr>
+    <tr>
+      <td>Use case</td>
+      <td>Static public IP (servers, VPN gateways)</td>
+      <td>Dynamic IP (DHCP, PPPoE, home routers)</td>
+    </tr>
+    <tr>
+      <td>Performance</td>
+      <td>Slightly faster (no interface lookup)</td>
+      <td>Slightly slower (checks interface IP per packet)</td>
+    </tr>
+    <tr>
+      <td>Conntrack behavior</td>
+      <td>Entries survive interface IP changes (stale!)</td>
+      <td>Entries cleared when interface IP changes</td>
+    </tr>
+  </table>
+
+  <h3>iptables SNAT / MASQUERADE Rules</h3>
+
+  <pre><code><span class="cm"># SNAT with a static public IP</span>
+<span class="fn">iptables</span> <span class="kw">-t</span> nat <span class="kw">-A</span> POSTROUTING \
+  <span class="kw">-s</span> <span class="num">192.168.1.0/24</span> \
+  <span class="kw">-o</span> eth0 \
+  <span class="kw">-j</span> SNAT <span class="kw">--to-source</span> <span class="num">203.0.113.5</span>
+
+<span class="cm"># MASQUERADE with dynamic IP (typical for home/VPN setups)</span>
+<span class="fn">iptables</span> <span class="kw">-t</span> nat <span class="kw">-A</span> POSTROUTING \
+  <span class="kw">-s</span> <span class="num">192.168.1.0/24</span> \
+  <span class="kw">-o</span> eth0 \
+  <span class="kw">-j</span> MASQUERADE
+
+<span class="cm"># Don't forget: enable IP forwarding!</span>
+<span class="fn">sysctl</span> <span class="kw">-w</span> net.ipv4.ip_forward=<span class="num">1</span></code></pre>
+
+  <div class="note">
+    <strong>Docker uses MASQUERADE.</strong> When a container sends traffic to the internet, Docker's iptables rules MASQUERADE the container's IP (172.17.x.x) behind the host's IP. Check with <code>iptables -t nat -L POSTROUTING</code> — you'll see the Docker chain.
+  </div>
+
+  <!-- ===== DNAT ===== -->
+  <h2>DNAT (Destination NAT) / Port Forwarding</h2>
+
+  <p>DNAT rewrites the <strong>destination IP/port</strong> of inbound packets. This is how you expose an internal service on a public IP — the reverse of SNAT.</p>
+
+  <div class="topology">
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">Internet Client</div>
+      <div class="topo-detail">Requests 203.0.113.5:80</div>
+    </div>
+    <div class="topo-link">--&rarr;</div>
+    <div class="topo-node firewall">
+      <div class="topo-icon">&#128737;</div>
+      <div class="topo-label">NAT Router</div>
+      <div class="topo-detail">DNAT 80 &rarr; 192.168.1.10:80</div>
+    </div>
+    <div class="topo-link">--&rarr;</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Web Server</div>
+      <div class="topo-detail">192.168.1.10:80</div>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># Port forward: public :80 → internal 192.168.1.10:80</span>
+<span class="fn">iptables</span> <span class="kw">-t</span> nat <span class="kw">-A</span> PREROUTING \
+  <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">80</span> \
+  <span class="kw">-j</span> DNAT <span class="kw">--to-destination</span> <span class="num">192.168.1.10:80</span>
+
+<span class="cm"># You also need to allow the forwarded traffic through the filter table</span>
+<span class="fn">iptables</span> <span class="kw">-A</span> FORWARD \
+  <span class="kw">-p</span> tcp <span class="kw">-d</span> <span class="num">192.168.1.10</span> <span class="kw">--dport</span> <span class="num">80</span> \
+  <span class="kw">-m</span> conntrack <span class="kw">--ctstate</span> NEW,ESTABLISHED \
+  <span class="kw">-j</span> <span class="str">ACCEPT</span>
+
+<span class="cm"># Port remapping: public :8443 → internal :443 (different ports)</span>
+<span class="fn">iptables</span> <span class="kw">-t</span> nat <span class="kw">-A</span> PREROUTING \
+  <span class="kw">-p</span> tcp <span class="kw">--dport</span> <span class="num">8443</span> \
+  <span class="kw">-j</span> DNAT <span class="kw">--to-destination</span> <span class="num">192.168.1.10:443</span></code></pre>
+
+  <div class="tip">
+    <strong>This is exactly what <code>kubectl port-forward</code> does NOT use.</strong> Port-forward creates a userspace TCP proxy, not iptables DNAT. But Kubernetes <strong>Services</strong> (ClusterIP/NodePort) do use DNAT in the nat table's PREROUTING/OUTPUT chains. That's why <code>iptables -t nat -L</code> on a K8s node shows hundreds of DNAT rules — one per Service endpoint.
+  </div>
+
+  <!-- ===== CONNTRACK FOR NAT ===== -->
+  <h2>Conntrack Entries for NAT</h2>
+
+  <p>Every NAT translation creates a conntrack entry that stores the bidirectional mapping. This is how the kernel knows to reverse the translation for return traffic.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>conntrack -L -n<br>
+    <span class="output">tcp  6 117 ESTABLISHED src=192.168.1.10 dst=93.184.216.34 sport=44820 dport=443</span><br>
+    <span class="output">                       src=93.184.216.34 dst=203.0.113.5 sport=443 dport=61234 [ASSURED] mark=0</span><br><br>
+    <span class="prompt"># ↑ Two tuples per entry:</span><br>
+    <span class="prompt"># Tuple 1 (original): what the LAN host sent</span><br>
+    <span class="prompt"># Tuple 2 (reply):    what the reply should look like BEFORE un-NATing</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Reading Conntrack Entries</div>
+    <div class="mapping">
+      <div><strong>Original direction</strong><br><code>src=192.168.1.10 dst=93.184.216.34</code></div>
+      <div class="arr">↔</div>
+      <div><strong>Reply direction</strong><br><code>src=93.184.216.34 dst=203.0.113.5</code></div>
+    </div>
+    <p>Notice <code>dst</code> differs between tuples — that's the SNAT mapping. The kernel uses the reply tuple to match incoming packets and reverse the translation.</p>
+  </div>
+
+  <!-- ===== CGNAT ===== -->
+  <h2>CGNAT (Carrier-Grade NAT)</h2>
+
+  <p>CGNAT is NAT <em>applied by your ISP</em>, putting your entire home network behind yet another layer of NAT. Your home router does NAT (private → home public IP), then the ISP does NAT again (home public IP → shared ISP IP).</p>
+
+  <h3>Double NAT Topology</h3>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#128187;</div>
+      <div class="topo-label">Your Device</div>
+      <div class="topo-detail">192.168.1.10</div>
+    </div>
+    <div class="topo-link">NAT 1</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128232;</div>
+      <div class="topo-label">Home Router</div>
+      <div class="topo-detail">WAN: 100.64.1.17<br>(not a real public IP!)</div>
+    </div>
+    <div class="topo-link">NAT 2</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128232;</div>
+      <div class="topo-label">ISP CGNAT</div>
+      <div class="topo-detail">Public: 203.0.113.1<br>(shared by hundreds)</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">Internet</div>
+      <div class="topo-detail"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">CGNAT Details</div>
+    <ul>
+      <li><strong>RFC 6598 range:</strong> <code>100.64.0.0/10</code> — reserved for CGNAT (the "shared address space")</li>
+      <li>If your home router's WAN IP starts with <code>100.64.x.x</code> through <code>100.127.x.x</code>, you're behind CGNAT</li>
+      <li>Your ISP assigns you a <code>100.64.x.x</code> address, then NATs that to a shared public IP</li>
+      <li>Hundreds or thousands of customers share the same public IP</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>What CGNAT breaks:</strong>
+    <ul style="margin-top: 8px;">
+      <li><strong>Port forwarding</strong> — you can configure it on your router, but the ISP's NAT won't forward to you</li>
+      <li><strong>Self-hosting</strong> — no way to receive inbound connections without workarounds</li>
+      <li><strong>P2P protocols</strong> — BitTorrent, direct VoIP, game hosting all suffer</li>
+      <li><strong>IP-based rate limiting</strong> — thousands of users share one IP, so IP bans and rate limits are useless</li>
+      <li><strong>Geolocation</strong> — the shared IP may geolocate to the ISP's CGNAT node, not your location</li>
+    </ul>
+  </div>
+
+  <!-- ===== END-TO-END CONNECTIVITY ===== -->
+  <h2>NAT Breaks End-to-End Connectivity</h2>
+
+  <p>This is the fundamental architectural problem that NAT introduces, and understanding it is essential for grasping why VPNs, overlay networks, and NAT traversal techniques exist.</p>
+
+  <div class="panel">
+    <div class="panel-title">The End-to-End Principle (Pre-NAT Internet)</div>
+    <p>The original internet design: <strong>any host can send a packet directly to any other host</strong>. Every device has a globally unique IP. No translation needed. A web server can initiate a connection to your laptop just as easily as you can connect to it.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Without NAT (End-to-End)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Every device has a public IP</li>
+          <li>Any device can connect to any other</li>
+          <li>Inbound connections just work</li>
+          <li>No state to track, no translations</li>
+          <li>This is how IPv6 works</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">With NAT (Broken End-to-End)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Devices behind NAT have private IPs</li>
+          <li>Outbound works (NAT creates mapping)</li>
+          <li><strong>Inbound fails</strong> — no mapping exists yet</li>
+          <li>Must use port forwarding, STUN, relays</li>
+          <li>This is why Tailscale needs DERP relays</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>The Inbound Connection Problem</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Outbound: Works</div>
+      <div class="desc">192.168.1.10 → NAT → Internet<br>NAT creates conntrack entry<br>Return traffic follows the mapping</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step" style="background: #ef444415; border-color: #ef4444;">
+      <div class="label">Inbound: Blocked</div>
+      <div class="desc">Internet → NAT → ???<br>No conntrack entry exists<br>NAT doesn't know which device to forward to</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>This is THE key problem.</strong> Devices behind NAT can initiate connections outward, but cannot receive unsolicited inbound connections. This is why:
+    <ul style="margin-top: 8px;">
+      <li><strong>Tailscale/WireGuard</strong> need NAT traversal (UDP hole punching, STUN) or relay servers (DERP)</li>
+      <li><strong>WebRTC</strong> needs ICE/STUN/TURN for peer-to-peer browser connections</li>
+      <li><strong>SSH reverse tunnels</strong> exist — the device behind NAT connects out first, then the tunnel is used in reverse</li>
+      <li><strong>Kubernetes</strong> uses overlay networks partly to avoid NAT issues between pods on different nodes</li>
+    </ul>
+  </div>
+
+  <h3>NAT Traversal Techniques</h3>
+
+  <table>
+    <tr><th>Technique</th><th>How It Works</th><th>Reliability</th></tr>
+    <tr>
+      <td><strong>UDP Hole Punching</strong></td>
+      <td>Both peers send UDP to each other simultaneously; NAT creates bidirectional mapping</td>
+      <td>Works with most NATs, fails with symmetric NAT</td>
+    </tr>
+    <tr>
+      <td><strong>STUN</strong></td>
+      <td>Public server tells you your NAT's external IP:port mapping</td>
+      <td>Discovery only — doesn't help with symmetric NAT</td>
+    </tr>
+    <tr>
+      <td><strong>TURN / Relay</strong></td>
+      <td>All traffic goes through a relay server (both peers connect outbound to it)</td>
+      <td>Always works, but adds latency and relay cost</td>
+    </tr>
+    <tr>
+      <td><strong>Port Forwarding</strong></td>
+      <td>Manually configure NAT to forward a port to an internal host</td>
+      <td>Works only if you control the NAT device (impossible with CGNAT)</td>
+    </tr>
+    <tr>
+      <td><strong>UPnP / NAT-PMP</strong></td>
+      <td>Automatically request port forwarding from the NAT device</td>
+      <td>Often disabled for security; doesn't help with CGNAT</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Tailscale's approach:</strong> Try UDP hole punching first (via coordination server + STUN-like discovery). If that fails (e.g., both peers behind symmetric NAT or CGNAT), fall back to DERP relay servers. The DERP protocol is just encrypted WireGuard packets tunneled over HTTPS — which works through any NAT/firewall that allows outbound HTTPS.
+  </div>
+
+  <!-- ===== SUMMARY DIAGRAM ===== -->
+  <h2>NAT Operations Summary</h2>
+
+  <table>
+    <tr><th>Operation</th><th>What Changes</th><th>iptables Chain</th><th>iptables Target</th><th>Use Case</th></tr>
+    <tr>
+      <td><strong>SNAT</strong></td>
+      <td>Source IP</td>
+      <td><code>POSTROUTING</code></td>
+      <td><code>SNAT</code></td>
+      <td>Many-to-one outbound (static IP)</td>
+    </tr>
+    <tr>
+      <td><strong>MASQUERADE</strong></td>
+      <td>Source IP</td>
+      <td><code>POSTROUTING</code></td>
+      <td><code>MASQUERADE</code></td>
+      <td>Many-to-one outbound (dynamic IP)</td>
+    </tr>
+    <tr>
+      <td><strong>DNAT</strong></td>
+      <td>Destination IP/port</td>
+      <td><code>PREROUTING</code></td>
+      <td><code>DNAT</code></td>
+      <td>Port forwarding, K8s Services</td>
+    </tr>
+    <tr>
+      <td><strong>REDIRECT</strong></td>
+      <td>Destination to localhost</td>
+      <td><code>PREROUTING</code></td>
+      <td><code>REDIRECT</code></td>
+      <td>Transparent proxies, Istio sidecar</td>
+    </tr>
+  </table>
+
+</body>
+</html>

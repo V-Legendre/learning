@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 06 — HTTP</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 06 — HTTP</h1>
+  <p class="subtitle">The application protocol of the web — from 1.1 to 3</p>
+
+  <!-- ===== HTTP/1.1 ===== -->
+  <h2>HTTP/1.1 — The Foundation</h2>
+
+  <p>HTTP (Hypertext Transfer Protocol) is a <strong>request-response</strong> protocol operating at Layer 7. The client sends a request, the server returns a response. Every interaction on the web — loading a page, submitting a form, calling an API — is an HTTP exchange. HTTP/1.1 (RFC 2616, later refined in RFCs 7230-7235) has been the workhorse since 1997.</p>
+
+  <h3>Request Format</h3>
+
+  <p>An HTTP/1.1 request is a <strong>text-based</strong> message with a well-defined structure:</p>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="width:100%">
+      <span class="field-name">Request Line</span>
+      <span class="field-size">METHOD SP PATH SP HTTP/VERSION CRLF</span>
+    </div>
+    <div class="pkt-field src" style="width:100%">
+      <span class="field-name">Headers</span>
+      <span class="field-size">Key: Value CRLF (repeated)</span>
+    </div>
+    <div class="pkt-field flag" style="width:100%">
+      <span class="field-name">Blank Line</span>
+      <span class="field-size">CRLF (separates headers from body)</span>
+    </div>
+    <div class="pkt-field data" style="width:100%">
+      <span class="field-name">Body (optional)</span>
+      <span class="field-size">Payload — JSON, form data, binary, etc.</span>
+    </div>
+  </div>
+
+  <pre><code><span class="kw">GET</span> <span class="str">/api/v1/pods</span> <span class="type">HTTP/1.1</span>
+<span class="attr">Host</span>: <span class="val">kubernetes.default.svc</span>
+<span class="attr">Authorization</span>: <span class="val">Bearer eyJhbGciOi...</span>
+<span class="attr">Accept</span>: <span class="val">application/json</span>
+<span class="attr">Connection</span>: <span class="val">keep-alive</span></code></pre>
+
+  <h3>Response Format</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="width:100%">
+      <span class="field-name">Status Line</span>
+      <span class="field-size">HTTP/VERSION SP STATUS-CODE SP REASON CRLF</span>
+    </div>
+    <div class="pkt-field dst" style="width:100%">
+      <span class="field-name">Headers</span>
+      <span class="field-size">Key: Value CRLF (repeated)</span>
+    </div>
+    <div class="pkt-field flag" style="width:100%">
+      <span class="field-name">Blank Line</span>
+      <span class="field-size">CRLF</span>
+    </div>
+    <div class="pkt-field data" style="width:100%">
+      <span class="field-name">Body</span>
+      <span class="field-size">HTML, JSON, binary, etc.</span>
+    </div>
+  </div>
+
+  <pre><code><span class="type">HTTP/1.1</span> <span class="num">200</span> <span class="str">OK</span>
+<span class="attr">Content-Type</span>: <span class="val">application/json</span>
+<span class="attr">Content-Length</span>: <span class="val">1842</span>
+<span class="attr">Cache-Control</span>: <span class="val">no-cache</span>
+<span class="attr">ETag</span>: <span class="val">"a1b2c3d4"</span>
+
+<span class="cm">{"kind":"PodList","apiVersion":"v1","items":[...]}</span></code></pre>
+
+  <!-- ===== Request / Response Sequence ===== -->
+  <h3>Request / Response Flow</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /index.html HTTP/1.1</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">HTTP/1.1 200 OK + body</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /style.css HTTP/1.1</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">HTTP/1.1 200 OK + body</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Note:</strong> In HTTP/1.1 without pipelining, each request must wait for the previous response before being sent. This is inherently sequential on a single connection.
+  </div>
+
+  <!-- ===== HTTP Methods ===== -->
+  <h3>HTTP Methods</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>Semantics</th>
+        <th>Idempotent</th>
+        <th>Has Body</th>
+        <th>Typical Use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>GET</code></td>
+        <td>Retrieve resource</td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>Fetch data, load pages</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td>Create / submit</td>
+        <td>No</td>
+        <td>Yes</td>
+        <td>Create resource, form submit</td>
+      </tr>
+      <tr>
+        <td><code>PUT</code></td>
+        <td>Replace entire resource</td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>Full update (replace)</td>
+      </tr>
+      <tr>
+        <td><code>PATCH</code></td>
+        <td>Partial update</td>
+        <td>No*</td>
+        <td>Yes</td>
+        <td>Update specific fields</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td>Remove resource</td>
+        <td>Yes</td>
+        <td>Optional</td>
+        <td>Delete resource</td>
+      </tr>
+      <tr>
+        <td><code>HEAD</code></td>
+        <td>GET without body</td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>Check if resource exists, get headers</td>
+      </tr>
+      <tr>
+        <td><code>OPTIONS</code></td>
+        <td>Describe capabilities</td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>CORS preflight, API discovery</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>*PATCH idempotency:</strong> PATCH is not guaranteed idempotent because the operation depends on the patch format. A JSON Merge Patch (<code>{"name":"new"}</code>) is idempotent, but a JSON Patch (<code>[{"op":"add","path":"/tags/-","value":"x"}]</code>) that appends to an array is not.
+  </div>
+
+  <!-- ===== Key Headers ===== -->
+  <h3>Key Headers</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Content Negotiation & Identity</div>
+      <ul>
+        <li><code>Host</code> — <strong>Required</strong> in HTTP/1.1. Identifies the target virtual host. One IP can serve many domains (name-based vhosts in nginx/Apache, Ingress in K8s).</li>
+        <li><code>Content-Type</code> — MIME type of the body: <code>application/json</code>, <code>text/html</code>, <code>multipart/form-data</code></li>
+        <li><code>Accept</code> — What the client can handle: <code>application/json, text/html;q=0.9</code> (quality factor for preference)</li>
+        <li><code>Authorization</code> — Credentials: <code>Bearer &lt;token&gt;</code>, <code>Basic &lt;base64&gt;</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Caching</div>
+      <ul>
+        <li><code>Cache-Control</code> — Directives for caches:
+          <ul>
+            <li><code>max-age=3600</code> — fresh for 3600s</li>
+            <li><code>no-cache</code> — must revalidate before use (can still cache)</li>
+            <li><code>no-store</code> — do not cache at all</li>
+            <li><code>public</code> / <code>private</code> — CDN vs browser-only</li>
+          </ul>
+        </li>
+        <li><code>ETag</code> — Opaque identifier for a specific version of a resource (like a content hash)</li>
+        <li><code>If-None-Match</code> — Client sends previous ETag; server returns <code>304 Not Modified</code> if unchanged</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Connection Management</div>
+    <ul>
+      <li><code>Connection: keep-alive</code> — <strong>Default in HTTP/1.1</strong>. Reuse the TCP connection for multiple requests instead of opening a new one per request (which was the HTTP/1.0 default). Send <code>Connection: close</code> to indicate the connection will be closed after this response.</li>
+    </ul>
+  </div>
+
+  <h3>Conditional Request Flow (ETag)</h3>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /resource</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">200 OK + ETag: "abc123"</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /resource + If-None-Match: "abc123"</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">304 Not Modified (no body)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Ops insight:</strong> ETags save bandwidth and reduce origin load. In K8s, the API server uses resourceVersion as an ETag-like mechanism for watch and list operations — same principle.
+  </div>
+
+  <!-- ===== Status Codes ===== -->
+  <h3>Status Codes</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Range</th>
+        <th>Category</th>
+        <th>Key Codes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>1xx</code></td>
+        <td>Informational</td>
+        <td><code>100 Continue</code> — server ready for body; <code>101 Switching Protocols</code> — WebSocket upgrade</td>
+      </tr>
+      <tr>
+        <td><code>2xx</code></td>
+        <td>Success</td>
+        <td><code>200 OK</code>; <code>201 Created</code> (POST success); <code>204 No Content</code> (DELETE success, no body)</td>
+      </tr>
+      <tr>
+        <td><code>3xx</code></td>
+        <td>Redirection</td>
+        <td><code>301 Moved Permanently</code> (update bookmarks); <code>302 Found</code> (temporary redirect); <code>304 Not Modified</code> (cache hit); <code>307 Temporary Redirect</code> (preserve method); <code>308 Permanent Redirect</code> (preserve method)</td>
+      </tr>
+      <tr>
+        <td><code>4xx</code></td>
+        <td>Client Error</td>
+        <td><code>400 Bad Request</code>; <code>401 Unauthorized</code> (not authenticated); <code>403 Forbidden</code> (authenticated but not authorized); <code>404 Not Found</code>; <code>405 Method Not Allowed</code>; <code>409 Conflict</code>; <code>429 Too Many Requests</code> (rate limited)</td>
+      </tr>
+      <tr>
+        <td><code>5xx</code></td>
+        <td>Server Error</td>
+        <td><code>500 Internal Server Error</code>; <code>502 Bad Gateway</code> (upstream failed); <code>503 Service Unavailable</code> (overloaded/maintenance); <code>504 Gateway Timeout</code> (upstream timeout)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Ops war story:</strong> <code>502</code> vs <code>503</code> vs <code>504</code> — know the difference cold. <code>502</code> means your reverse proxy (nginx, envoy, ALB) got a bad response from upstream. <code>503</code> means the service itself is refusing connections. <code>504</code> means the upstream didn't respond in time. These point to very different root causes.
+  </div>
+
+  <!-- ===== Keep-Alive & Pipelining ===== -->
+  <h3>Keep-Alive (Persistent Connections)</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">HTTP/1.0 (No Keep-Alive)</div>
+      <div class="comp-body">
+        <ul>
+          <li>New TCP connection per request</li>
+          <li>3-way handshake overhead every time</li>
+          <li>TCP slow start penalty on every connection</li>
+          <li>Massive latency cost</li>
+        </ul>
+        <pre><code><span class="cm">Request 1: TCP open → GET → response → TCP close</span>
+<span class="cm">Request 2: TCP open → GET → response → TCP close</span>
+<span class="cm">Request 3: TCP open → GET → response → TCP close</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">HTTP/1.1 (Keep-Alive Default)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Reuse TCP connection for multiple requests</li>
+          <li>One handshake, many requests</li>
+          <li>TCP congestion window grows over time</li>
+          <li>Connection stays warm</li>
+        </ul>
+        <pre><code><span class="cm">TCP open → GET → response</span>
+<span class="cm">         → GET → response</span>
+<span class="cm">         → GET → response</span>
+<span class="cm">         → ... → TCP close</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Pipelining — A Good Idea That Failed</h3>
+
+  <p>HTTP/1.1 pipelining allows the client to send multiple requests on a single connection <strong>without waiting for each response</strong>. In theory, this eliminates the round-trip latency between sequential requests.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /a</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /b</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /c</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Response /a (slow...)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Response /b (blocked!)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">Response /c (blocked!)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Head-of-Line (HOL) Blocking:</strong> The server MUST respond in the order requests were received. If <code>/a</code> takes 5 seconds, <code>/b</code> and <code>/c</code> sit waiting even if they're ready — hence "head of line" blocking. Most browsers and proxies never enabled pipelining because of this, plus broken intermediaries (proxies that corrupted pipelined responses). The real-world workaround was opening 6-8 parallel TCP connections per domain.
+  </div>
+
+  <!-- ===== HTTP/2 ===== -->
+  <h2>HTTP/2 — Multiplexing Over a Single Connection</h2>
+
+  <p>HTTP/2 (RFC 7540, 2015) was designed specifically to solve HTTP/1.1's performance problems: HOL blocking, redundant headers, and the hack of opening multiple connections. It keeps HTTP semantics (methods, status codes, headers) identical but completely replaces the wire format.</p>
+
+  <h3>Binary Framing Layer</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">HTTP/1.1 — Text Protocol</div>
+      <div class="comp-body">
+        <pre><code><span class="str">GET /api/pods HTTP/1.1\r\n</span>
+<span class="str">Host: k8s.io\r\n</span>
+<span class="str">Accept: application/json\r\n</span>
+<span class="str">\r\n</span></code></pre>
+        <ul>
+          <li>Human-readable text</li>
+          <li>Parsed by scanning for delimiters (<code>\r\n</code>)</li>
+          <li>Headers are verbose, repeated every request</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">HTTP/2 — Binary Frames</div>
+      <div class="comp-body">
+        <div class="packet-diagram">
+          <div class="pkt-field proto" style="width:34%">
+            <span class="field-name">Length</span>
+            <span class="field-size">24 bits</span>
+          </div>
+          <div class="pkt-field flag" style="width:22%">
+            <span class="field-name">Type</span>
+            <span class="field-size">8 bits</span>
+          </div>
+          <div class="pkt-field check" style="width:22%">
+            <span class="field-name">Flags</span>
+            <span class="field-size">8 bits</span>
+          </div>
+          <div class="pkt-field src" style="width:22%">
+            <span class="field-name">Stream ID</span>
+            <span class="field-size">31 bits</span>
+          </div>
+          <div class="pkt-field data" style="width:100%">
+            <span class="field-name">Frame Payload</span>
+            <span class="field-size">Variable length</span>
+          </div>
+        </div>
+        <ul>
+          <li>Machine-optimized binary format</li>
+          <li>Fixed-length frame headers — fast parsing</li>
+          <li>Every frame tagged with a stream ID</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Multiplexed Streams</h3>
+
+  <p>The core innovation: multiple <strong>streams</strong> (logical request/response pairs) are interleaved on a <strong>single TCP connection</strong>. Each stream has a unique ID. Frames from different streams can be sent and received in any order.</p>
+
+  <div class="panel">
+    <div class="panel-title">HTTP/2 Multiplexing — Single TCP Connection</div>
+    <pre><code><span class="cm">  Time ──────────────────────────────────────────▶</span>
+
+  <span class="fn">Stream 1</span>  <span class="str">|HEADERS|</span><span class="val">|DATA|</span>          <span class="val">|DATA|</span><span class="str">|END|</span>
+  <span class="fn">Stream 3</span>          <span class="str">|HEADERS|</span><span class="val">|DATA|DATA|</span><span class="str">|END|</span>
+  <span class="fn">Stream 5</span>  <span class="str">|HEADERS|</span>                    <span class="val">|DATA|</span><span class="str">|END|</span>
+
+  <span class="cm">  All frames interleaved on ONE TCP connection.</span>
+  <span class="cm">  No HTTP-layer HOL blocking — stream 3 can finish</span>
+  <span class="cm">  before stream 1 without waiting.</span></code></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Ops insight:</strong> This is why HTTP/2 made domain sharding obsolete. With HTTP/1.1, sites served assets from multiple domains (cdn1.example.com, cdn2.example.com) to open more parallel connections. HTTP/2 multiplexing on a single connection outperforms that hack.
+  </div>
+
+  <h3>HPACK Header Compression</h3>
+
+  <p>HTTP/1.1 headers are sent as uncompressed text on every request. For a typical page with 80+ resources, the same headers (<code>User-Agent</code>, <code>Cookie</code>, <code>Accept</code>, etc.) are sent 80+ times — often >1 KB per request just in headers.</p>
+
+  <div class="panel">
+    <div class="panel-title">HPACK Compression Strategy</div>
+    <div class="grid-3">
+      <div class="panel">
+        <div class="panel-title">Static Table</div>
+        <p>61 pre-defined common header name-value pairs (e.g., <code>:method: GET</code> = index 2). Referenced by index instead of sending the full string.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Dynamic Table</div>
+        <p>Connection-specific table built during the session. Headers seen before are added and referenced by index on subsequent requests. FIFO eviction.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Huffman Encoding</div>
+        <p>Header values that can't be indexed are Huffman-coded — a static Huffman table optimized for HTTP header byte frequencies. ~30% size reduction.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Result:</strong> HPACK typically achieves 85-95% compression on repeated headers. The first request sends full headers; subsequent requests on the same connection send tiny index references.
+  </div>
+
+  <h3>Server Push</h3>
+
+  <p>The server can proactively send resources to the client before the client requests them. For example, when the client requests <code>index.html</code>, the server can push <code>style.css</code> and <code>app.js</code> it knows the client will need.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line">
+          <span class="seq-label">GET /index.html (Stream 1)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">PUSH_PROMISE /style.css (Stream 2)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">HEADERS + DATA /index.html (Stream 1)</span>
+        </div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line">
+          <span class="seq-label">HEADERS + DATA /style.css (Stream 2)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Server push is being deprecated.</strong> In practice, it's extremely hard to use correctly: you can push resources the client already has cached (wasting bandwidth), the cache interaction semantics are complex, and CDNs/proxies often break it. Chrome removed support in 2022. The replacement pattern is <code>103 Early Hints</code> — the server sends a <code>103</code> informational response with <code>Link</code> headers so the browser can start fetching resources early, but the client controls the actual requests.
+  </div>
+
+  <h3>Stream Priorities</h3>
+
+  <p>HTTP/2 allows clients to assign priorities to streams using a dependency tree and weight values (1-256). This lets the browser signal that CSS should load before images, for example. In practice, implementations varied widely — both browsers and servers often handled priorities poorly, leading to the RFC 9218 (Extensible Priorities) overhaul.</p>
+
+  <!-- ===== HTTP/3 ===== -->
+  <h2>HTTP/3 — QUIC and the End of TCP for HTTP</h2>
+
+  <p>HTTP/2 solved HTTP-layer HOL blocking, but one problem remained: <strong>TCP-layer HOL blocking</strong>. Because HTTP/2 multiplexes all streams over a single TCP connection, a single lost TCP packet blocks ALL streams until retransmission completes — the TCP layer doesn't know about HTTP streams. HTTP/3 (RFC 9114, 2022) replaces TCP with <strong>QUIC</strong> (RFC 9000), a UDP-based transport that solves this fundamentally.</p>
+
+  <h3>The TCP HOL Blocking Problem</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">HTTP/2 over TCP</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">Stream 1: |HEADER|DATA|</span>
+<span class="cm">Stream 3: |HEADER|DATA|DATA|</span>
+<span class="cm">Stream 5: |HEADER|DATA|</span>
+<span class="cm">           ↑</span>
+<span class="cm">  TCP packet lost here</span>
+<span class="cm">  ALL streams blocked until</span>
+<span class="cm">  retransmission arrives</span></code></pre>
+        <p>TCP is a single ordered byte stream. It doesn't understand multiplexed streams. Lost segment = everything waits.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">HTTP/3 over QUIC</div>
+      <div class="comp-body">
+        <pre><code><span class="cm">Stream 1: |HEADER|DATA|</span>
+<span class="cm">Stream 3: |HEADER| ✗ |DATA|</span>
+<span class="cm">Stream 5: |HEADER|DATA| ✓</span>
+<span class="cm">              ↑</span>
+<span class="cm">  QUIC packet lost on stream 3</span>
+<span class="cm">  Only stream 3 is blocked</span>
+<span class="cm">  Streams 1 & 5 continue</span></code></pre>
+        <p>QUIC has native stream awareness. Loss on one stream only blocks that stream. Others proceed independently.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>QUIC Key Features</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">0-RTT Connection Establishment</div>
+      <p>TCP + TLS 1.3 requires 2-3 round trips before data can flow (1 RTT TCP handshake + 1 RTT TLS handshake). QUIC integrates transport and TLS into a <strong>single handshake</strong>:</p>
+      <ul>
+        <li><strong>First connection:</strong> 1-RTT (transport + crypto combined)</li>
+        <li><strong>Resumed connection:</strong> 0-RTT — client sends data immediately using a PSK from a previous session</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Connection Migration</div>
+      <p>TCP connections are identified by the 4-tuple: (src IP, src port, dst IP, dst port). If your IP changes (e.g., switching from WiFi to cellular), the TCP connection breaks and must be re-established.</p>
+      <p>QUIC connections are identified by a <strong>Connection ID</strong> — an opaque token independent of the IP/port. When the network changes, the connection survives.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Built-in TLS 1.3</div>
+    <p>QUIC does not run over a separate TLS layer — TLS 1.3 is <strong>embedded into the protocol</strong>. All QUIC payloads (including most header fields) are encrypted. There is no unencrypted QUIC — unlike TCP where encryption is optional. This means middleboxes (firewalls, NATs, DPI devices) cannot inspect or modify QUIC headers, which has both security benefits and operational challenges.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Ops note:</strong> Because QUIC runs over UDP, some corporate firewalls and network middleboxes block or rate-limit UDP/443. Browsers implement QUIC with a fallback: try QUIC first, fall back to HTTP/2 over TCP if it fails. You'll see the <code>Alt-Svc</code> header in HTTP/2 responses advertising QUIC support: <code>Alt-Svc: h3=":443"; ma=86400</code>.
+  </div>
+
+  <!-- ===== Comparison ===== -->
+  <h2>HTTP/1.1 vs HTTP/2 vs HTTP/3 — Side by Side</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>HTTP/1.1</th>
+        <th>HTTP/2</th>
+        <th>HTTP/3</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Transport</td>
+        <td>TCP</td>
+        <td>TCP</td>
+        <td>QUIC (UDP)</td>
+      </tr>
+      <tr>
+        <td>Wire format</td>
+        <td>Text</td>
+        <td>Binary frames</td>
+        <td>Binary frames</td>
+      </tr>
+      <tr>
+        <td>Multiplexing</td>
+        <td>No (1 req at a time per conn)</td>
+        <td>Yes (many streams, 1 conn)</td>
+        <td>Yes (many streams, 1 conn)</td>
+      </tr>
+      <tr>
+        <td>HOL blocking</td>
+        <td>HTTP + TCP layer</td>
+        <td>TCP layer only</td>
+        <td>None</td>
+      </tr>
+      <tr>
+        <td>Header compression</td>
+        <td>None</td>
+        <td>HPACK</td>
+        <td>QPACK</td>
+      </tr>
+      <tr>
+        <td>Server push</td>
+        <td>No</td>
+        <td>Yes (deprecated)</td>
+        <td>Yes (rarely used)</td>
+      </tr>
+      <tr>
+        <td>Connection setup</td>
+        <td>1-RTT TCP + 1-RTT TLS</td>
+        <td>1-RTT TCP + 1-RTT TLS</td>
+        <td>1-RTT (0-RTT on resume)</td>
+      </tr>
+      <tr>
+        <td>Connection migration</td>
+        <td>No</td>
+        <td>No</td>
+        <td>Yes (Connection ID)</td>
+      </tr>
+      <tr>
+        <td>Encryption</td>
+        <td>Optional (HTTPS)</td>
+        <td>Effectively required</td>
+        <td>Mandatory (built-in TLS 1.3)</td>
+      </tr>
+      <tr>
+        <td>RFC</td>
+        <td>7230-7235</td>
+        <td>7540, 9113</td>
+        <td>9114 (QUIC: 9000)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Connection Setup Comparison</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">HTTP/1.1 + TLS 1.2 (3 RTTs)</div>
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><div>TCP SYN</div></div>
+        <div class="step"><div class="step-num">2</div><div>TCP SYN-ACK</div></div>
+        <div class="step"><div class="step-num">3</div><div>TCP ACK + TLS ClientHello</div></div>
+        <div class="step"><div class="step-num">4</div><div>TLS ServerHello + Cert</div></div>
+        <div class="step"><div class="step-num">5</div><div>TLS Key Exchange + Finished</div></div>
+        <div class="step"><div class="step-num">6</div><div>HTTP Request</div></div>
+      </div>
+      <p style="color:#f87171; font-weight:bold; margin-top:8px;">3 RTTs before first byte of data</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">HTTP/2 + TLS 1.3 (2 RTTs)</div>
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><div>TCP SYN</div></div>
+        <div class="step"><div class="step-num">2</div><div>TCP SYN-ACK</div></div>
+        <div class="step"><div class="step-num">3</div><div>TCP ACK + TLS ClientHello</div></div>
+        <div class="step"><div class="step-num">4</div><div>TLS ServerHello + Finished</div></div>
+        <div class="step"><div class="step-num">5</div><div>HTTP Request</div></div>
+      </div>
+      <p style="color:#fbbf24; font-weight:bold; margin-top:8px;">2 RTTs before first byte of data</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">HTTP/3 + QUIC (1 RTT / 0 RTT)</div>
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><div>QUIC Initial (ClientHello + transport params)</div></div>
+        <div class="step"><div class="step-num">2</div><div>QUIC Handshake (ServerHello + Finished)</div></div>
+        <div class="step"><div class="step-num">3</div><div>HTTP Request</div></div>
+      </div>
+      <p style="color:#34d399; font-weight:bold; margin-top:8px;">1 RTT (0 RTT on resumption!)</p>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Real-world impact:</strong> On a 100ms RTT connection (common for cross-region traffic), the difference between 3 RTTs (300ms) and 1 RTT (100ms) is huge — especially for mobile users on high-latency cellular networks. 0-RTT on resume means returning users get data flowing with their first packet.
+  </div>
+
+  <div class="note">
+    <strong>Checking protocol in production:</strong> Use <code>curl -I --http2 https://example.com</code> to check HTTP/2 support. For HTTP/3: <code>curl --http3 https://example.com</code> (requires curl built with HTTP/3 support). In Chrome DevTools, the Network tab's "Protocol" column shows <code>h2</code> or <code>h3</code>.
+  </div>
+
+</body>
+</html>

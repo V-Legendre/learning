@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 13 — Network Policies</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 13 — Network Policies</h1>
+  <p class="subtitle">Pod-level firewall rules and service mesh basics</p>
+
+  <!-- ===== NETWORK POLICY BASICS ===== -->
+  <h2>NetworkPolicy: Kubernetes-Native Firewalling</h2>
+
+  <p>By default, Kubernetes has a <strong>flat, open network</strong> — every Pod can talk to every other Pod, across all namespaces. There are no firewall rules. NetworkPolicy is the mechanism to restrict this.</p>
+
+  <div class="panel">
+    <div class="panel-title">How NetworkPolicy Works</div>
+    <ul>
+      <li>A NetworkPolicy <strong>selects Pods</strong> using label selectors (the <code>podSelector</code> field)</li>
+      <li>It defines allowed <strong>ingress</strong> (incoming) and/or <strong>egress</strong> (outgoing) traffic</li>
+      <li>Once <em>any</em> NetworkPolicy selects a Pod, that Pod switches from <strong>default-allow</strong> to <strong>default-deny</strong> for the specified policyTypes</li>
+      <li>Traffic not explicitly allowed by any policy is <strong>dropped</strong></li>
+      <li>Policies are <strong>additive</strong> — if multiple policies select a Pod, the union of all allowed traffic applies (you cannot deny what another policy allows)</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Common misconception:</strong> NetworkPolicy does not have "deny" rules. You cannot write "deny traffic from namespace X." You can only write "allow traffic from Y" — everything else is implicitly denied once a policy selects the Pod. This is a whitelist-only model.
+  </div>
+
+  <!-- ===== DEFAULT DENY ===== -->
+  <h2>Default Deny Patterns</h2>
+
+  <p>The first step in any network security posture: apply default deny to a namespace, then explicitly allow required traffic.</p>
+
+  <h3>Deny All Ingress to a Namespace</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: NetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">default-deny-ingress</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">podSelector</span>: {}           <span class="cm"># Empty = selects ALL pods in namespace</span>
+  <span class="attr">policyTypes</span>:
+    - <span class="str">Ingress</span>                <span class="cm"># Only affects ingress; egress remains open</span>
+  <span class="cm"># No 'ingress' field = no traffic allowed in</span></code></pre>
+
+  <h3>Deny All Egress from a Namespace</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: NetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">default-deny-egress</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">podSelector</span>: {}
+  <span class="attr">policyTypes</span>:
+    - <span class="str">Egress</span>
+  <span class="cm"># No 'egress' field = no traffic allowed out</span></code></pre>
+
+  <div class="warn">
+    <strong>DNS will break!</strong> Denying all egress blocks DNS resolution (UDP/TCP port 53). You almost always need a companion policy that allows egress to kube-dns:
+  </div>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: NetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">allow-dns-egress</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">podSelector</span>: {}
+  <span class="attr">policyTypes</span>:
+    - <span class="str">Egress</span>
+  <span class="attr">egress</span>:
+    - <span class="attr">to</span>:
+        - <span class="attr">namespaceSelector</span>:
+            <span class="attr">matchLabels</span>:
+              <span class="attr">kubernetes.io/metadata.name</span>: <span class="str">kube-system</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">UDP</span>
+          <span class="attr">port</span>: <span class="num">53</span>
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">53</span></code></pre>
+
+  <h3>Deny All Ingress + Egress (Full Lockdown)</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: NetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">default-deny-all</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="attr">podSelector</span>: {}
+  <span class="attr">policyTypes</span>:
+    - <span class="str">Ingress</span>
+    - <span class="str">Egress</span></code></pre>
+
+  <!-- ===== POLICY STRUCTURE ===== -->
+  <h2>Policy Structure in Detail</h2>
+
+  <p>A complete NetworkPolicy allowing specific ingress and egress:</p>
+
+  <pre><code><span class="kw">apiVersion</span>: networking.k8s.io/v1
+<span class="kw">kind</span>: NetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">api-server-policy</span>
+  <span class="attr">namespace</span>: <span class="str">production</span>
+<span class="kw">spec</span>:
+  <span class="cm"># Which pods this policy applies to</span>
+  <span class="attr">podSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">api-server</span>
+
+  <span class="attr">policyTypes</span>:
+    - <span class="str">Ingress</span>
+    - <span class="str">Egress</span>
+
+  <span class="cm"># INGRESS: who can talk TO these pods</span>
+  <span class="attr">ingress</span>:
+    <span class="cm"># Rule 1: Allow from frontend pods in same namespace</span>
+    - <span class="attr">from</span>:
+        - <span class="attr">podSelector</span>:
+            <span class="attr">matchLabels</span>:
+              <span class="attr">app</span>: <span class="str">frontend</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">8080</span>
+
+    <span class="cm"># Rule 2: Allow from monitoring namespace</span>
+    - <span class="attr">from</span>:
+        - <span class="attr">namespaceSelector</span>:
+            <span class="attr">matchLabels</span>:
+              <span class="attr">purpose</span>: <span class="str">monitoring</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">9090</span>
+
+    <span class="cm"># Rule 3: Allow from specific CIDR (e.g., corporate VPN)</span>
+    - <span class="attr">from</span>:
+        - <span class="attr">ipBlock</span>:
+            <span class="attr">cidr</span>: <span class="str">10.0.0.0/8</span>
+            <span class="attr">except</span>:
+              - <span class="str">10.0.1.0/24</span>     <span class="cm"># except this subnet</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">8080</span>
+
+  <span class="cm"># EGRESS: where these pods can talk TO</span>
+  <span class="attr">egress</span>:
+    <span class="cm"># Allow to database pods</span>
+    - <span class="attr">to</span>:
+        - <span class="attr">podSelector</span>:
+            <span class="attr">matchLabels</span>:
+              <span class="attr">app</span>: <span class="str">postgres</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">5432</span>
+
+    <span class="cm"># Allow DNS</span>
+    - <span class="attr">to</span>:
+        - <span class="attr">namespaceSelector</span>:
+            <span class="attr">matchLabels</span>:
+              <span class="attr">kubernetes.io/metadata.name</span>: <span class="str">kube-system</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">UDP</span>
+          <span class="attr">port</span>: <span class="num">53</span>
+
+    <span class="cm"># Allow HTTPS to external APIs</span>
+    - <span class="attr">to</span>:
+        - <span class="attr">ipBlock</span>:
+            <span class="attr">cidr</span>: <span class="str">0.0.0.0/0</span>
+      <span class="attr">ports</span>:
+        - <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">port</span>: <span class="num">443</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Selector Types in from/to</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Selector</th>
+          <th>Matches</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>podSelector</code></td>
+          <td>Pods by label (same namespace only)</td>
+          <td><code>app: frontend</code></td>
+        </tr>
+        <tr>
+          <td><code>namespaceSelector</code></td>
+          <td>All pods in namespaces matching labels</td>
+          <td><code>purpose: monitoring</code></td>
+        </tr>
+        <tr>
+          <td><code>podSelector</code> + <code>namespaceSelector</code></td>
+          <td>Specific pods in specific namespaces</td>
+          <td>Pods labeled <code>role: scraper</code> in ns labeled <code>purpose: monitoring</code></td>
+        </tr>
+        <tr>
+          <td><code>ipBlock</code></td>
+          <td>IP CIDR ranges (with optional except)</td>
+          <td><code>10.0.0.0/8</code> except <code>10.0.1.0/24</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>AND vs OR gotcha:</strong> Multiple items in a single <code>from</code> entry are <strong>AND</strong>'d. Multiple <code>from</code> entries in the <code>ingress</code> array are <strong>OR</strong>'d. This is a common source of bugs:
+  </div>
+
+  <pre><code><span class="cm"># OR: allow from frontend pods OR from monitoring namespace</span>
+<span class="attr">ingress</span>:
+  - <span class="attr">from</span>:
+      - <span class="attr">podSelector</span>:
+          <span class="attr">matchLabels</span>: { <span class="attr">app</span>: <span class="str">frontend</span> }
+  - <span class="attr">from</span>:
+      - <span class="attr">namespaceSelector</span>:
+          <span class="attr">matchLabels</span>: { <span class="attr">purpose</span>: <span class="str">monitoring</span> }
+
+<span class="cm"># AND: allow from pods labeled frontend IN namespaces labeled monitoring</span>
+<span class="attr">ingress</span>:
+  - <span class="attr">from</span>:
+      - <span class="attr">podSelector</span>:
+          <span class="attr">matchLabels</span>: { <span class="attr">app</span>: <span class="str">frontend</span> }
+        <span class="attr">namespaceSelector</span>:
+          <span class="attr">matchLabels</span>: { <span class="attr">purpose</span>: <span class="str">monitoring</span> }</code></pre>
+
+  <!-- ===== CNI REQUIREMENT ===== -->
+  <h2>CNI Enforcement Requirement</h2>
+
+  <p>NetworkPolicy is a <strong>spec</strong>, not an implementation. The CNI plugin must actually enforce the rules. If your CNI doesn't support NetworkPolicy, the resources are silently accepted by the API server but have <strong>zero effect</strong>.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>CNI Plugin</th>
+        <th>NetworkPolicy Support</th>
+        <th>Enforcement Mechanism</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Calico</strong></td>
+        <td style="color: #34d399;">Full support</td>
+        <td>iptables or eBPF</td>
+        <td>Also supports Calico-specific policies (GlobalNetworkPolicy)</td>
+      </tr>
+      <tr>
+        <td><strong>Cilium</strong></td>
+        <td style="color: #34d399;">Full support + L7</td>
+        <td>eBPF</td>
+        <td>CiliumNetworkPolicy CRD for L7 + FQDN policies</td>
+      </tr>
+      <tr>
+        <td><strong>Weave Net</strong></td>
+        <td style="color: #34d399;">Full support</td>
+        <td>iptables</td>
+        <td>Built-in enforcement</td>
+      </tr>
+      <tr>
+        <td><strong>Antrea</strong></td>
+        <td style="color: #34d399;">Full support</td>
+        <td>OVS (Open vSwitch)</td>
+        <td>Also supports tier-based policies (Antrea CRDs)</td>
+      </tr>
+      <tr>
+        <td><strong>Flannel</strong></td>
+        <td style="color: #f87171;">NO support</td>
+        <td>None</td>
+        <td>Common gotcha! Policies accepted but never enforced</td>
+      </tr>
+      <tr>
+        <td><strong>AWS VPC CNI</strong></td>
+        <td style="color: #fbbf24;">Partial (with add-on)</td>
+        <td>eBPF (with Calico or Network Policy Controller)</td>
+        <td>Requires installing an additional network policy agent</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Flannel trap:</strong> Flannel is one of the most commonly deployed CNIs (it's the default in many k3s/RKE setups). It does <strong>not</strong> enforce NetworkPolicy. If you apply a default-deny policy with Flannel, nothing changes — all traffic still flows. This is a silent security gap. If you need NetworkPolicy, use Calico or Cilium.
+  </div>
+
+  <!-- ===== CILIUM L7 POLICIES ===== -->
+  <h2>Cilium: L7-Aware Network Policies</h2>
+
+  <p>Standard Kubernetes NetworkPolicy operates at L3/L4 (IPs and ports). Cilium extends this to L7 using its CiliumNetworkPolicy CRD, enabling protocol-aware filtering.</p>
+
+  <h3>HTTP-Level Filtering</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: cilium.io/v2
+<span class="kw">kind</span>: CiliumNetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">api-http-policy</span>
+<span class="kw">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">api-server</span>
+  <span class="attr">ingress</span>:
+    - <span class="attr">fromEndpoints</span>:
+        - <span class="attr">matchLabels</span>:
+            <span class="attr">app</span>: <span class="str">frontend</span>
+      <span class="attr">toPorts</span>:
+        - <span class="attr">ports</span>:
+            - <span class="attr">port</span>: <span class="str">"8080"</span>
+              <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">rules</span>:
+            <span class="attr">http</span>:
+              <span class="cm"># Allow GET on public endpoints</span>
+              - <span class="attr">method</span>: <span class="str">GET</span>
+                <span class="attr">path</span>: <span class="str">/api/v1/public.*</span>
+              <span class="cm"># Allow POST on specific endpoint</span>
+              - <span class="attr">method</span>: <span class="str">POST</span>
+                <span class="attr">path</span>: <span class="str">/api/v1/orders</span>
+              <span class="cm"># Everything else on :8080 is DENIED</span>
+              <span class="cm"># (e.g., DELETE /api/v1/admin is blocked)</span></code></pre>
+
+  <h3>Kafka-Level Filtering</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: cilium.io/v2
+<span class="kw">kind</span>: CiliumNetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">kafka-producer-policy</span>
+<span class="kw">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">kafka-broker</span>
+  <span class="attr">ingress</span>:
+    - <span class="attr">fromEndpoints</span>:
+        - <span class="attr">matchLabels</span>:
+            <span class="attr">app</span>: <span class="str">order-service</span>
+      <span class="attr">toPorts</span>:
+        - <span class="attr">ports</span>:
+            - <span class="attr">port</span>: <span class="str">"9092"</span>
+              <span class="attr">protocol</span>: <span class="str">TCP</span>
+          <span class="attr">rules</span>:
+            <span class="attr">kafka</span>:
+              - <span class="attr">apiKey</span>: <span class="str">produce</span>
+                <span class="attr">topic</span>: <span class="str">orders</span>
+              <span class="cm"># order-service can produce to "orders" topic only</span>
+              <span class="cm"># Cannot consume, cannot access other topics</span></code></pre>
+
+  <h3>FQDN-Based Egress</h3>
+
+  <pre><code><span class="kw">apiVersion</span>: cilium.io/v2
+<span class="kw">kind</span>: CiliumNetworkPolicy
+<span class="kw">metadata</span>:
+  <span class="attr">name</span>: <span class="str">allow-external-apis</span>
+<span class="kw">spec</span>:
+  <span class="attr">endpointSelector</span>:
+    <span class="attr">matchLabels</span>:
+      <span class="attr">app</span>: <span class="str">payment-service</span>
+  <span class="attr">egress</span>:
+    - <span class="attr">toFQDNs</span>:
+        - <span class="attr">matchName</span>: <span class="str">api.stripe.com</span>
+        - <span class="attr">matchPattern</span>: <span class="str">*.amazonaws.com</span>
+      <span class="attr">toPorts</span>:
+        - <span class="attr">ports</span>:
+            - <span class="attr">port</span>: <span class="str">"443"</span>
+              <span class="attr">protocol</span>: <span class="str">TCP</span>
+    <span class="cm"># DNS egress required for FQDN resolution</span>
+    - <span class="attr">toEndpoints</span>:
+        - <span class="attr">matchLabels</span>:
+            <span class="attr">k8s:io.kubernetes.pod.namespace</span>: <span class="str">kube-system</span>
+            <span class="attr">k8s-app</span>: <span class="str">kube-dns</span>
+      <span class="attr">toPorts</span>:
+        - <span class="attr">ports</span>:
+            - <span class="attr">port</span>: <span class="str">"53"</span>
+              <span class="attr">protocol</span>: <span class="str">ANY</span>
+          <span class="attr">rules</span>:
+            <span class="attr">dns</span>:
+              - <span class="attr">matchName</span>: <span class="str">api.stripe.com</span>
+              - <span class="attr">matchPattern</span>: <span class="str">*.amazonaws.com</span></code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Cilium L7 Capabilities Summary</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Protocol</th>
+          <th>What You Can Filter</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>HTTP</strong></td>
+          <td>Method, path, headers</td>
+          <td>Allow <code>GET /api/public</code> but deny <code>DELETE /api/admin</code></td>
+        </tr>
+        <tr>
+          <td><strong>gRPC</strong></td>
+          <td>Service name, method</td>
+          <td>Allow <code>UserService/GetUser</code> but deny <code>AdminService/*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Kafka</strong></td>
+          <td>API key (produce/consume), topic</td>
+          <td>Allow produce to <code>orders</code> but deny consume from <code>payments</code></td>
+        </tr>
+        <tr>
+          <td><strong>DNS</strong></td>
+          <td>Domain name, pattern</td>
+          <td>Allow resolution of <code>*.example.com</code> only</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== SERVICE MESH ===== -->
+  <h2>Service Mesh: Brief Introduction</h2>
+
+  <p>A service mesh injects a <strong>sidecar proxy</strong> (typically Envoy) into every Pod. All traffic flows through the proxy, giving you mTLS, traffic management, and observability without changing application code.</p>
+
+  <h3>Architecture</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Pod A</div>
+      <div class="desc">App container</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Envoy Sidecar</div>
+      <div class="desc">Pod A's proxy</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="label">mTLS Encrypted</div>
+      <div class="desc">Mutual TLS on the wire</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Envoy Sidecar</div>
+      <div class="desc">Pod B's proxy</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Pod B</div>
+      <div class="desc">App container</div>
+    </div>
+  </div>
+
+  <h3>Istio vs Linkerd</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l7">ISTIO</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Proxy:</strong> Envoy (full-featured, heavy)</li>
+          <li><strong>mTLS:</strong> Yes, auto-injected</li>
+          <li><strong>Traffic management:</strong> Full — canary, retries, timeouts, circuit breaking, fault injection, mirroring</li>
+          <li><strong>Observability:</strong> Distributed tracing, metrics, service graph (Kiali)</li>
+          <li><strong>Complexity:</strong> High — large control plane, steep learning curve</li>
+          <li><strong>Resources:</strong> ~100-200MB memory per sidecar</li>
+          <li><strong>Policy:</strong> AuthorizationPolicy CRD for L7 access control</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l3">LINKERD</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Proxy:</strong> linkerd2-proxy (Rust, ultra-lightweight)</li>
+          <li><strong>mTLS:</strong> Yes, auto-injected</li>
+          <li><strong>Traffic management:</strong> Basic — retries, timeouts, traffic splits</li>
+          <li><strong>Observability:</strong> Golden metrics (latency, throughput, success rate), service graph</li>
+          <li><strong>Complexity:</strong> Low — simple to install, minimal config</li>
+          <li><strong>Resources:</strong> ~20-30MB memory per sidecar</li>
+          <li><strong>Policy:</strong> Server + ServerAuthorization CRDs</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>What Service Meshes Add</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">mTLS (Mutual TLS)</div>
+      <ul>
+        <li>Automatic certificate provisioning and rotation</li>
+        <li>All service-to-service traffic encrypted</li>
+        <li>Both sides verified (mutual authentication)</li>
+        <li>No application code changes needed</li>
+        <li>Identity-based access control (SPIFFE IDs)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Traffic Management</div>
+      <ul>
+        <li><strong>Canary:</strong> Route 5% of traffic to v2</li>
+        <li><strong>Retries:</strong> Automatic retry on 503, with backoff</li>
+        <li><strong>Timeouts:</strong> Per-route timeout enforcement</li>
+        <li><strong>Circuit breaking:</strong> Stop sending to failing backends</li>
+        <li><strong>Fault injection:</strong> Inject delays/errors for chaos testing</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Observability</div>
+      <ul>
+        <li><strong>Request metrics:</strong> Latency (p50/p99), RPS, error rate</li>
+        <li><strong>Distributed tracing:</strong> Trace requests across services</li>
+        <li><strong>Service graph:</strong> Visual map of service dependencies</li>
+        <li>All without instrumenting application code</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Cilium: Sidecar-Free Approach</div>
+      <ul>
+        <li>Uses <strong>eBPF</strong> in the kernel instead of sidecar proxies</li>
+        <li>Lower latency (no userspace proxy hop)</li>
+        <li>Lower resource overhead (no sidecar per pod)</li>
+        <li>mTLS via WireGuard or IPsec at the node level</li>
+        <li>L7 visibility via eBPF-based protocol parsing</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>When to Adopt a Service Mesh</h3>
+
+  <div class="panel">
+    <div class="panel-title">Decision Framework</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong style="color: #34d399;">Start with NetworkPolicy + Cilium.</strong> This covers 80% of use cases: L3/L4 firewalling, L7 policy, FQDN egress, basic observability. No sidecar overhead.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong style="color: #fbbf24;">Add a mesh when you actually need it.</strong> Signals: 20+ services, regulatory mTLS requirement, complex traffic management (canary/circuit breaking), need for distributed tracing.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong style="color: #f87171;">Do NOT start with a mesh.</strong> The operational overhead is significant: sidecar injection, certificate management, debugging proxy-layer issues, resource overhead. Premature service mesh adoption is a common anti-pattern.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Practical progression:</strong> NetworkPolicy (K8s native) -> CiliumNetworkPolicy (L7 + FQDN) -> Cilium with mTLS (WireGuard) -> Full service mesh (only if justified). Each step adds complexity; only move forward when the previous layer is insufficient.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Key Takeaways</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">NetworkPolicy</div>
+      <ul>
+        <li>Default: all pods can talk to all pods</li>
+        <li>Whitelist-only model (no deny rules)</li>
+        <li>Always start with default-deny, then allow</li>
+        <li>CNI must support enforcement (Flannel does NOT)</li>
+        <li>AND vs OR semantics in selectors are a common trap</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Beyond L3/L4</div>
+      <ul>
+        <li>Cilium: L7 policies (HTTP, gRPC, Kafka, DNS)</li>
+        <li>FQDN-based egress control</li>
+        <li>Service mesh: mTLS, traffic management, observability</li>
+        <li>Istio (full-featured) vs Linkerd (lightweight)</li>
+        <li>Don't adopt a mesh prematurely — start with NetworkPolicy</li>
+      </ul>
+    </div>
+  </div>
+
+</body>
+</html>

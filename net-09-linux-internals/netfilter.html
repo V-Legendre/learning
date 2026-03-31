@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 09 — Netfilter Internals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 09 — Netfilter Internals</h1>
+  <p class="subtitle">The kernel framework behind iptables, conntrack, and NAT</p>
+
+  <!-- ===== NETFILTER HOOKS ===== -->
+  <h2>Netfilter Hooks: The 5 Hook Points</h2>
+
+  <p>Netfilter is a <strong>kernel framework</strong> that provides hook points in the network stack where kernel modules can register callback functions. Every packet traversing the Linux network stack passes through a defined sequence of these hooks. iptables, nftables, conntrack, and NAT are all <em>clients</em> of netfilter.</p>
+
+  <h3>The 5 Netfilter Hooks</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Hook</th>
+        <th>Constant</th>
+        <th>When It Fires</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>PREROUTING</strong></td>
+        <td><code>NF_IP_PRE_ROUTING</code></td>
+        <td>Packet just arrived on an interface, <em>before</em> the routing decision</td>
+      </tr>
+      <tr>
+        <td><strong>INPUT</strong></td>
+        <td><code>NF_IP_LOCAL_IN</code></td>
+        <td>Packet is destined for <em>this host</em> (after routing decided it's local)</td>
+      </tr>
+      <tr>
+        <td><strong>FORWARD</strong></td>
+        <td><code>NF_IP_FORWARD</code></td>
+        <td>Packet is being <em>routed through</em> this host to another destination</td>
+      </tr>
+      <tr>
+        <td><strong>OUTPUT</strong></td>
+        <td><code>NF_IP_LOCAL_OUT</code></td>
+        <td>Packet was <em>generated locally</em> by a process on this host</td>
+      </tr>
+      <tr>
+        <td><strong>POSTROUTING</strong></td>
+        <td><code>NF_IP_POST_ROUTING</code></td>
+        <td>Packet is about to <em>leave</em> the host (after routing, before NIC)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Packet Flow Through Netfilter Hooks</h3>
+
+  <div class="panel">
+    <div class="panel-title">Incoming packet destined for this host</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">NIC receives</div>
+        <div class="desc">frame arrives</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #e94560;">
+        <div class="label">PREROUTING</div>
+        <div class="desc">DNAT, conntrack</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Routing Decision</div>
+        <div class="desc">local or forward?</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #34d399;">
+        <div class="label">INPUT</div>
+        <div class="desc">filter, accept/drop</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Local Process</div>
+        <div class="desc">application</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Packet being forwarded (routed through this host)</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">NIC receives</div>
+        <div class="desc">frame arrives</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #e94560;">
+        <div class="label">PREROUTING</div>
+        <div class="desc">DNAT, conntrack</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Routing Decision</div>
+        <div class="desc">not local &rarr; forward</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #fbbf24;">
+        <div class="label">FORWARD</div>
+        <div class="desc">filter, accept/drop</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #a78bfa;">
+        <div class="label">POSTROUTING</div>
+        <div class="desc">SNAT, MASQUERADE</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">NIC sends</div>
+        <div class="desc">out the wire</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Locally generated outbound packet</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Local Process</div>
+        <div class="desc">application</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #60a5fa;">
+        <div class="label">OUTPUT</div>
+        <div class="desc">filter, DNAT</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Routing Decision</div>
+        <div class="desc">which interface?</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #a78bfa;">
+        <div class="label">POSTROUTING</div>
+        <div class="desc">SNAT, MASQUERADE</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">NIC sends</div>
+        <div class="desc">out the wire</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== IPTABLES MAPPING ===== -->
+  <h2>How iptables/nftables Register at Hooks</h2>
+
+  <p>iptables organizes rules into <strong>tables</strong>, each containing <strong>chains</strong>. Each built-in chain is registered at a specific netfilter hook with a defined priority.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Table</th>
+        <th>Purpose</th>
+        <th>Chains (Hook &rarr; Priority)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>raw</strong></td>
+        <td>Bypass conntrack</td>
+        <td>PREROUTING (-300), OUTPUT (-300)</td>
+      </tr>
+      <tr>
+        <td><strong>mangle</strong></td>
+        <td>Alter packet headers (TTL, TOS, mark)</td>
+        <td>All 5 hooks (-150)</td>
+      </tr>
+      <tr>
+        <td><strong>nat</strong></td>
+        <td>Network Address Translation</td>
+        <td>PREROUTING (-100), OUTPUT (-100), POSTROUTING (100)</td>
+      </tr>
+      <tr>
+        <td><strong>filter</strong></td>
+        <td>Accept/drop/reject packets</td>
+        <td>INPUT (0), FORWARD (0), OUTPUT (0)</td>
+      </tr>
+      <tr>
+        <td><strong>security</strong></td>
+        <td>SELinux/AppArmor labeling</td>
+        <td>INPUT (50), FORWARD (50), OUTPUT (50)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Priority determines order:</strong> Lower number = earlier execution. At the PREROUTING hook, <code>raw</code> (-300) runs before <code>mangle</code> (-150) which runs before <code>nat</code> (-100). This is why <code>raw</code> can skip conntrack before NAT ever sees the packet.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Table/Chain Processing Order for an Incoming Forwarded Packet</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">raw</div>
+        <div class="desc">PREROUTING</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">conntrack</div>
+        <div class="desc">(if not skipped)</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">mangle</div>
+        <div class="desc">PREROUTING</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">nat</div>
+        <div class="desc">PREROUTING (DNAT)</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">routing</div>
+        <div class="desc">decision</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">filter</div>
+        <div class="desc">FORWARD</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">nat</div>
+        <div class="desc">POSTROUTING (SNAT)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CONNTRACK ===== -->
+  <h2>Connection Tracking (conntrack) Internals</h2>
+
+  <p>conntrack is a netfilter subsystem that tracks the <strong>state of every network flow</strong> passing through the host. It maintains a hash table keyed by the 5-tuple (source IP, dest IP, source port, dest port, protocol) and is essential for stateful firewalling and NAT.</p>
+
+  <h3>Conntrack States</h3>
+
+  <div class="state-diagram">
+    <div class="state initial">NEW</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state active">ESTABLISHED</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state closed">DESTROYED</div>
+  </div>
+
+  <div class="state-diagram">
+    <div class="state special">RELATED</div>
+    <div class="state-arrow">&nbsp;&nbsp;</div>
+    <div class="state waiting">INVALID</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>State</th>
+        <th>Meaning</th>
+        <th>Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>NEW</strong></td>
+        <td>First packet of a flow seen (SYN for TCP, first UDP packet)</td>
+        <td>TCP SYN to 10.0.0.5:80</td>
+      </tr>
+      <tr>
+        <td><strong>ESTABLISHED</strong></td>
+        <td>Reply packet seen &mdash; bidirectional traffic confirmed</td>
+        <td>SYN-ACK received back</td>
+      </tr>
+      <tr>
+        <td><strong>RELATED</strong></td>
+        <td>New connection associated with an existing ESTABLISHED flow</td>
+        <td>FTP data channel, ICMP "port unreachable" for a UDP flow</td>
+      </tr>
+      <tr>
+        <td><strong>INVALID</strong></td>
+        <td>Packet doesn't match any known flow or violates protocol</td>
+        <td>ACK without prior SYN, malformed packet</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Inspecting conntrack</h3>
+
+  <div class="terminal">
+    <span class="prompt"># List all tracked connections</span><br>
+    <span class="output">$ conntrack -L</span><br>
+    <span class="output">tcp      6 431999 ESTABLISHED src=10.0.0.2 dst=93.184.216.34 sport=54321 dport=443</span><br>
+    <span class="output">                              dst=10.0.0.2 src=93.184.216.34 sport=443 dport=54321 [ASSURED]</span><br>
+    <span class="output">udp      17 29 src=10.0.0.2 dst=8.8.8.8 sport=45678 dport=53</span><br>
+    <span class="output">                              dst=10.0.0.2 src=8.8.8.8 sport=53 dport=45678</span><br><br>
+    <span class="prompt"># Show conntrack stats</span><br>
+    <span class="output">$ conntrack -S</span><br>
+    <span class="output">cpu=0   found=1284 invalid=12 insert=0 insert_failed=0 drop=0 early_drop=0</span><br>
+    <span class="output">cpu=1   found=987  invalid=8  insert=0 insert_failed=0 drop=0 early_drop=0</span><br><br>
+    <span class="prompt"># Current table size and max</span><br>
+    <span class="output">$ sysctl net.netfilter.nf_conntrack_count</span><br>
+    <span class="output">net.netfilter.nf_conntrack_count = 2847</span><br>
+    <span class="output">$ sysctl net.netfilter.nf_conntrack_max</span><br>
+    <span class="output">net.netfilter.nf_conntrack_max = 262144</span>
+  </div>
+
+  <div class="warn">
+    <strong>conntrack table exhaustion:</strong> When <code>nf_conntrack_count</code> reaches <code>nf_conntrack_max</code>, the kernel drops new connections with the infamous message: <code>nf_conntrack: table full, dropping packet</code>. This is a common issue on high-traffic load balancers, K8s nodes, and NAT gateways. Fix: increase <code>nf_conntrack_max</code>, decrease timeouts (<code>nf_conntrack_tcp_timeout_established</code>), or bypass conntrack for high-volume flows using the <code>raw</code> table's <code>NOTRACK</code> target.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">conntrack Hash Table Internals</div>
+    <ul>
+      <li>Hash table with <code>nf_conntrack_buckets</code> buckets (default: <code>nf_conntrack_max / 4</code>)</li>
+      <li>Each entry is ~300 bytes &mdash; 262,144 entries = ~75 MB memory</li>
+      <li>Keyed by 5-tuple: <code>(src_ip, dst_ip, src_port, dst_port, protocol)</code></li>
+      <li>Entries expire based on protocol-specific timeouts (TCP ESTABLISHED: 5 days default, UDP: 30s)</li>
+      <li>Entries marked <strong>[ASSURED]</strong> survive table pressure (they have seen traffic in both directions)</li>
+    </ul>
+  </div>
+
+  <!-- ===== NAT IMPLEMENTATION ===== -->
+  <h2>NAT Implementation</h2>
+
+  <p>NAT in Linux is implemented as a <strong>conntrack extension</strong>. The first packet of a flow triggers NAT translation, and conntrack records the mapping. All subsequent packets in the same flow are automatically translated using the stored mapping.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header request">SNAT / MASQUERADE</div>
+      <div class="comp-body">
+        <ul>
+          <li>Hooks at <strong>POSTROUTING</strong></li>
+          <li>Changes the <strong>source</strong> IP/port of outgoing packets</li>
+          <li>SNAT: static mapping (<code>--to-source 1.2.3.4</code>)</li>
+          <li>MASQUERADE: dynamically uses outgoing interface's IP (for DHCP/dynamic IPs)</li>
+          <li>Reply packets are automatically reverse-translated by conntrack</li>
+        </ul>
+        <pre><code><span class="cm"># SNAT with static IP</span>
+iptables -t nat -A POSTROUTING \
+  -s 10.0.0.0/24 -o eth0 \
+  -j SNAT --to-source 203.0.113.1
+
+<span class="cm"># MASQUERADE (dynamic IP)</span>
+iptables -t nat -A POSTROUTING \
+  -s 10.0.0.0/24 -o eth0 \
+  -j MASQUERADE</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header response">DNAT</div>
+      <div class="comp-body">
+        <ul>
+          <li>Hooks at <strong>PREROUTING</strong></li>
+          <li>Changes the <strong>destination</strong> IP/port of incoming packets</li>
+          <li>Used for port forwarding, load balancing, transparent proxying</li>
+          <li>Reply packets are automatically reverse-translated by conntrack</li>
+          <li>Also available at OUTPUT (for locally-generated packets)</li>
+        </ul>
+        <pre><code><span class="cm"># DNAT: port forward 8080 → container:80</span>
+iptables -t nat -A PREROUTING \
+  -p tcp --dport 8080 \
+  -j DNAT --to-destination 172.17.0.2:80
+
+<span class="cm"># Redirect to local port (transparent proxy)</span>
+iptables -t nat -A PREROUTING \
+  -p tcp --dport 80 \
+  -j REDIRECT --to-port 3128</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Client &rarr; Host:8080</div>
+      <div class="desc">original dst</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="label">PREROUTING DNAT</div>
+      <div class="desc">rewrite dst to 172.17.0.2:80</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">FORWARD</div>
+      <div class="desc">route to container</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step" style="border-color: #34d399;">
+      <div class="label">Container replies</div>
+      <div class="desc">conntrack reverses DNAT</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Client sees Host:8080</div>
+      <div class="desc">transparent to client</div>
+    </div>
+  </div>
+
+  <!-- ===== DOCKER IPTABLES ===== -->
+  <h2>How Docker Injects iptables Rules</h2>
+
+  <p>When you run <code>docker run -p 8080:80 nginx</code>, Docker programmatically inserts iptables rules across multiple chains. Understanding these rules is essential for debugging container networking issues.</p>
+
+  <h3>Docker's iptables Chains</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Chain</th>
+        <th>Table</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>DOCKER</code></td>
+        <td>nat</td>
+        <td>DNAT rules for port mappings (<code>-p host:container</code>)</td>
+      </tr>
+      <tr>
+        <td><code>DOCKER</code></td>
+        <td>filter</td>
+        <td>Allow incoming traffic to mapped ports</td>
+      </tr>
+      <tr>
+        <td><code>DOCKER-ISOLATION-STAGE-1</code></td>
+        <td>filter</td>
+        <td>Prevent traffic between Docker networks (first check)</td>
+      </tr>
+      <tr>
+        <td><code>DOCKER-ISOLATION-STAGE-2</code></td>
+        <td>filter</td>
+        <td>Drop traffic that crossed network boundaries</td>
+      </tr>
+      <tr>
+        <td><code>DOCKER-USER</code></td>
+        <td>filter</td>
+        <td>User-defined rules (processed before Docker's FORWARD rules)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Example: Docker NAT Rules</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ iptables -t nat -L -n --line-numbers</span><br><br>
+    <span class="output">Chain PREROUTING (policy ACCEPT)</span><br>
+    <span class="output">1    DOCKER     all  --  0.0.0.0/0    0.0.0.0/0    ADDRTYPE match dst-type LOCAL</span><br><br>
+    <span class="output">Chain OUTPUT (policy ACCEPT)</span><br>
+    <span class="output">1    DOCKER     all  --  0.0.0.0/0   !127.0.0.0/8  ADDRTYPE match dst-type LOCAL</span><br><br>
+    <span class="output">Chain POSTROUTING (policy ACCEPT)</span><br>
+    <span class="output">1    MASQUERADE  all  --  172.17.0.0/16  0.0.0.0/0</span><br>
+    <span class="output">2    MASQUERADE  tcp  --  172.17.0.2     172.17.0.2    tcp dpt:80</span><br><br>
+    <span class="output">Chain DOCKER (2 references)</span><br>
+    <span class="output">1    RETURN     all  --  0.0.0.0/0    0.0.0.0/0</span><br>
+    <span class="output">2    DNAT       tcp  --  0.0.0.0/0    0.0.0.0/0     tcp dpt:8080 to:172.17.0.2:80</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What happens when a request arrives at Host:8080</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Packet hits <strong>PREROUTING</strong> &rarr; jumps to <code>DOCKER</code> chain (dst-type LOCAL)</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><code>DOCKER</code> chain: DNAT rule rewrites destination from <code>host:8080</code> to <code>172.17.0.2:80</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Routing decision: destination is on <code>docker0</code> bridge &rarr; packet enters <strong>FORWARD</strong> chain</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><code>DOCKER</code> chain in filter table: <code>ACCEPT</code> for traffic to <code>172.17.0.2:80</code></div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>Packet forwarded through <code>docker0</code> bridge to container's veth interface</div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div>Container replies &rarr; conntrack reverse-translates (src becomes host:8080) &rarr; reply sent to client</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>DOCKER-USER chain:</strong> Docker inserts its rules automatically and re-adds them if you delete them. To add custom firewall rules that survive Docker restarts, use the <code>DOCKER-USER</code> chain: <code>iptables -I DOCKER-USER -s 10.0.0.0/8 -j DROP</code>. This chain is processed <em>before</em> Docker's own FORWARD rules.
+  </div>
+
+  <!-- ===== KUBE-PROXY IPTABLES ===== -->
+  <h2>How kube-proxy Injects iptables Rules</h2>
+
+  <p>kube-proxy watches the Kubernetes API for Service and Endpoints changes, then programs iptables rules to implement <strong>ClusterIP</strong>, <strong>NodePort</strong>, and <strong>LoadBalancer</strong> service types. This is the iptables proxy mode (default in many clusters).</p>
+
+  <h3>kube-proxy's Chain Structure</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Chain</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>KUBE-SERVICES</code></td>
+        <td>Entry point: match ClusterIP:port &rarr; jump to per-service chain</td>
+      </tr>
+      <tr>
+        <td><code>KUBE-SVC-&lt;hash&gt;</code></td>
+        <td>Per-service: probability-based load balancing across endpoints</td>
+      </tr>
+      <tr>
+        <td><code>KUBE-SEP-&lt;hash&gt;</code></td>
+        <td>Per-endpoint (Service EndPoint): DNAT to actual pod IP:port</td>
+      </tr>
+      <tr>
+        <td><code>KUBE-NODEPORTS</code></td>
+        <td>Match NodePort traffic &rarr; jump to per-service chain</td>
+      </tr>
+      <tr>
+        <td><code>KUBE-MARK-MASQ</code></td>
+        <td>Mark packets that need SNAT (external &rarr; service traffic)</td>
+      </tr>
+      <tr>
+        <td><code>KUBE-POSTROUTING</code></td>
+        <td>Apply MASQUERADE to marked packets</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Example: A Service with 3 Endpoints</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Service: my-app (ClusterIP 10.96.100.50:80) → 3 pods</span><br><br>
+    <span class="output">Chain KUBE-SERVICES (2 references)</span><br>
+    <span class="output">KUBE-SVC-XYZABC  tcp  --  0.0.0.0/0  10.96.100.50  tcp dpt:80</span><br><br>
+    <span class="output">Chain KUBE-SVC-XYZABC (1 references)</span><br>
+    <span class="output">KUBE-SEP-AAA  all  --  0.0.0.0/0  0.0.0.0/0  statistic mode random probability 0.33333</span><br>
+    <span class="output">KUBE-SEP-BBB  all  --  0.0.0.0/0  0.0.0.0/0  statistic mode random probability 0.50000</span><br>
+    <span class="output">KUBE-SEP-CCC  all  --  0.0.0.0/0  0.0.0.0/0  <span class="cm">/* last endpoint, no probability needed */</span></span><br><br>
+    <span class="output">Chain KUBE-SEP-AAA (1 references)</span><br>
+    <span class="output">KUBE-MARK-MASQ  all  --  10.244.1.5  0.0.0.0/0</span><br>
+    <span class="output">DNAT            tcp  --  0.0.0.0/0   0.0.0.0/0  tcp to:10.244.1.5:8080</span><br><br>
+    <span class="output">Chain KUBE-SEP-BBB (1 references)</span><br>
+    <span class="output">KUBE-MARK-MASQ  all  --  10.244.2.8  0.0.0.0/0</span><br>
+    <span class="output">DNAT            tcp  --  0.0.0.0/0   0.0.0.0/0  tcp to:10.244.2.8:8080</span><br><br>
+    <span class="output">Chain KUBE-SEP-CCC (1 references)</span><br>
+    <span class="output">KUBE-MARK-MASQ  all  --  10.244.3.2  0.0.0.0/0</span><br>
+    <span class="output">DNAT            tcp  --  0.0.0.0/0   0.0.0.0/0  tcp to:10.244.3.2:8080</span>
+  </div>
+
+  <div class="note">
+    <strong>Probability math:</strong> With 3 endpoints, the first rule matches with 1/3 probability. If it doesn't match, the second rule matches with 1/2 probability (which is 1/2 of the remaining 2/3 = 1/3). The third catches everything left (also 1/3). This gives uniform distribution.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Packet flow: pod-to-Service</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="label">Pod sends to</div>
+        <div class="desc">10.96.100.50:80</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #e94560;">
+        <div class="label">KUBE-SERVICES</div>
+        <div class="desc">match ClusterIP</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #fbbf24;">
+        <div class="label">KUBE-SVC-XYZ</div>
+        <div class="desc">random select endpoint</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step" style="border-color: #34d399;">
+        <div class="label">KUBE-SEP-BBB</div>
+        <div class="desc">DNAT to 10.244.2.8:8080</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="label">Pod receives</div>
+        <div class="desc">at real IP:port</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== IPTABLES SCALING ===== -->
+  <h2>Why iptables Doesn't Scale</h2>
+
+  <p>iptables processes rules <strong>linearly</strong> &mdash; every packet walks the chain from top to bottom until a match is found. This has significant performance implications at scale.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">iptables &mdash; O(n) Linear Matching</div>
+      <div class="comp-body">
+        <ul>
+          <li>Every packet walks rules sequentially</li>
+          <li>5,000 services &times; 3 endpoints = ~15,000 rules in KUBE-SVC chains</li>
+          <li>Each Service adds: 1 KUBE-SERVICES entry + N KUBE-SEP entries + probability rules</li>
+          <li>Rule updates are <strong>not incremental</strong> &mdash; entire table is rewritten atomically</li>
+          <li>At 10K+ services, rule programming takes <strong>seconds</strong> and causes latency spikes</li>
+          <li>Latency per packet increases linearly with service count</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Alternatives &mdash; O(1) Lookup</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>IPVS (kube-proxy ipvs mode)</strong>: hash-table based &mdash; O(1) lookup regardless of service count</li>
+          <li><strong>eBPF (Cilium)</strong>: programmable kernel datapath, hash maps for service lookup, bypasses netfilter entirely</li>
+          <li><strong>nftables</strong>: sets and maps for efficient matching, but still not as fast as IPVS/eBPF</li>
+          <li>IPVS supports more load balancing algorithms (round-robin, least connections, weighted)</li>
+          <li>eBPF can short-circuit: skip conntrack, skip full netfilter traversal</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Real-world impact:</strong> In clusters with 5,000+ services, iptables-mode kube-proxy can add <strong>milliseconds of latency per connection</strong> just for rule matching. Service endpoint changes trigger full iptables-restore, which holds a lock and blocks all rule evaluation. This is why production clusters increasingly use IPVS mode or Cilium (eBPF).
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary: Netfilter Architecture</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Full Picture</div>
+    <ul>
+      <li><strong>Netfilter</strong> = kernel framework providing 5 hook points in the packet path</li>
+      <li><strong>iptables/nftables</strong> = user-facing tools that register rules at these hooks via tables and chains</li>
+      <li><strong>conntrack</strong> = stateful connection tracking (hash table of 5-tuples) enabling stateful rules and NAT</li>
+      <li><strong>NAT</strong> = conntrack extension that rewrites addresses; DNAT at PREROUTING, SNAT at POSTROUTING</li>
+      <li><strong>Docker</strong> = injects DNAT (port mapping) + MASQUERADE (outbound NAT) + isolation rules</li>
+      <li><strong>kube-proxy</strong> = injects DNAT chains with probability-based load balancing to implement Services</li>
+      <li><strong>Scaling limit</strong> = iptables is O(n); alternatives like IPVS and eBPF provide O(1) lookups</li>
+    </ul>
+  </div>
+
+</body>
+</html>

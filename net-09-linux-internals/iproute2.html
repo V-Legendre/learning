@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 09 — iproute2 & Traffic Control</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 09 — iproute2 & Traffic Control</h1>
+  <p class="subtitle">Modern Linux networking tools: ip, tc, and sysctl knobs</p>
+
+  <!-- ===== IPROUTE2 OVERVIEW ===== -->
+  <h2>iproute2: The Modern Networking Toolbox</h2>
+
+  <p>iproute2 is the <strong>modern replacement</strong> for the legacy net-tools package. It provides a unified interface (<code>ip</code>) for configuring every aspect of Linux networking, replacing a patchwork of older commands that had inconsistent syntax and limited functionality.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Legacy Command</th>
+        <th>iproute2 Replacement</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>ifconfig</code></td>
+        <td><code>ip addr</code> / <code>ip link</code></td>
+        <td>Interface addresses and state</td>
+      </tr>
+      <tr>
+        <td><code>route</code></td>
+        <td><code>ip route</code></td>
+        <td>Routing table</td>
+      </tr>
+      <tr>
+        <td><code>arp</code></td>
+        <td><code>ip neigh</code></td>
+        <td>ARP / NDP neighbor table</td>
+      </tr>
+      <tr>
+        <td><code>netstat</code></td>
+        <td><code>ss</code></td>
+        <td>Socket statistics</td>
+      </tr>
+      <tr>
+        <td><code>brctl</code></td>
+        <td><code>ip link</code> + <code>bridge</code></td>
+        <td>Bridge management</td>
+      </tr>
+      <tr>
+        <td><code>vconfig</code></td>
+        <td><code>ip link add ... type vlan</code></td>
+        <td>VLAN interfaces</td>
+      </tr>
+      <tr>
+        <td><code>iptunnel</code></td>
+        <td><code>ip tunnel</code></td>
+        <td>Tunnel interfaces</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Stop using net-tools.</strong> <code>ifconfig</code> and <code>route</code> are deprecated, unmaintained, and don't support modern features (namespaces, policy routing, VRFs, multiple addresses per interface displayed correctly). Many minimal container images don't even include them. Always use <code>ip</code>.
+  </div>
+
+  <!-- ===== IP ADDR ===== -->
+  <h3><code>ip addr</code> &mdash; Interface Addresses</h3>
+
+  <div class="terminal">
+    <span class="prompt"># List all interfaces and addresses</span><br>
+    <span class="output">$ ip addr show</span><br>
+    <span class="output">1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN</span><br>
+    <span class="output">    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00</span><br>
+    <span class="output">    inet 127.0.0.1/8 scope host lo</span><br>
+    <span class="output">    inet6 ::1/128 scope host</span><br>
+    <span class="output">2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc fq_codel state UP</span><br>
+    <span class="output">    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff</span><br>
+    <span class="output">    inet 10.0.2.15/24 brd 10.0.2.255 scope global dynamic eth0</span><br>
+    <span class="output">    inet6 fe80::5054:ff:fe12:3456/64 scope link</span><br><br>
+    <span class="prompt"># Show only a specific interface</span><br>
+    <span class="output">$ ip addr show dev eth0</span><br><br>
+    <span class="prompt"># Add an address</span><br>
+    <span class="output">$ ip addr add 192.168.1.100/24 dev eth0</span><br><br>
+    <span class="prompt"># Delete an address</span><br>
+    <span class="output">$ ip addr del 192.168.1.100/24 dev eth0</span><br><br>
+    <span class="prompt"># Show only IPv4 addresses (brief format)</span><br>
+    <span class="output">$ ip -4 -br addr show</span><br>
+    <span class="output">lo       UNKNOWN  127.0.0.1/8</span><br>
+    <span class="output">eth0     UP       10.0.2.15/24</span>
+  </div>
+
+  <!-- ===== IP ROUTE ===== -->
+  <h3><code>ip route</code> &mdash; Routing Table</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Show routing table</span><br>
+    <span class="output">$ ip route show</span><br>
+    <span class="output">default via 10.0.2.1 dev eth0 proto dhcp metric 100</span><br>
+    <span class="output">10.0.2.0/24 dev eth0 proto kernel scope link src 10.0.2.15 metric 100</span><br>
+    <span class="output">172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1</span><br><br>
+    <span class="prompt"># Which route would be used for a given destination?</span><br>
+    <span class="output">$ ip route get 8.8.8.8</span><br>
+    <span class="output">8.8.8.8 via 10.0.2.1 dev eth0 src 10.0.2.15 uid 0</span><br><br>
+    <span class="prompt"># Add a static route</span><br>
+    <span class="output">$ ip route add 10.244.0.0/16 via 10.0.2.100 dev eth0</span><br><br>
+    <span class="prompt"># Add a route via a specific interface (no gateway)</span><br>
+    <span class="output">$ ip route add 192.168.100.0/24 dev vlan100</span><br><br>
+    <span class="prompt"># Delete a route</span><br>
+    <span class="output">$ ip route del 10.244.0.0/16</span><br><br>
+    <span class="prompt"># Replace a route (add or update atomically)</span><br>
+    <span class="output">$ ip route replace default via 10.0.2.1 dev eth0</span>
+  </div>
+
+  <!-- ===== IP LINK ===== -->
+  <h3><code>ip link</code> &mdash; Network Interfaces</h3>
+
+  <div class="terminal">
+    <span class="prompt"># List all interfaces (brief format)</span><br>
+    <span class="output">$ ip -br link show</span><br>
+    <span class="output">lo       UNKNOWN  00:00:00:00:00:00 &lt;LOOPBACK,UP,LOWER_UP&gt;</span><br>
+    <span class="output">eth0     UP       52:54:00:12:34:56 &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt;</span><br>
+    <span class="output">docker0  UP       02:42:ac:11:00:01 &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt;</span><br><br>
+    <span class="prompt"># Bring interface up/down</span><br>
+    <span class="output">$ ip link set eth0 up</span><br>
+    <span class="output">$ ip link set eth0 down</span><br><br>
+    <span class="prompt"># Set MTU</span><br>
+    <span class="output">$ ip link set eth0 mtu 9000</span><br><br>
+    <span class="prompt"># Create virtual interfaces</span><br>
+    <span class="output">$ ip link add br0 type bridge</span><br>
+    <span class="output">$ ip link add veth0 type veth peer name veth1</span><br>
+    <span class="output">$ ip link add vlan100 link eth0 type vlan id 100</span><br><br>
+    <span class="prompt"># Delete an interface</span><br>
+    <span class="output">$ ip link del br0</span>
+  </div>
+
+  <!-- ===== IP NEIGH ===== -->
+  <h3><code>ip neigh</code> &mdash; ARP / NDP Table</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Show ARP table</span><br>
+    <span class="output">$ ip neigh show</span><br>
+    <span class="output">10.0.2.1 dev eth0 lladdr 52:54:00:12:35:02 REACHABLE</span><br>
+    <span class="output">10.0.2.3 dev eth0 lladdr 52:54:00:12:35:03 STALE</span><br>
+    <span class="output">172.17.0.2 dev docker0 lladdr 02:42:ac:11:00:02 REACHABLE</span><br><br>
+    <span class="prompt"># Add a static ARP entry</span><br>
+    <span class="output">$ ip neigh add 10.0.2.50 lladdr aa:bb:cc:dd:ee:ff dev eth0 nud permanent</span><br><br>
+    <span class="prompt"># Flush ARP cache for a device</span><br>
+    <span class="output">$ ip neigh flush dev eth0</span>
+  </div>
+
+  <!-- ===== IP NETNS & IP RULE ===== -->
+  <h3><code>ip netns</code> &amp; <code>ip rule</code></h3>
+
+  <div class="terminal">
+    <span class="prompt"># Network namespaces (covered in detail in namespaces-veth.html)</span><br>
+    <span class="output">$ ip netns list</span><br>
+    <span class="output">$ ip netns add testing</span><br>
+    <span class="output">$ ip netns exec testing ip addr show</span><br>
+    <span class="output">$ ip netns del testing</span><br><br>
+    <span class="prompt"># Policy routing rules (covered in next section)</span><br>
+    <span class="output">$ ip rule list</span><br>
+    <span class="output">0:    from all lookup local</span><br>
+    <span class="output">32766:  from all lookup main</span><br>
+    <span class="output">32767:  from all lookup default</span>
+  </div>
+
+  <!-- ===== POLICY-BASED ROUTING ===== -->
+  <h2>Policy-Based Routing</h2>
+
+  <p>Standard routing makes decisions based solely on <strong>destination IP</strong>. Policy-based routing (PBR) extends this by allowing routing decisions based on <strong>source IP, incoming interface, fwmark, TOS, UID</strong>, and more. It works through multiple routing tables and rules that select which table to consult.</p>
+
+  <h3>How It Works</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Packet arrives</div>
+      <div class="desc">has src, dst, mark, etc.</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">ip rule match</div>
+      <div class="desc">walk rules by priority</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Select routing table</div>
+      <div class="desc">e.g., "lookup table1"</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Route lookup</div>
+      <div class="desc">in that specific table</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Forward packet</div>
+      <div class="desc">via matched route</div>
+    </div>
+  </div>
+
+  <h3>Default Routing Tables</h3>
+
+  <div class="terminal">
+    <span class="prompt">$ ip rule list</span><br>
+    <span class="output">0:      from all lookup local      <span class="cm"># Highest priority: local addresses (127.0.0.1, etc.)</span></span><br>
+    <span class="output">32766:  from all lookup main       <span class="cm"># Normal routing table (what "ip route show" displays)</span></span><br>
+    <span class="output">32767:  from all lookup default    <span class="cm"># Fallback (usually empty)</span></span>
+  </div>
+
+  <div class="note">
+    <strong>Rule priority:</strong> Lower number = higher priority. Rules are evaluated top-to-bottom until a match is found. You insert custom rules between the defaults.
+  </div>
+
+  <h3>Use Case: Dual ISP Uplinks</h3>
+
+  <p>Route traffic from different subnets through different ISPs:</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Subnet A</div>
+      <div class="topo-detail">10.0.1.0/24</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node router">
+      <div class="topo-label">Linux Router</div>
+      <div class="topo-detail">policy routing</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node cloud">
+      <div class="topo-label">ISP 1</div>
+      <div class="topo-detail">via 203.0.113.1</div>
+    </div>
+  </div>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Subnet B</div>
+      <div class="topo-detail">10.0.2.0/24</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node router">
+      <div class="topo-label">Linux Router</div>
+      <div class="topo-detail">policy routing</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node cloud">
+      <div class="topo-label">ISP 2</div>
+      <div class="topo-detail">via 198.51.100.1</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt"># Create custom routing tables (names in /etc/iproute2/rt_tables)</span><br>
+    <span class="output">$ echo "100 isp1" >> /etc/iproute2/rt_tables</span><br>
+    <span class="output">$ echo "200 isp2" >> /etc/iproute2/rt_tables</span><br><br>
+    <span class="prompt"># Add default routes to each table</span><br>
+    <span class="output">$ ip route add default via 203.0.113.1 dev eth1 table isp1</span><br>
+    <span class="output">$ ip route add default via 198.51.100.1 dev eth2 table isp2</span><br><br>
+    <span class="prompt"># Add rules: source subnet determines which table</span><br>
+    <span class="output">$ ip rule add from 10.0.1.0/24 lookup isp1 priority 100</span><br>
+    <span class="output">$ ip rule add from 10.0.2.0/24 lookup isp2 priority 200</span><br><br>
+    <span class="prompt"># Verify</span><br>
+    <span class="output">$ ip rule list</span><br>
+    <span class="output">0:      from all lookup local</span><br>
+    <span class="output">100:    from 10.0.1.0/24 lookup isp1</span><br>
+    <span class="output">200:    from 10.0.2.0/24 lookup isp2</span><br>
+    <span class="output">32766:  from all lookup main</span><br>
+    <span class="output">32767:  from all lookup default</span>
+  </div>
+
+  <h3>Use Case: Kubernetes Pod Routing</h3>
+
+  <div class="panel">
+    <div class="panel-title">How CNIs Use Policy Routing</div>
+    <ul>
+      <li>Kubernetes CNIs (e.g., AWS VPC CNI, Calico) use policy routing extensively</li>
+      <li>Pod traffic is routed through a separate table using <code>ip rule add from &lt;pod-cidr&gt; lookup &lt;pod-table&gt;</code></li>
+      <li>This keeps pod routing independent from the node's default routing table</li>
+      <li>AWS VPC CNI creates per-ENI routing tables, with rules selecting the table based on the source pod IP</li>
+      <li><code>fwmark</code>-based rules are used for traffic that has been marked by iptables (e.g., traffic needing SNAT)</li>
+    </ul>
+  </div>
+
+  <!-- ===== TRAFFIC CONTROL ===== -->
+  <h2>Traffic Control (<code>tc</code>)</h2>
+
+  <p><code>tc</code> is the Linux traffic control subsystem. It shapes, schedules, polices, and drops network traffic at the <strong>egress</strong> (and sometimes ingress) of network interfaces. It operates <em>below</em> iptables/netfilter in the stack.</p>
+
+  <h3>Architecture: qdiscs, classes, filters</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Packet ready to send</div>
+      <div class="desc">from kernel stack</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Filters (classifiers)</div>
+      <div class="desc">match &rarr; assign to class</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Classes</div>
+      <div class="desc">bandwidth allocation</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">Qdisc (queue)</div>
+      <div class="desc">scheduling algorithm</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="label">NIC driver</div>
+      <div class="desc">transmit to wire</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Component</th>
+        <th>Role</th>
+        <th>Analogy</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>qdisc</strong> (queueing discipline)</td>
+        <td>Scheduling algorithm that decides <em>when</em> packets are sent</td>
+        <td>The queue itself (FIFO, priority, fair, etc.)</td>
+      </tr>
+      <tr>
+        <td><strong>class</strong></td>
+        <td>Subdivision within a classful qdisc, each with its own rate/ceiling</td>
+        <td>Lanes at a toll booth with different speed limits</td>
+      </tr>
+      <tr>
+        <td><strong>filter</strong></td>
+        <td>Classifier that assigns packets to specific classes</td>
+        <td>Traffic cop directing cars into lanes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Common Queueing Disciplines</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Qdisc</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Use Case</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>pfifo_fast</code></td>
+        <td>Classless</td>
+        <td>3 priority bands based on TOS bits. Default on older kernels.</td>
+        <td>General purpose (legacy default)</td>
+      </tr>
+      <tr>
+        <td><code>fq_codel</code></td>
+        <td>Classless</td>
+        <td>Fair Queuing + Controlled Delay. Per-flow queuing with AQM to fight bufferbloat.</td>
+        <td>Modern default (since kernel 3.12+). Best general-purpose qdisc.</td>
+      </tr>
+      <tr>
+        <td><code>htb</code></td>
+        <td>Classful</td>
+        <td>Hierarchical Token Bucket. Rate limiting with borrowing between classes.</td>
+        <td>Bandwidth sharing with guarantees. ISP traffic shaping.</td>
+      </tr>
+      <tr>
+        <td><code>tbf</code></td>
+        <td>Classless</td>
+        <td>Token Bucket Filter. Simple rate limiter.</td>
+        <td>Hard rate limit on an interface.</td>
+      </tr>
+      <tr>
+        <td><code>netem</code></td>
+        <td>Classless</td>
+        <td>Network Emulator. Adds delay, packet loss, duplication, reordering.</td>
+        <td>Chaos engineering, testing. Simulating WAN conditions.</td>
+      </tr>
+      <tr>
+        <td><code>ingress</code></td>
+        <td>Special</td>
+        <td>Allows policing (drop/rate-limit) on incoming traffic.</td>
+        <td>Ingress policing. Used by Cilium bandwidth manager.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Classful vs classless:</strong> Classless qdiscs handle all traffic the same way (or with built-in internal logic). Classful qdiscs (HTB, CBQ) let you define a hierarchy of classes, each with its own rate, and attach filters to direct traffic into classes.
+  </div>
+
+  <h3>Examples</h3>
+
+  <div class="panel">
+    <div class="panel-title">Rate Limiting with TBF</div>
+    <div class="terminal">
+      <span class="prompt"># Limit eth0 to 10 Mbit/s</span><br>
+      <span class="output">$ tc qdisc add dev eth0 root tbf rate 10mbit burst 32kbit latency 400ms</span><br><br>
+      <span class="prompt"># View current qdisc</span><br>
+      <span class="output">$ tc qdisc show dev eth0</span><br>
+      <span class="output">qdisc tbf 8001: root refcnt 2 rate 10Mbit burst 4Kb lat 400ms</span><br><br>
+      <span class="prompt"># Remove the qdisc (restore default)</span><br>
+      <span class="output">$ tc qdisc del dev eth0 root</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Network Emulation with netem (Chaos Engineering)</div>
+    <div class="terminal">
+      <span class="prompt"># Add 100ms delay with 10ms jitter (normal distribution)</span><br>
+      <span class="output">$ tc qdisc add dev eth0 root netem delay 100ms 10ms distribution normal</span><br><br>
+      <span class="prompt"># Add 1% packet loss</span><br>
+      <span class="output">$ tc qdisc change dev eth0 root netem delay 100ms loss 1%</span><br><br>
+      <span class="prompt"># Add packet duplication (0.5%) and reordering (25%)</span><br>
+      <span class="output">$ tc qdisc change dev eth0 root netem delay 100ms duplicate 0.5% reorder 25%</span><br><br>
+      <span class="prompt"># Simulate complete network partition</span><br>
+      <span class="output">$ tc qdisc add dev eth0 root netem loss 100%</span><br><br>
+      <span class="prompt"># Clean up</span><br>
+      <span class="output">$ tc qdisc del dev eth0 root</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">HTB Bandwidth Sharing with Classes</div>
+    <div class="terminal">
+      <span class="prompt"># Create HTB root qdisc</span><br>
+      <span class="output">$ tc qdisc add dev eth0 root handle 1: htb default 30</span><br><br>
+      <span class="prompt"># Root class: 100 Mbit total</span><br>
+      <span class="output">$ tc class add dev eth0 parent 1: classid 1:1 htb rate 100mbit</span><br><br>
+      <span class="prompt"># Child class: guaranteed 50 Mbit, can burst to 100 Mbit</span><br>
+      <span class="output">$ tc class add dev eth0 parent 1:1 classid 1:10 htb rate 50mbit ceil 100mbit</span><br><br>
+      <span class="prompt"># Child class: guaranteed 30 Mbit, can burst to 100 Mbit</span><br>
+      <span class="output">$ tc class add dev eth0 parent 1:1 classid 1:20 htb rate 30mbit ceil 100mbit</span><br><br>
+      <span class="prompt"># Default class: 20 Mbit</span><br>
+      <span class="output">$ tc class add dev eth0 parent 1:1 classid 1:30 htb rate 20mbit ceil 50mbit</span><br><br>
+      <span class="prompt"># Filter: port 80/443 traffic → class 1:10</span><br>
+      <span class="output">$ tc filter add dev eth0 parent 1: protocol ip prio 1 u32 \</span><br>
+      <span class="output">    match ip dport 80 0xffff flowid 1:10</span><br>
+      <span class="output">$ tc filter add dev eth0 parent 1: protocol ip prio 1 u32 \</span><br>
+      <span class="output">    match ip dport 443 0xffff flowid 1:10</span>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Kubernetes bandwidth limiting:</strong> Cilium's bandwidth manager uses <code>tc</code> with EDT (Earliest Departure Time) scheduling on the <code>fq</code> qdisc, which is more efficient than HTB policing. The <code>kubernetes.io/egress-bandwidth</code> annotation on pods is implemented via <code>tc</code> under the hood.
+  </div>
+
+  <!-- ===== SYSCTL KNOBS ===== -->
+  <h2>Key sysctl Networking Knobs</h2>
+
+  <p>The Linux kernel exposes hundreds of tunable parameters via <code>/proc/sys/net/</code>. These are the ones you'll encounter most often in production systems, K8s nodes, and load balancers.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>sysctl Parameter</th>
+        <th>Default</th>
+        <th>What It Does</th>
+        <th>When to Tune</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>net.ipv4.ip_forward</code></td>
+        <td>0</td>
+        <td>Enable IP forwarding between interfaces (turns host into a router)</td>
+        <td><strong>Always enable</strong> on K8s nodes, Docker hosts, any router/NAT gateway. Required for container networking.</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.conf.all.rp_filter</code></td>
+        <td>1 (strict)</td>
+        <td>Reverse path filtering: validates source IP is reachable via the interface it arrived on. Anti-spoofing.</td>
+        <td>Set to <code>0</code> (off) or <code>2</code> (loose) for asymmetric routing, multi-homed hosts, overlay networks (Calico, Flannel).</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_keepalive_time</code></td>
+        <td>7200 (2h)</td>
+        <td>Seconds before first keepalive probe on idle TCP connection</td>
+        <td>Lower to 60-300s for LB health checks, cloud environments where idle connections get killed by NAT gateways (AWS ALB: 350s timeout).</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_keepalive_intvl</code></td>
+        <td>75</td>
+        <td>Seconds between keepalive probes after first one</td>
+        <td>Lower alongside keepalive_time. Common: 10-30s.</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_keepalive_probes</code></td>
+        <td>9</td>
+        <td>Number of failed probes before connection is considered dead</td>
+        <td>Lower to 3-5 for faster dead connection detection.</td>
+      </tr>
+      <tr>
+        <td><code>net.core.somaxconn</code></td>
+        <td>4096</td>
+        <td>Maximum length of the listen() backlog queue for a socket</td>
+        <td>Increase on high-traffic servers (nginx, envoy). Application must also set a high backlog in listen().</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_tw_reuse</code></td>
+        <td>2</td>
+        <td>Allow reuse of TIME_WAIT sockets for new outgoing connections (to same dst)</td>
+        <td>Enable (<code>1</code>) on servers making many short-lived outbound connections (proxies, app servers calling APIs). Safe with timestamps enabled.</td>
+      </tr>
+      <tr>
+        <td><code>net.netfilter.nf_conntrack_max</code></td>
+        <td>262144</td>
+        <td>Maximum entries in the conntrack table</td>
+        <td>Increase on NAT gateways, K8s nodes with many services, load balancers. Monitor <code>nf_conntrack_count</code> vs this value.</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_max_syn_backlog</code></td>
+        <td>1024</td>
+        <td>Maximum number of queued connection requests not yet ACKed</td>
+        <td>Increase on high-connection-rate servers. Works with <code>somaxconn</code>.</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.tcp_fin_timeout</code></td>
+        <td>60</td>
+        <td>Time (seconds) to hold socket in FIN-WAIT-2 state</td>
+        <td>Lower to 15-30s on busy servers to free sockets faster.</td>
+      </tr>
+      <tr>
+        <td><code>net.ipv4.ip_local_port_range</code></td>
+        <td>32768-60999</td>
+        <td>Range of ephemeral ports for outgoing connections</td>
+        <td>Widen to <code>1024-65535</code> on high-connection-rate systems (proxies, NAT gateways).</td>
+      </tr>
+      <tr>
+        <td><code>net.core.netdev_max_backlog</code></td>
+        <td>1000</td>
+        <td>Maximum packets queued on INPUT side when interface receives faster than kernel can process</td>
+        <td>Increase to 5000-10000 on high-throughput servers (10G+).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Applying sysctl Settings</h3>
+
+  <div class="terminal">
+    <span class="prompt"># Temporarily set (lost on reboot)</span><br>
+    <span class="output">$ sysctl -w net.ipv4.ip_forward=1</span><br><br>
+    <span class="prompt"># Read current value</span><br>
+    <span class="output">$ sysctl net.ipv4.ip_forward</span><br>
+    <span class="output">net.ipv4.ip_forward = 1</span><br><br>
+    <span class="prompt"># Persist across reboots: add to /etc/sysctl.d/99-k8s.conf</span><br>
+    <span class="output">$ cat /etc/sysctl.d/99-k8s.conf</span><br>
+    <span class="output">net.ipv4.ip_forward = 1</span><br>
+    <span class="output">net.bridge.bridge-nf-call-iptables = 1</span><br>
+    <span class="output">net.bridge.bridge-nf-call-ip6tables = 1</span><br>
+    <span class="output">net.netfilter.nf_conntrack_max = 1048576</span><br>
+    <span class="output">net.ipv4.tcp_keepalive_time = 120</span><br>
+    <span class="output">net.ipv4.tcp_keepalive_intvl = 30</span><br>
+    <span class="output">net.ipv4.tcp_keepalive_probes = 3</span><br>
+    <span class="output">net.core.somaxconn = 65535</span><br><br>
+    <span class="prompt"># Apply persisted settings</span><br>
+    <span class="output">$ sysctl --system</span>
+  </div>
+
+  <div class="warn">
+    <strong>bridge-nf-call-iptables:</strong> This sysctl (<code>net.bridge.bridge-nf-call-iptables = 1</code>) makes bridged traffic pass through iptables rules. Kubernetes <em>requires</em> this so that kube-proxy's iptables rules can intercept pod-to-service traffic that traverses a bridge. Without it, pod-to-ClusterIP traffic bypasses iptables entirely.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Recommended Production Baseline (K8s Nodes)</div>
+    <pre><code><span class="cm"># /etc/sysctl.d/99-kubernetes-node.conf</span>
+
+<span class="cm"># Required for K8s networking</span>
+<span class="attr">net.ipv4.ip_forward</span> = <span class="num">1</span>
+<span class="attr">net.bridge.bridge-nf-call-iptables</span> = <span class="num">1</span>
+<span class="attr">net.bridge.bridge-nf-call-ip6tables</span> = <span class="num">1</span>
+
+<span class="cm"># Conntrack (increase for large clusters)</span>
+<span class="attr">net.netfilter.nf_conntrack_max</span> = <span class="num">1048576</span>
+
+<span class="cm"># TCP keepalive (detect dead connections faster)</span>
+<span class="attr">net.ipv4.tcp_keepalive_time</span> = <span class="num">120</span>
+<span class="attr">net.ipv4.tcp_keepalive_intvl</span> = <span class="num">30</span>
+<span class="attr">net.ipv4.tcp_keepalive_probes</span> = <span class="num">3</span>
+
+<span class="cm"># Connection handling</span>
+<span class="attr">net.core.somaxconn</span> = <span class="num">32768</span>
+<span class="attr">net.ipv4.tcp_max_syn_backlog</span> = <span class="num">8192</span>
+<span class="attr">net.ipv4.ip_local_port_range</span> = <span class="num">1024 65535</span>
+<span class="attr">net.ipv4.tcp_tw_reuse</span> = <span class="num">1</span>
+
+<span class="cm"># Disable rp_filter for overlay networks</span>
+<span class="attr">net.ipv4.conf.all.rp_filter</span> = <span class="num">0</span>
+
+<span class="cm"># High-throughput servers</span>
+<span class="attr">net.core.netdev_max_backlog</span> = <span class="num">5000</span></code></pre>
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Summary: Quick Reference</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">iproute2 Cheat Sheet</div>
+      <table>
+        <tbody>
+          <tr><td><code>ip -br addr</code></td><td>Brief interface/address list</td></tr>
+          <tr><td><code>ip route get &lt;ip&gt;</code></td><td>Which route is used?</td></tr>
+          <tr><td><code>ip route replace</code></td><td>Atomic add-or-update route</td></tr>
+          <tr><td><code>ip neigh show</code></td><td>ARP table</td></tr>
+          <tr><td><code>ip rule list</code></td><td>Policy routing rules</td></tr>
+          <tr><td><code>ip -s link show</code></td><td>Interface statistics (RX/TX bytes, errors, drops)</td></tr>
+          <tr><td><code>ip monitor</code></td><td>Real-time event stream (link, route, addr changes)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel-title">tc Cheat Sheet</div>
+      <table>
+        <tbody>
+          <tr><td><code>tc qdisc show dev eth0</code></td><td>Show current qdisc</td></tr>
+          <tr><td><code>tc -s qdisc show dev eth0</code></td><td>Show with statistics</td></tr>
+          <tr><td><code>tc qdisc add ... root tbf</code></td><td>Rate limit</td></tr>
+          <tr><td><code>tc qdisc add ... root netem</code></td><td>Network emulation</td></tr>
+          <tr><td><code>tc qdisc add ... root htb</code></td><td>Hierarchical bandwidth</td></tr>
+          <tr><td><code>tc qdisc del dev eth0 root</code></td><td>Remove all tc config</td></tr>
+          <tr><td><code>tc class show dev eth0</code></td><td>Show classes</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</body>
+</html>

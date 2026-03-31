@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 11 — User-Data & Cloud-Config</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 11 — User-Data &amp; Cloud-Config</h1>
+  <p class="subtitle">Configuring instances with YAML and scripts</p>
+
+  <!-- ===== USER-DATA FORMATS ===== -->
+  <h2>User-Data Formats</h2>
+
+  <p>User-data is the blob you pass to an instance at launch time. Cloud-init inspects the first bytes to determine the format and dispatch accordingly.</p>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Cloud-Config (YAML)</div>
+      <p>Starts with <code>#cloud-config</code> on the first line. Declarative YAML — the primary and recommended format. Cloud-init maps keys to <strong>modules</strong> that handle the work.</p>
+      <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">packages</span>:
+  - <span class="str">nginx</span>
+  - <span class="str">curl</span>
+<span class="attr">runcmd</span>:
+  - <span class="str">systemctl enable nginx</span></code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Shell Script</div>
+      <p>Starts with a shebang (<code>#!/bin/bash</code>, <code>#!/usr/bin/env python3</code>, etc.). Executed as a script during the <strong>final</strong> stage. Stdout/stderr logged to <code>/var/log/cloud-init-output.log</code>.</p>
+      <pre><code><span class="cm">#!/bin/bash</span>
+<span class="fn">set</span> -euo pipefail
+<span class="fn">apt-get</span> update
+<span class="fn">apt-get</span> install -y nginx
+<span class="fn">systemctl</span> enable --now nginx</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Multi-Part MIME</div>
+      <p>Combines multiple formats in one user-data payload. Each part has its own MIME type and content-type header. Cloud-init dispatches each part to the appropriate handler.</p>
+      <p>MIME types:</p>
+      <ul>
+        <li><code>text/cloud-config</code></li>
+        <li><code>text/x-shellscript</code></li>
+        <li><code>text/cloud-boothook</code></li>
+        <li><code>text/x-include-url</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Size limit:</strong> Most clouds limit user-data to <strong>16 KB</strong> (AWS) or <strong>64 KB</strong> (GCE, Azure). Cloud-init supports <strong>gzip compression</strong> — if user-data starts with a gzip magic number, it's decompressed automatically. For large configs, use <code>#include</code> to reference URLs that cloud-init fetches at boot.
+  </div>
+
+  <!-- ===== KEY CLOUD-CONFIG MODULES ===== -->
+  <h2>Key Cloud-Config Modules</h2>
+
+  <!-- --- users --- -->
+  <h3>users: Create Users &amp; Groups</h3>
+
+  <p>The <code>users</code> module creates system users with full control over groups, SSH keys, sudo, and shell. It runs during the <strong>config</strong> stage.</p>
+
+  <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">users</span>:
+  - <span class="kw">default</span>                         <span class="cm"># keep the distro's default user (ubuntu, ec2-user, etc.)</span>
+  - <span class="attr">name</span>: <span class="str">deploy</span>
+    <span class="attr">gecos</span>: <span class="str">Deploy User</span>
+    <span class="attr">groups</span>: [<span class="str">sudo</span>, <span class="str">docker</span>]
+    <span class="attr">shell</span>: <span class="str">/bin/bash</span>
+    <span class="attr">sudo</span>: <span class="str">ALL=(ALL) NOPASSWD:ALL</span>
+    <span class="attr">lock_passwd</span>: <span class="val">true</span>              <span class="cm"># disable password login (SSH keys only)</span>
+    <span class="attr">ssh_authorized_keys</span>:
+      - <span class="str">ssh-ed25519 AAAA...key1 deploy@bastion</span>
+      - <span class="str">ssh-ed25519 AAAA...key2 deploy@ci</span>
+  - <span class="attr">name</span>: <span class="str">monitoring</span>
+    <span class="attr">system</span>: <span class="val">true</span>                   <span class="cm"># system user (no home dir, low UID)</span>
+    <span class="attr">shell</span>: <span class="str">/usr/sbin/nologin</span></code></pre>
+
+  <div class="tip">
+    <strong>Important:</strong> If you define the <code>users</code> key, you <em>must</em> include <code>- default</code> to keep the distro's default user. Otherwise, cloud-init replaces the default user list entirely and you lose SSH access via the cloud-provided key pair.
+  </div>
+
+  <!-- --- packages --- -->
+  <h3>packages: Install Packages</h3>
+
+  <p>Cloud-init auto-detects the package manager (<code>apt</code>, <code>yum</code>, <code>dnf</code>, <code>zypper</code>). The <code>packages</code> module runs during the <strong>config</strong> stage.</p>
+
+  <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">package_update</span>: <span class="val">true</span>              <span class="cm"># apt-get update / yum makecache</span>
+<span class="attr">package_upgrade</span>: <span class="val">true</span>             <span class="cm"># apt-get upgrade / yum update (all packages)</span>
+<span class="attr">package_reboot_if_required</span>: <span class="val">true</span>  <span class="cm"># reboot if kernel was upgraded</span>
+
+<span class="attr">packages</span>:
+  - <span class="str">nginx</span>
+  - <span class="str">curl</span>
+  - <span class="str">jq</span>
+  - <span class="str">unzip</span>
+  - [<span class="str">python3-pip</span>, <span class="str">3.10*</span>]          <span class="cm"># version pinning (package manager syntax)</span></code></pre>
+
+  <div class="warn">
+    <strong>Caution:</strong> <code>package_upgrade: true</code> upgrades <em>all</em> packages on first boot. This is great for security but adds significant time to instance startup (minutes, not seconds). For latency-sensitive workloads, bake updated packages into the AMI/image instead.
+  </div>
+
+  <!-- --- write_files --- -->
+  <h3>write_files: Write Arbitrary Files</h3>
+
+  <p>Write files to the filesystem with full control over content, path, permissions, owner, and encoding. Runs during the <strong>config</strong> stage.</p>
+
+  <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">write_files</span>:
+  - <span class="attr">path</span>: <span class="str">/etc/nginx/conf.d/app.conf</span>
+    <span class="attr">content</span>: |
+      <span class="str">server {</span>
+      <span class="str">    listen 80;</span>
+      <span class="str">    server_name app.example.com;</span>
+      <span class="str">    location / {</span>
+      <span class="str">        proxy_pass http://127.0.0.1:8080;</span>
+      <span class="str">    }</span>
+      <span class="str">}</span>
+    <span class="attr">owner</span>: <span class="str">root:root</span>
+    <span class="attr">permissions</span>: <span class="str">'0644'</span>
+
+  - <span class="attr">path</span>: <span class="str">/opt/app/config.env</span>
+    <span class="attr">content</span>: |
+      <span class="str">DATABASE_URL=postgres://db.internal:5432/app</span>
+      <span class="str">REDIS_URL=redis://cache.internal:6379</span>
+    <span class="attr">permissions</span>: <span class="str">'0600'</span>
+    <span class="attr">owner</span>: <span class="str">deploy:deploy</span>
+
+  - <span class="attr">path</span>: <span class="str">/usr/local/bin/healthcheck.sh</span>
+    <span class="attr">encoding</span>: <span class="str">b64</span>                  <span class="cm"># base64-encoded content (for binaries or complex text)</span>
+    <span class="attr">content</span>: <span class="str">IyEvYmluL2Jhc2gKY3VybCAtZiAtcyBsb2NhbGhvc3Q6ODA4MC9oZWFsdGg=</span>
+    <span class="attr">permissions</span>: <span class="str">'0755'</span></code></pre>
+
+  <div class="note">
+    <strong>Encoding options:</strong> <code>text/plain</code> (default), <code>b64</code> (base64), <code>gz</code> (gzip), <code>gz+b64</code> (gzip + base64). Use <code>b64</code> when your content has characters that would break YAML parsing.
+  </div>
+
+  <!-- --- runcmd vs bootcmd --- -->
+  <h3>runcmd vs bootcmd</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">runcmd (Final Stage)</div>
+      <div class="comp-body">
+        <p>Runs <strong>once</strong>, during the <strong>final</strong> stage (stage 5). Executed after users, packages, and write_files are all done.</p>
+        <pre><code><span class="attr">runcmd</span>:
+  - <span class="str">systemctl enable --now nginx</span>
+  - [<span class="str">sh</span>, <span class="str">-c</span>, <span class="str">'echo "boot done" >> /var/log/init.log'</span>]
+  - <span class="str">/opt/app/setup.sh</span></code></pre>
+        <p><strong>Use case:</strong> One-time initialization — start services, run setup scripts, register with config management.</p>
+        <p><strong>Execution:</strong> Each item runs via <code>sh -c</code> unless given as a list (which is exec'd directly).</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">bootcmd (Init Stage)</div>
+      <div class="comp-body">
+        <p>Runs on <strong>every boot</strong>, during the <strong>init-network</strong> stage (stage 3). Runs before users, packages, or write_files.</p>
+        <pre><code><span class="attr">bootcmd</span>:
+  - <span class="str">echo 1 > /proc/sys/net/ipv4/ip_forward</span>
+  - [<span class="str">cloud-init-per</span>, <span class="str">once</span>, <span class="str">setup-swap</span>, <span class="str">fallocate</span>, <span class="str">-l</span>, <span class="str">2G</span>, <span class="str">/swapfile</span>]
+  - <span class="str">modprobe br_netfilter</span></code></pre>
+        <p><strong>Use case:</strong> Kernel parameters, module loading, early filesystem setup. Things that must happen before the rest of cloud-init.</p>
+        <p><strong>Note:</strong> Use <code>cloud-init-per</code> to make a bootcmd run only once.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- --- ca_certs --- -->
+  <h3>ca_certs: Custom CA Certificates</h3>
+
+  <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">ca_certs</span>:
+  <span class="attr">trusted</span>:
+    - |
+      <span class="str">-----BEGIN CERTIFICATE-----</span>
+      <span class="str">MIIFazCCA1OgAwIBAgIUE... (your internal CA cert)</span>
+      <span class="str">-----END CERTIFICATE-----</span>
+  <span class="attr">remove_defaults</span>: <span class="val">false</span>          <span class="cm"># don't remove system default CAs</span></code></pre>
+
+  <div class="tip">
+    <strong>Corporate environments:</strong> If your org uses an internal CA for TLS interception or internal services, this module is critical. Without it, <code>apt</code>, <code>curl</code>, and any HTTPS connection to internal endpoints will fail with certificate validation errors.
+  </div>
+
+  <!-- --- apt / yum_repos --- -->
+  <h3>apt / yum_repos: Configure Package Repositories</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">APT (Debian/Ubuntu)</div>
+      <div class="comp-body">
+        <pre><code><span class="attr">apt</span>:
+  <span class="attr">sources</span>:
+    <span class="attr">docker.list</span>:
+      <span class="attr">source</span>: <span class="str">"deb [arch=amd64] https://download.docker.com/linux/ubuntu $RELEASE stable"</span>
+      <span class="attr">keyid</span>: <span class="str">9DC858229FC7DD38854AE2D88D81803C0EBFCD88</span>
+      <span class="attr">keyserver</span>: <span class="str">hkps://keyserver.ubuntu.com</span>
+    <span class="attr">hashicorp.list</span>:
+      <span class="attr">source</span>: <span class="str">"deb [arch=amd64] https://apt.releases.hashicorp.com $RELEASE main"</span>
+      <span class="attr">key</span>: |
+        <span class="str">-----BEGIN PGP PUBLIC KEY BLOCK-----</span>
+        <span class="str">...</span>
+        <span class="str">-----END PGP PUBLIC KEY BLOCK-----</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">YUM (RHEL/CentOS/Fedora)</div>
+      <div class="comp-body">
+        <pre><code><span class="attr">yum_repos</span>:
+  <span class="attr">docker-ce-stable</span>:
+    <span class="attr">name</span>: <span class="str">Docker CE Stable</span>
+    <span class="attr">baseurl</span>: <span class="str">https://download.docker.com/linux/centos/$releasever/$basearch/stable</span>
+    <span class="attr">enabled</span>: <span class="val">true</span>
+    <span class="attr">gpgcheck</span>: <span class="val">true</span>
+    <span class="attr">gpgkey</span>: <span class="str">https://download.docker.com/linux/centos/gpg</span>
+  <span class="attr">hashicorp</span>:
+    <span class="attr">name</span>: <span class="str">HashiCorp Stable</span>
+    <span class="attr">baseurl</span>: <span class="str">https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable</span>
+    <span class="attr">enabled</span>: <span class="val">true</span>
+    <span class="attr">gpgcheck</span>: <span class="val">true</span>
+    <span class="attr">gpgkey</span>: <span class="str">https://rpm.releases.hashicorp.com/gpg</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- --- disk_setup / fs_setup / mounts --- -->
+  <h3>disk_setup / fs_setup / mounts</h3>
+
+  <p>Partition, format, and mount attached disks. This runs during the <strong>init-network</strong> stage, so disks are ready before packages are installed or files are written.</p>
+
+  <pre><code><span class="cm">#cloud-config</span>
+<span class="attr">disk_setup</span>:
+  <span class="attr">/dev/xvdf</span>:
+    <span class="attr">table_type</span>: <span class="str">gpt</span>
+    <span class="attr">layout</span>: <span class="val">true</span>                   <span class="cm"># single partition using entire disk</span>
+    <span class="attr">overwrite</span>: <span class="val">false</span>                <span class="cm"># don't overwrite if already partitioned</span>
+
+<span class="attr">fs_setup</span>:
+  - <span class="attr">device</span>: <span class="str">/dev/xvdf1</span>
+    <span class="attr">filesystem</span>: <span class="str">ext4</span>
+    <span class="attr">label</span>: <span class="str">data-vol</span>
+    <span class="attr">overwrite</span>: <span class="val">false</span>
+
+<span class="attr">mounts</span>:
+  - [<span class="str">/dev/xvdf1</span>, <span class="str">/data</span>, <span class="str">ext4</span>, <span class="str">"defaults,nofail"</span>, <span class="str">"0"</span>, <span class="str">"2"</span>]
+  - [<span class="str">tmpfs</span>, <span class="str">/tmp</span>, <span class="str">tmpfs</span>, <span class="str">"defaults,noatime,size=2G"</span>, <span class="str">"0"</span>, <span class="str">"0"</span>]</code></pre>
+
+  <div class="warn">
+    <strong>Always use <code>nofail</code></strong> in mount options for non-root disks. Without it, if the disk is missing (e.g., wrong instance type, detached EBS volume), the system will hang at boot waiting for a mount that can never succeed.
+  </div>
+
+  <!-- --- other modules --- -->
+  <h3>Other Common Modules</h3>
+
+  <pre><code><span class="cm">#cloud-config</span>
+
+<span class="cm"># Add SSH keys to the default user</span>
+<span class="attr">ssh_authorized_keys</span>:
+  - <span class="str">ssh-ed25519 AAAA...key1 ops@bastion</span>
+  - <span class="str">ssh-rsa AAAA...key2 ci@jenkins</span>
+
+<span class="cm"># Set timezone</span>
+<span class="attr">timezone</span>: <span class="str">UTC</span>
+
+<span class="cm"># Configure NTP</span>
+<span class="attr">ntp</span>:
+  <span class="attr">enabled</span>: <span class="val">true</span>
+  <span class="attr">pools</span>:
+    - <span class="str">169.254.169.123</span>              <span class="cm"># AWS time sync (chrony)</span>
+  <span class="attr">servers</span>:
+    - <span class="str">ntp.internal.corp</span></code></pre>
+
+  <!-- ===== JINJA2 TEMPLATING ===== -->
+  <h2>Jinja2 Templating</h2>
+
+  <p>Since cloud-init 22.x, cloud-config YAML supports <strong>Jinja2 templates</strong>. This lets you write a single cloud-config that adapts dynamically based on instance metadata — no external templating layer needed.</p>
+
+  <div class="panel">
+    <div class="panel-title">How It Works</div>
+    <ul>
+      <li>Add <code>## template: jinja</code> as the <strong>very first line</strong> (before <code>#cloud-config</code>)</li>
+      <li>Access instance metadata via <code>{{ ds.meta_data.* }}</code></li>
+      <li>Access user-data variables via <code>{{ ds.user_data.* }}</code></li>
+      <li>Full Jinja2 syntax: <code>{% if %}</code>, <code>{% for %}</code>, <code>{{ variable | filter }}</code></li>
+      <li>Rendered <em>before</em> YAML parsing, so the output must be valid YAML</li>
+    </ul>
+  </div>
+
+  <pre><code><span class="cm">## template: jinja</span>
+<span class="cm">#cloud-config</span>
+
+<span class="cm"># Dynamic hostname based on instance ID</span>
+<span class="attr">hostname</span>: <span class="str">web-{{ ds.meta_data.instance_id[-8:] }}</span>
+
+<span class="cm"># Region-specific package mirror</span>
+<span class="kw">{% if ds.meta_data.region == 'us-east-1' %}</span>
+<span class="attr">apt</span>:
+  <span class="attr">primary</span>:
+    - <span class="attr">arches</span>: [<span class="str">amd64</span>]
+      <span class="attr">uri</span>: <span class="str">http://us-east-1.ec2.archive.ubuntu.com/ubuntu/</span>
+<span class="kw">{% elif ds.meta_data.region == 'eu-west-1' %}</span>
+<span class="attr">apt</span>:
+  <span class="attr">primary</span>:
+    - <span class="attr">arches</span>: [<span class="str">amd64</span>]
+      <span class="attr">uri</span>: <span class="str">http://eu-west-1.ec2.archive.ubuntu.com/ubuntu/</span>
+<span class="kw">{% endif %}</span>
+
+<span class="cm"># Tag-based role assignment</span>
+<span class="attr">packages</span>:
+  - <span class="str">curl</span>
+  - <span class="str">jq</span>
+<span class="kw">{% if v1.instance_id %}</span>
+  - <span class="str">amazon-ssm-agent</span>
+<span class="kw">{% endif %}</span>
+
+<span class="cm"># Expose metadata for debugging</span>
+<span class="attr">write_files</span>:
+  - <span class="attr">path</span>: <span class="str">/etc/instance-info</span>
+    <span class="attr">content</span>: |
+      <span class="str">INSTANCE_ID={{ ds.meta_data.instance_id }}</span>
+      <span class="str">REGION={{ ds.meta_data.region }}</span>
+      <span class="str">AZ={{ ds.meta_data.availability_zone }}</span>
+      <span class="str">INSTANCE_TYPE={{ ds.meta_data.instance_type }}</span></code></pre>
+
+  <div class="note">
+    <strong>Available variables:</strong> The exact variables depend on the datasource. Use <code>cloud-init query --all</code> on a running instance to see what's available. Common ones: <code>ds.meta_data.instance_id</code>, <code>ds.meta_data.region</code>, <code>ds.meta_data.availability_zone</code>, <code>ds.meta_data.local_ipv4</code>, <code>v1.instance_id</code>, <code>v1.cloud_name</code>, <code>v1.region</code>.
+  </div>
+
+  <!-- ===== COMPLETE EXAMPLE ===== -->
+  <h2>Complete Cloud-Config Example</h2>
+
+  <p>A production-grade cloud-config that creates a deploy user, installs packages, writes configuration, and runs a setup script:</p>
+
+  <pre><code><span class="cm">#cloud-config</span>
+
+<span class="cm"># --- System ---</span>
+<span class="attr">hostname</span>: <span class="str">web-prod-01</span>
+<span class="attr">timezone</span>: <span class="str">UTC</span>
+<span class="attr">locale</span>: <span class="str">en_US.UTF-8</span>
+
+<span class="cm"># --- Users ---</span>
+<span class="attr">users</span>:
+  - <span class="kw">default</span>
+  - <span class="attr">name</span>: <span class="str">deploy</span>
+    <span class="attr">groups</span>: [<span class="str">sudo</span>, <span class="str">docker</span>]
+    <span class="attr">shell</span>: <span class="str">/bin/bash</span>
+    <span class="attr">sudo</span>: <span class="str">ALL=(ALL) NOPASSWD:ALL</span>
+    <span class="attr">lock_passwd</span>: <span class="val">true</span>
+    <span class="attr">ssh_authorized_keys</span>:
+      - <span class="str">ssh-ed25519 AAAA...key deploy@bastion</span>
+
+<span class="cm"># --- Packages ---</span>
+<span class="attr">package_update</span>: <span class="val">true</span>
+<span class="attr">packages</span>:
+  - <span class="str">nginx</span>
+  - <span class="str">docker.io</span>
+  - <span class="str">curl</span>
+  - <span class="str">jq</span>
+  - <span class="str">unzip</span>
+  - <span class="str">fail2ban</span>
+
+<span class="cm"># --- NTP ---</span>
+<span class="attr">ntp</span>:
+  <span class="attr">enabled</span>: <span class="val">true</span>
+  <span class="attr">pools</span>:
+    - <span class="str">169.254.169.123</span>
+
+<span class="cm"># --- Files ---</span>
+<span class="attr">write_files</span>:
+  - <span class="attr">path</span>: <span class="str">/etc/nginx/conf.d/app.conf</span>
+    <span class="attr">content</span>: |
+      <span class="str">upstream app_backend {</span>
+      <span class="str">    server 127.0.0.1:8080;</span>
+      <span class="str">}</span>
+      <span class="str">server {</span>
+      <span class="str">    listen 80;</span>
+      <span class="str">    server_name _;</span>
+      <span class="str">    location / {</span>
+      <span class="str">        proxy_pass http://app_backend;</span>
+      <span class="str">        proxy_set_header Host $host;</span>
+      <span class="str">        proxy_set_header X-Real-IP $remote_addr;</span>
+      <span class="str">    }</span>
+      <span class="str">    location /health {</span>
+      <span class="str">        return 200 'ok';</span>
+      <span class="str">    }</span>
+      <span class="str">}</span>
+    <span class="attr">permissions</span>: <span class="str">'0644'</span>
+
+  - <span class="attr">path</span>: <span class="str">/opt/app/deploy.sh</span>
+    <span class="attr">permissions</span>: <span class="str">'0755'</span>
+    <span class="attr">content</span>: |
+      <span class="str">#!/bin/bash</span>
+      <span class="str">set -euo pipefail</span>
+      <span class="str">echo "[$(date)] Starting application deployment..."</span>
+      <span class="str">docker pull registry.internal/app:latest</span>
+      <span class="str">docker run -d --restart=unless-stopped \</span>
+      <span class="str">  -p 8080:8080 \</span>
+      <span class="str">  --name app \</span>
+      <span class="str">  registry.internal/app:latest</span>
+      <span class="str">echo "[$(date)] Deployment complete."</span>
+
+<span class="cm"># --- Run commands ---</span>
+<span class="attr">runcmd</span>:
+  - <span class="str">systemctl enable --now docker</span>
+  - <span class="str">systemctl enable --now fail2ban</span>
+  - <span class="str">rm /etc/nginx/sites-enabled/default</span>
+  - <span class="str">systemctl enable --now nginx</span>
+  - <span class="str">/opt/app/deploy.sh</span>
+
+<span class="cm"># --- Final message ---</span>
+<span class="attr">final_message</span>: <span class="str">"Cloud-init complete. Uptime: $UPTIME seconds."</span></code></pre>
+
+  <!-- ===== MULTI-PART MIME ===== -->
+  <h2>Multi-Part MIME Example</h2>
+
+  <p>When you need to combine cloud-config YAML with a shell script (or multiple configs), use multi-part MIME. The standard tool is <code>cloud-init devel make-mime</code> or you can construct it manually.</p>
+
+  <div class="panel">
+    <div class="panel-title">Creating Multi-Part MIME with cloud-init CLI</div>
+    <div class="terminal">
+      <span class="prompt">$ </span>cloud-init devel make-mime \<br>
+      <span class="prompt">&nbsp;&nbsp;</span>--attach cloud-config.yaml:cloud-config \<br>
+      <span class="prompt">&nbsp;&nbsp;</span>--attach setup.sh:x-shellscript \<br>
+      <span class="prompt">&nbsp;&nbsp;</span>&gt; user-data.mime<br>
+      <br>
+      <span class="prompt">$ </span>cat user-data.mime
+    </div>
+  </div>
+
+  <pre><code><span class="cm">Content-Type: multipart/mixed; boundary="===============BOUNDARY=="</span>
+<span class="cm">MIME-Version: 1.0</span>
+
+<span class="cm">--===============BOUNDARY==</span>
+<span class="cm">Content-Type: text/cloud-config; charset="utf-8"</span>
+<span class="cm">MIME-Version: 1.0</span>
+
+<span class="attr">#cloud-config</span>
+<span class="attr">packages</span>:
+  - <span class="str">nginx</span>
+  - <span class="str">docker.io</span>
+
+<span class="attr">users</span>:
+  - <span class="kw">default</span>
+  - <span class="attr">name</span>: <span class="str">deploy</span>
+    <span class="attr">groups</span>: [<span class="str">sudo</span>, <span class="str">docker</span>]
+    <span class="attr">shell</span>: <span class="str">/bin/bash</span>
+    <span class="attr">sudo</span>: <span class="str">ALL=(ALL) NOPASSWD:ALL</span>
+
+<span class="cm">--===============BOUNDARY==</span>
+<span class="cm">Content-Type: text/x-shellscript; charset="utf-8"</span>
+<span class="cm">MIME-Version: 1.0</span>
+
+<span class="cm">#!/bin/bash</span>
+<span class="fn">set</span> -euo pipefail
+
+<span class="cm"># This script runs AFTER cloud-config modules</span>
+<span class="fn">echo</span> <span class="str">"Running post-config setup..."</span>
+<span class="fn">docker</span> pull registry.internal/app:latest
+<span class="fn">docker</span> run -d --restart=unless-stopped -p 8080:8080 registry.internal/app:latest
+
+<span class="cm">--===============BOUNDARY==--</span></code></pre>
+
+  <div class="note">
+    <strong>When to use MIME:</strong> Multi-part MIME is useful when different teams own different parts of the initialization. For example, the platform team provides the cloud-config (users, security, monitoring), and the app team provides a shell script (app deployment). The MIME bundle combines both without either team needing to modify the other's YAML.
+  </div>
+
+  <!-- ===== VALIDATION & DEBUGGING ===== -->
+  <h2>Validating User-Data</h2>
+
+  <p>Always validate your cloud-config before deploying. Syntax errors in user-data fail silently at boot — no error in the console, just missing configuration.</p>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>cloud-init schema --config-file user-data.yaml<br>
+    <span class="output">Valid cloud-config: user-data.yaml</span><br>
+    <br>
+    <span class="prompt">$ </span>cloud-init schema --config-file bad-config.yaml<br>
+    <span style="color:#f87171">Error: cloud-config failed schema validation:</span><br>
+    <span style="color:#f87171">&nbsp;&nbsp;packages.0: 123 is not of type 'string'</span><br>
+    <br>
+    <span class="cm"># Validate the running instance's cloud-config</span><br>
+    <span class="prompt">$ </span>cloud-init schema --system<br>
+    <span class="output">Valid schema /var/lib/cloud/instance/cloud-config.txt</span>
+  </div>
+
+  <div class="tip">
+    <strong>CI pipeline tip:</strong> Add <code>cloud-init schema --config-file</code> to your CI pipeline that builds infrastructure. Catch cloud-config errors before they reach production. This works without cloud-init being installed — the schema validation is available in the <code>cloud-init</code> Python package.
+  </div>
+
+</body>
+</html>

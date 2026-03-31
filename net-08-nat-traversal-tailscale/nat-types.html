@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 08 — NAT Types & Behavior</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 08 — NAT Types & Behavior</h1>
+  <p class="subtitle">How different NATs affect connectivity — RFC 4787 classification</p>
+
+  <!-- ===== RFC 4787 CLASSIFICATION ===== -->
+  <h2>RFC 4787: The Modern Classification</h2>
+
+  <p>The old "cone NAT" terminology is imprecise and frequently misused. RFC 4787 (2007) replaced it with two orthogonal axes: <strong>mapping behavior</strong> (how the NAT creates outbound bindings) and <strong>filtering behavior</strong> (which inbound packets the NAT lets through). Every NAT is described as a combination of one mapping behavior and one filtering behavior.</p>
+
+  <div class="note">
+    <strong>Why this matters:</strong> When you're debugging why two nodes behind NAT can't connect directly, the mapping behavior determines whether STUN can even give you a useful external address, and the filtering behavior determines whether the remote peer's packets will be accepted.
+  </div>
+
+  <!-- ===== MAPPING BEHAVIOR ===== -->
+  <h2>Mapping Behavior</h2>
+
+  <p>When an internal host <code>192.168.1.5:12345</code> sends a UDP packet outbound, the NAT assigns an external <code>IP:port</code>. The question is: <em>does sending to a different destination reuse the same external mapping?</em></p>
+
+  <h3>Endpoint-Independent Mapping (EIM)</h3>
+
+  <div class="panel">
+    <div class="panel-title">EIM: Same source always gets the same external mapping</div>
+    <p>Once the NAT maps <code>192.168.1.5:12345</code> to <code>203.0.113.1:54321</code>, that mapping is reused for <em>all</em> destinations. Sending to <code>8.8.8.8:53</code> or <code>1.1.1.1:443</code> both use <code>203.0.113.1:54321</code>.</p>
+  </div>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Internal Host<br><code>192.168.1.5:12345</code></div>
+      <div class="seq-entity">NAT<br><code>203.0.113.1:54321</code></div>
+      <div class="seq-entity">Any Destination</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 8.8.8.8:53 &rarr; mapped to :54321</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 1.1.1.1:443 &rarr; SAME :54321</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 9.9.9.9:80 &rarr; SAME :54321</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key insight:</strong> Because the external mapping is stable regardless of destination, a STUN server can tell you your public <code>IP:port</code> and that address will be valid for communicating with <em>any</em> peer. This is what makes hole-punching possible.
+  </div>
+
+  <h3>Address-Dependent Mapping (ADM)</h3>
+
+  <div class="panel">
+    <div class="panel-title">ADM: Mapping depends on the destination IP</div>
+    <p>The NAT reuses the same external mapping only when sending to the <em>same destination IP</em>. A new destination IP gets a new external port.</p>
+  </div>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Internal Host<br><code>192.168.1.5:12345</code></div>
+      <div class="seq-entity">NAT</div>
+      <div class="seq-entity">Destinations</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 8.8.8.8:53 &rarr; mapped to :54321</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 8.8.8.8:443 &rarr; SAME :54321 (same IP)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 1.1.1.1:53 &rarr; NEW :54322 (different IP)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Address &amp; Port-Dependent Mapping (APDM)</h3>
+
+  <div class="panel">
+    <div class="panel-title">APDM: Mapping depends on destination IP AND port</div>
+    <p>Each unique <code>destination IP:port</code> pair gets its own external mapping. This is the most restrictive mapping behavior.</p>
+  </div>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Internal Host<br><code>192.168.1.5:12345</code></div>
+      <div class="seq-entity">NAT</div>
+      <div class="seq-entity">Destinations</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 8.8.8.8:53 &rarr; mapped to :54321</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 8.8.8.8:443 &rarr; NEW :54322 (different port)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">to 1.1.1.1:53 &rarr; NEW :54323 (different IP)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Why APDM is devastating for traversal:</strong> When you ask a STUN server "what's my public IP:port?", the answer is only valid for talking back to <em>that specific STUN server</em>. A different peer will see a <em>different</em> external port, making the STUN-learned address useless.
+  </div>
+
+  <!-- ===== FILTERING BEHAVIOR ===== -->
+  <h2>Filtering Behavior</h2>
+
+  <p>Once a mapping exists, which inbound packets does the NAT allow through to the internal host?</p>
+
+  <h3>Endpoint-Independent Filtering (EIF)</h3>
+
+  <div class="panel">
+    <div class="panel-title">EIF: Accept inbound from anyone</div>
+    <p>Once a mapping exists for <code>203.0.113.1:54321</code>, <em>any</em> external host can send packets to that address and they'll be forwarded to the internal host. Essentially an open door.</p>
+  </div>
+
+  <h3>Address-Dependent Filtering (ADF)</h3>
+
+  <div class="panel">
+    <div class="panel-title">ADF: Only accept from IPs we've sent to</div>
+    <p>Inbound packets to <code>203.0.113.1:54321</code> are only accepted if the internal host previously sent a packet to that source IP (any port on that IP is fine).</p>
+  </div>
+
+  <h3>Address &amp; Port-Dependent Filtering (APDF)</h3>
+
+  <div class="panel">
+    <div class="panel-title">APDF: Only accept from the exact IP:port we've sent to</div>
+    <p>The most restrictive. Inbound packets are only forwarded if the internal host previously sent a packet to that exact <code>source IP:port</code> combination.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">EIF (Most Permissive)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Any external host can send inbound</li>
+          <li>Mapping just needs to exist</li>
+          <li>Hole-punching trivial: one side sends, other can reach it</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">APDF (Most Restrictive)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Must have sent to exact <code>IP:port</code></li>
+          <li>Both sides must send to each other simultaneously</li>
+          <li>Requires precise coordination or relay</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LEGACY TERMINOLOGY ===== -->
+  <h2>Legacy Terminology Mapping</h2>
+
+  <p>The original RFC 3489 (2003) defined four NAT types using "cone" terminology. While outdated and imprecise, these terms are <em>everywhere</em> — in documentation, forums, and even some modern tools. Here's how they map to RFC 4787:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Legacy Term</th>
+        <th>Mapping Behavior</th>
+        <th>Filtering Behavior</th>
+        <th>Traversability</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Full Cone NAT</strong></td>
+        <td>Endpoint-Independent (EIM)</td>
+        <td>Endpoint-Independent (EIF)</td>
+        <td><span style="color: #34d399;">Easiest</span></td>
+      </tr>
+      <tr>
+        <td><strong>Restricted Cone NAT</strong></td>
+        <td>Endpoint-Independent (EIM)</td>
+        <td>Address-Dependent (ADF)</td>
+        <td><span style="color: #fbbf24;">Moderate</span></td>
+      </tr>
+      <tr>
+        <td><strong>Port-Restricted Cone NAT</strong></td>
+        <td>Endpoint-Independent (EIM)</td>
+        <td>Addr+Port-Dependent (APDF)</td>
+        <td><span style="color: #fbbf24;">Moderate</span></td>
+      </tr>
+      <tr>
+        <td><strong>Symmetric NAT</strong></td>
+        <td>Addr+Port-Dependent (APDM)</td>
+        <td>Addr+Port-Dependent (APDF)</td>
+        <td><span style="color: #ef4444;">Hardest</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Observation:</strong> All three "cone" types share EIM mapping. The crucial distinction is that <em>Symmetric NAT is the only one with dependent mapping</em>. This is why Symmetric NAT is in a class of its own for traversal difficulty — STUN simply cannot provide a useful address.
+  </div>
+
+  <!-- ===== TRAVERSABILITY ===== -->
+  <h2>How NAT Type Affects Traversability</h2>
+
+  <p>Hole-punching relies on two things: (1) knowing your peer's external <code>IP:port</code> (requires predictable mapping) and (2) the peer's NAT allowing your packets through (depends on filtering). Here's which combinations allow direct connectivity:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Peer A \ Peer B</th>
+        <th>Full Cone</th>
+        <th>Restricted Cone</th>
+        <th>Port-Restricted</th>
+        <th>Symmetric</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Full Cone</strong></td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+      </tr>
+      <tr>
+        <td><strong>Restricted Cone</strong></td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #fbbf24;">Port prediction needed</td>
+      </tr>
+      <tr>
+        <td><strong>Port-Restricted</strong></td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #ef4444;">Relay required</td>
+      </tr>
+      <tr>
+        <td><strong>Symmetric</strong></td>
+        <td style="color: #34d399;">Direct</td>
+        <td style="color: #fbbf24;">Port prediction needed</td>
+        <td style="color: #ef4444;">Relay required</td>
+        <td style="color: #ef4444;">Relay required</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Why Symmetric + Port-Restricted (or worse) Requires Relay</div>
+    <ul>
+      <li>Symmetric NAT peer A sends to STUN and gets <code>:54321</code> — but when A sends to peer B, the NAT assigns a <em>different</em> port, say <code>:54399</code></li>
+      <li>Peer B was told A's address is <code>:54321</code> — B sends to <code>:54321</code>, which the NAT drops (wrong mapping)</li>
+      <li>Even if B guesses the right port, Port-Restricted filtering on B's NAT will drop A's packets because B hasn't sent to A's real (unknown) port</li>
+      <li>Result: neither side's packets reach the other. Only a relay (TURN/DERP) can bridge this.</li>
+    </ul>
+  </div>
+
+  <!-- ===== SYMMETRIC NAT DEEP DIVE ===== -->
+  <h2>Symmetric NAT: The Traversal Killer</h2>
+
+  <p>Symmetric NAT (APDM + APDF) is the most common type in enterprise networks, carrier-grade NATs, and many mobile carriers. It's specifically designed to be hard to traverse — each new destination gets a completely independent mapping.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-label">Internal Host</div>
+      <div class="topo-detail">192.168.1.5:12345</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node firewall">
+      <div class="topo-label">Symmetric NAT</div>
+      <div class="topo-detail">APDM + APDF</div>
+    </div>
+    <div class="topo-link">&rarr;</div>
+    <div class="topo-node cloud">
+      <div class="topo-label">Internet</div>
+      <div class="topo-detail">Each dest gets unique mapping</div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Host sends to STUN server at <code>198.51.100.1:3478</code>. NAT creates mapping: <code>192.168.1.5:12345 &rarr; 203.0.113.1:54321</code> (for this destination only).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>STUN replies: "Your public address is <code>203.0.113.1:54321</code>." Host shares this with peer B via signaling.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Host sends to Peer B at <code>198.51.200.5:9999</code>. NAT creates a <em>new</em> mapping: <code>192.168.1.5:12345 &rarr; 203.0.113.1:54399</code> (different port!).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>Peer B sends to <code>203.0.113.1:54321</code> (what STUN reported). NAT drops it — that mapping is only for the STUN server, not for Peer B.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>Connection fails. Peer B has no way to know the real mapping (<code>:54399</code>) was assigned for it.</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Port prediction attacks:</strong> Some implementations try to predict the next port the Symmetric NAT will allocate (e.g., sequential allocation: 54321, 54322, 54323...). This works with some NATs but is unreliable — randomized port allocation defeats it entirely.
+  </div>
+
+  <!-- ===== CGNAT ===== -->
+  <h2>CGNAT: Double NAT Trouble</h2>
+
+  <p>Carrier-Grade NAT (CGNAT, RFC 6598) is your ISP running NAT <em>before</em> your home/office NAT. Your traffic traverses <strong>two NAT layers</strong>, and both must be punched through for direct connectivity.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Your Device &mdash; 192.168.1.5:12345</div>
+    <div class="encap-layer tcp">Your Router NAT &mdash; 100.64.0.17:44001</div>
+    <div class="encap-layer ip">ISP CGNAT &mdash; 203.0.113.50:29876</div>
+    <div class="encap-layer eth">Public Internet</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">CGNAT Indicators</div>
+    <ul>
+      <li>Your WAN IP is in <code>100.64.0.0/10</code> (RFC 6598 shared address space) — this is the dead giveaway</li>
+      <li><code>traceroute</code> shows extra hops before reaching public internet</li>
+      <li>Port forwarding on your router doesn't work (the ISP NAT doesn't know about it)</li>
+      <li><code>tailscale netcheck</code> will report if it detects CGNAT</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Single NAT</div>
+      <div class="comp-body">
+        <ul>
+          <li>One translation layer</li>
+          <li>Port forwarding works</li>
+          <li>STUN reveals your actual public IP</li>
+          <li>Hole-punching success: high (if EIM)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">CGNAT (Double NAT)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Two translation layers to traverse</li>
+          <li>Port forwarding useless (ISP layer blocks it)</li>
+          <li>STUN still works (reveals ISP's public IP)</li>
+          <li>Hole-punching: depends on ISP NAT type</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Silver lining:</strong> STUN/hole-punching can still work through CGNAT if the ISP's NAT uses EIM. STUN discovers the final public IP (the CGNAT's external address), and hole-punching proceeds as normal. The problem is when the CGNAT is Symmetric — then you're stuck with a relay.
+  </div>
+
+  <!-- ===== TESTING YOUR NAT ===== -->
+  <h2>Testing Your NAT Type</h2>
+
+  <h3>STUN-Based Testing</h3>
+
+  <p>Classic STUN-based NAT type detection (RFC 3489 algorithm) works by sending requests to a STUN server from the same local port but to different server IPs/ports, then comparing the resulting mapped addresses:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Send to Server IP1:Port1</div>
+      <div class="desc">Get mapped address A</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Send to Server IP2:Port1</div>
+      <div class="desc">Get mapped address B</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Compare A and B</div>
+      <div class="desc">Same = EIM, Different = APDM</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Test filtering</div>
+      <div class="desc">Ask server to send from different port</div>
+    </div>
+  </div>
+
+  <h3>Using <code>tailscale netcheck</code></h3>
+
+  <div class="terminal">
+    <span class="prompt">$ </span>tailscale netcheck<br>
+    <br>
+    <span class="output">Report:</span><br>
+    <span class="output">    * UDP: true</span><br>
+    <span class="output">    * IPv4: yes, 203.0.113.50:29876</span><br>
+    <span class="output">    * IPv6: yes, [2001:db8::1]:54321</span><br>
+    <span class="output">    * MappingVariesByDestIP: false</span><br>
+    <span class="output">    * HairPinning: true</span><br>
+    <span class="output">    * PortMapping: UPnP, PMP, PCP</span><br>
+    <span class="output">    * CaptivePortal: false</span><br>
+    <span class="output">    * Nearest DERP: San Francisco</span><br>
+    <span class="output">    * DERP latency:</span><br>
+    <span class="output">        - sf:   2.1ms</span><br>
+    <span class="output">        - lax:  5.3ms</span><br>
+    <span class="output">        - sea:  12.1ms</span><br>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Key Fields in <code>tailscale netcheck</code></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>What It Means</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>MappingVariesByDestIP</code></td>
+          <td><code>false</code> = EIM (good), <code>true</code> = APDM/Symmetric (bad for direct connections)</td>
+        </tr>
+        <tr>
+          <td><code>HairPinning</code></td>
+          <td>Can two hosts behind the same NAT talk via their public addresses? Needed for some topologies.</td>
+        </tr>
+        <tr>
+          <td><code>PortMapping</code></td>
+          <td>UPnP/NAT-PMP/PCP availability — these let the client request specific port mappings from the NAT.</td>
+        </tr>
+        <tr>
+          <td><code>UDP</code></td>
+          <td>Whether UDP works at all. If <code>false</code>, everything must go over DERP (HTTPS relay).</td>
+        </tr>
+        <tr>
+          <td><code>Nearest DERP</code></td>
+          <td>The closest relay server — used as fallback when direct fails.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>In practice:</strong> Tailscale reports that roughly 92% of connections succeed as direct (no relay), despite the prevalence of NAT. This is because most consumer NATs use EIM, and Tailscale's connection engine tries multiple strategies (STUN, UPnP, NAT-PMP, PCP, birthday attacks on port prediction) before falling back to DERP relay.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Quick Reference</h2>
+
+  <div class="state-diagram">
+    <div class="state active">EIM + EIF<br><small>Full Cone</small></div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state waiting">EIM + ADF<br><small>Restricted Cone</small></div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state special">EIM + APDF<br><small>Port-Restricted</small></div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state closed">APDM + APDF<br><small>Symmetric</small></div>
+  </div>
+
+  <p style="text-align: center; color: #888; margin-top: -10px;">
+    <span style="color: #34d399;">Easiest to traverse</span> &nbsp;&larr;&rarr;&nbsp; <span style="color: #ef4444;">Hardest to traverse</span>
+  </p>
+
+</body>
+</html>

@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 03 — Dynamic Routing Protocols</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 03 — Dynamic Routing Protocols</h1>
+  <p class="subtitle">OSPF, BGP, and how the internet finds paths</p>
+
+  <!-- ===== WHY DYNAMIC ROUTING ===== -->
+  <h2>Why Dynamic Routing?</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Static Routing Limitations</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>No automatic failover:</strong> if a link goes down, the static route still points to the dead next-hop until an admin changes it</li>
+          <li><strong>Doesn't scale:</strong> 100 routers x 100 networks = 10,000 manual route entries to manage</li>
+          <li><strong>Error-prone:</strong> one typo can create a routing loop or black hole</li>
+          <li><strong>No load balancing:</strong> can't dynamically distribute traffic across equal-cost paths</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Dynamic Routing Solutions</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Automatic convergence:</strong> routers detect failures and recalculate paths in seconds (or milliseconds)</li>
+          <li><strong>Scales to millions of routes:</strong> BGP handles the full internet routing table (~1M prefixes)</li>
+          <li><strong>Loop prevention:</strong> built into the protocol algorithms (split horizon, SPF, AS path)</li>
+          <li><strong>ECMP:</strong> equal-cost multipath — automatically load-balance across parallel links</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== IGP vs EGP ===== -->
+  <h2>IGP vs EGP</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">IGP — Interior Gateway Protocol</div>
+      <div class="comp-body">
+        <p>Routes <strong>within</strong> a single Autonomous System (AS).</p>
+        <ul>
+          <li><strong>OSPF</strong> (Open Shortest Path First) — link-state</li>
+          <li><strong>IS-IS</strong> (Intermediate System to Intermediate System) — link-state</li>
+          <li><strong>EIGRP</strong> (Enhanced Interior Gateway Routing Protocol) — advanced distance-vector (Cisco proprietary)</li>
+          <li><strong>RIP</strong> (Routing Information Protocol) — distance-vector (legacy, rarely used)</li>
+        </ul>
+        <p>Optimized for fast convergence within a single administrative domain.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l7">EGP — Exterior Gateway Protocol</div>
+      <div class="comp-body">
+        <p>Routes <strong>between</strong> Autonomous Systems.</p>
+        <ul>
+          <li><strong>BGP</strong> (Border Gateway Protocol) — the only EGP in use today</li>
+        </ul>
+        <p>Optimized for policy control, scalability, and stability across organizational boundaries. Slower convergence by design — prioritizes stability over speed.</p>
+        <p style="margin-top: 10px;"><strong>An AS (Autonomous System)</strong> is a network or group of networks under a single administrative entity, identified by an ASN (AS Number). Examples: Google (AS15169), Cloudflare (AS13335), AWS (AS16509).</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ALGORITHM TYPES ===== -->
+  <h2>Routing Algorithm Categories</h2>
+
+  <table>
+    <tr>
+      <th>Category</th>
+      <th>How It Works</th>
+      <th>Protocols</th>
+      <th>Pros</th>
+      <th>Cons</th>
+    </tr>
+    <tr>
+      <td><strong>Distance-Vector</strong></td>
+      <td>Each router shares its <em>entire routing table</em> with direct neighbors. Routes include a distance (metric) and direction (next-hop). "Routing by rumor."</td>
+      <td>RIP, EIGRP</td>
+      <td>Simple, low memory</td>
+      <td>Slow convergence, count-to-infinity problem, limited scalability</td>
+    </tr>
+    <tr>
+      <td><strong>Link-State</strong></td>
+      <td>Each router floods its <em>link states</em> (direct connections) to all routers. Every router builds a complete topology map, then independently runs Dijkstra's SPF algorithm.</td>
+      <td>OSPF, IS-IS</td>
+      <td>Fast convergence, loop-free, complete visibility</td>
+      <td>Higher memory/CPU (stores full topology), complex implementation</td>
+    </tr>
+    <tr>
+      <td><strong>Path-Vector</strong></td>
+      <td>Like distance-vector, but includes the <em>full AS path</em> to each destination. If a router sees its own AS in the path, it rejects the route (loop prevention).</td>
+      <td>BGP</td>
+      <td>Scales to the internet, policy-rich, loop-free across ASes</td>
+      <td>Slow convergence (by design), complex configuration</td>
+    </tr>
+  </table>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app" style="border-radius: 8px; margin-bottom: 4px;">Distance-Vector: "I can reach 10.0.0.0/8 with cost 3" (shares table with neighbors)</div>
+    <div class="encap-layer ip" style="border-radius: 8px; margin-bottom: 4px;">Link-State: "I am Router X, I connect to Y (cost 1) and Z (cost 5)" (floods links to all)</div>
+    <div class="encap-layer eth" style="border-radius: 8px;">Path-Vector: "I can reach 10.0.0.0/8 via AS 64512 -> AS 64513 -> AS 64514" (shares path)</div>
+  </div>
+
+  <!-- ===== OSPF ===== -->
+  <h2>OSPF (Open Shortest Path First)</h2>
+
+  <p>The most widely deployed IGP. A <strong>link-state protocol</strong> where every router in an area has a complete, identical view of the network topology.</p>
+
+  <h3>Core Concept: Link-State Database</h3>
+
+  <div class="panel">
+    <div class="panel-title">How OSPF Builds the Topology</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div><strong>Discover neighbors:</strong> Routers send Hello packets on each OSPF-enabled interface (multicast <code>224.0.0.5</code>). Routers that share a link and agree on parameters (area ID, hello/dead timers, authentication) become neighbors.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div><strong>Form adjacencies:</strong> Neighbors exchange their complete Link-State Databases (LSDBs) using Database Description (DBD) packets, then fetch missing/newer LSAs with Link-State Request/Update.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div><strong>Flood LSAs:</strong> Each router generates LSAs describing its own links and floods them to all routers in the area. Every router ends up with an identical LSDB.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div><strong>Run SPF:</strong> Each router independently runs Dijkstra's Shortest Path First algorithm on the LSDB to build a shortest-path tree rooted at itself.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div><strong>Install routes:</strong> The SPF tree determines the best next-hop for each destination. These are installed in the routing table (FIB).</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>OSPF Areas</h3>
+
+  <p>Large OSPF deployments are divided into <strong>areas</strong> to limit the scope of LSA flooding and reduce the size of the LSDB. Every OSPF network must have <strong>Area 0</strong> (the backbone), and all other areas must connect to it.</p>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">Area 1</div>
+      <div class="topo-detail">Stub / Branch office</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128752;</div>
+      <div class="topo-label">ABR</div>
+      <div class="topo-detail">Area Border Router</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#9729;</div>
+      <div class="topo-label">Area 0</div>
+      <div class="topo-detail">Backbone</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node router">
+      <div class="topo-icon">&#128752;</div>
+      <div class="topo-label">ABR</div>
+      <div class="topo-detail">Area Border Router</div>
+    </div>
+    <div class="topo-link">---</div>
+    <div class="topo-node server">
+      <div class="topo-icon">&#128421;</div>
+      <div class="topo-label">Area 2</div>
+      <div class="topo-detail">Data center</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Area Types</div>
+    <table>
+      <tr>
+        <th>Area Type</th>
+        <th>Description</th>
+        <th>LSAs Allowed</th>
+      </tr>
+      <tr>
+        <td><strong>Backbone (Area 0)</strong></td>
+        <td>All inter-area traffic must transit Area 0. All ABRs connect to it.</td>
+        <td>All types</td>
+      </tr>
+      <tr>
+        <td><strong>Standard area</strong></td>
+        <td>Normal non-backbone area. Receives all LSA types.</td>
+        <td>Types 1, 2, 3, 4, 5</td>
+      </tr>
+      <tr>
+        <td><strong>Stub area</strong></td>
+        <td>No external routes (Type 5 LSAs). ABR injects a default route instead. Reduces LSDB size for areas with a single exit.</td>
+        <td>Types 1, 2, 3 (+ default)</td>
+      </tr>
+      <tr>
+        <td><strong>Totally stubby</strong></td>
+        <td>No external AND no inter-area summary routes. Only intra-area routes + default. Maximum LSDB reduction.</td>
+        <td>Types 1, 2 (+ default)</td>
+      </tr>
+      <tr>
+        <td><strong>NSSA (Not-So-Stubby Area)</strong></td>
+        <td>Like stub, but allows importing external routes <em>into</em> the area as Type 7 LSAs. Useful when a stub area has a local ASBR.</td>
+        <td>Types 1, 2, 3, 7</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>LSA Types</h3>
+
+  <table>
+    <tr>
+      <th>LSA Type</th>
+      <th>Name</th>
+      <th>Generated By</th>
+      <th>Scope</th>
+      <th>Describes</th>
+    </tr>
+    <tr>
+      <td><strong>1</strong></td>
+      <td>Router LSA</td>
+      <td>Every router</td>
+      <td>Intra-area</td>
+      <td>All of a router's links and their costs within an area</td>
+    </tr>
+    <tr>
+      <td><strong>2</strong></td>
+      <td>Network LSA</td>
+      <td>DR (Designated Router)</td>
+      <td>Intra-area</td>
+      <td>All routers connected to a multi-access segment (e.g., Ethernet)</td>
+    </tr>
+    <tr>
+      <td><strong>3</strong></td>
+      <td>Summary LSA</td>
+      <td>ABR (Area Border Router)</td>
+      <td>Inter-area</td>
+      <td>Routes to networks in other areas (summary of Type 1/2 info)</td>
+    </tr>
+    <tr>
+      <td><strong>4</strong></td>
+      <td>ASBR Summary LSA</td>
+      <td>ABR</td>
+      <td>Inter-area</td>
+      <td>How to reach an ASBR in another area</td>
+    </tr>
+    <tr>
+      <td><strong>5</strong></td>
+      <td>AS External LSA</td>
+      <td>ASBR (AS Boundary Router)</td>
+      <td>AS-wide</td>
+      <td>Routes redistributed from other protocols (BGP, static, etc.)</td>
+    </tr>
+    <tr>
+      <td><strong>7</strong></td>
+      <td>NSSA External LSA</td>
+      <td>ASBR in NSSA</td>
+      <td>NSSA only</td>
+      <td>Like Type 5, but confined to NSSA. ABR converts to Type 5 at the border.</td>
+    </tr>
+  </table>
+
+  <h3>SPF Algorithm (Dijkstra)</h3>
+
+  <div class="panel">
+    <div class="panel-title">How Dijkstra Builds the Shortest Path Tree</div>
+    <p>Given the complete LSDB, each router runs SPF independently:</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>Start with the <strong>root node</strong> (self). Set cost to self = 0, cost to all others = infinity.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>Examine all links from the current node. For each neighbor, calculate total cost (current cost + link cost). If this is <strong>less than the neighbor's current known cost</strong>, update it.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>Mark current node as "visited." Move to the <strong>unvisited node with the lowest cost</strong>.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>Repeat steps 2-3 until all reachable nodes are visited.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>The resulting tree gives the shortest path (lowest total cost) from this router to every other router in the area.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Hello Protocol &amp; DR/BDR</h3>
+
+  <div class="panel">
+    <div class="panel-title">OSPF Hello Parameters</div>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Default (broadcast)</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td>Hello interval</td>
+        <td>10 seconds</td>
+        <td>How often Hello packets are sent</td>
+      </tr>
+      <tr>
+        <td>Dead interval</td>
+        <td>40 seconds (4x Hello)</td>
+        <td>If no Hello received within this time, neighbor is declared dead</td>
+      </tr>
+      <tr>
+        <td>Router ID</td>
+        <td>Highest loopback IP or highest interface IP</td>
+        <td>Unique 32-bit identifier for each OSPF router</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">DR/BDR Election (Multi-Access Networks)</div>
+    <p>On broadcast/multi-access segments (Ethernet), full-mesh adjacencies between N routers would create N*(N-1)/2 adjacencies. Instead, OSPF elects:</p>
+    <ul>
+      <li><strong>DR (Designated Router):</strong> All routers form adjacencies with the DR (not with each other). The DR represents the segment with a Network LSA (Type 2). Elected by highest OSPF priority (default 1), then highest Router ID.</li>
+      <li><strong>BDR (Backup Designated Router):</strong> Takes over if the DR fails. Second-highest priority.</li>
+      <li><strong>DROther:</strong> All other routers. They only form full adjacencies with DR and BDR, not with each other.</li>
+    </ul>
+    <p>Updates are sent to <code>224.0.0.6</code> (DR/BDR listen) and the DR floods to <code>224.0.0.5</code> (all OSPF routers).</p>
+  </div>
+
+  <h3>OSPF Cost Metric</h3>
+
+  <p>OSPF cost is <strong>inversely proportional to bandwidth</strong>:</p>
+
+  <pre><code>Cost = Reference Bandwidth / Interface Bandwidth
+
+Default reference bandwidth = 100 Mbps (10^8 bps)</code></pre>
+
+  <table>
+    <tr>
+      <th>Link Type</th>
+      <th>Bandwidth</th>
+      <th>Default Cost</th>
+      <th>With 10G Reference</th>
+    </tr>
+    <tr>
+      <td>10 Gbps</td>
+      <td>10,000 Mbps</td>
+      <td>1 (capped at 1)</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <td>1 Gbps</td>
+      <td>1,000 Mbps</td>
+      <td>1 (capped at 1)</td>
+      <td>10</td>
+    </tr>
+    <tr>
+      <td>100 Mbps</td>
+      <td>100 Mbps</td>
+      <td>1</td>
+      <td>100</td>
+    </tr>
+    <tr>
+      <td>10 Mbps</td>
+      <td>10 Mbps</td>
+      <td>10</td>
+      <td>1,000</td>
+    </tr>
+    <tr>
+      <td>T1 (1.544 Mbps)</td>
+      <td>1.544 Mbps</td>
+      <td>64</td>
+      <td>6,477</td>
+    </tr>
+  </table>
+
+  <div class="warn">
+    <strong>Common pitfall:</strong> With the default 100 Mbps reference, both 1 Gbps and 10 Gbps links have cost = 1. OSPF can't distinguish between them. Always increase the reference bandwidth in modern networks: <code>auto-cost reference-bandwidth 10000</code> (on all routers in the area).
+  </div>
+
+  <!-- ===== BGP ===== -->
+  <h2>BGP (Border Gateway Protocol)</h2>
+
+  <p>BGP is the <strong>routing protocol of the internet</strong>. It connects Autonomous Systems (ISPs, cloud providers, enterprises) and carries the full global routing table. Version 4 (BGP-4, RFC 4271) is the current standard.</p>
+
+  <h3>Path-Vector Protocol</h3>
+
+  <p>BGP doesn't know the complete topology. Instead, it tracks the <strong>sequence of ASes</strong> a route has traversed. If a router sees its own ASN in the AS_PATH, it rejects the route — this prevents inter-domain loops.</p>
+
+  <div class="panel">
+    <div class="panel-title">AS_PATH Example</div>
+    <pre><code><span class="cm"># Google DNS (8.8.8.0/24) as seen from different vantage points:</span>
+
+<span class="cm"># From AS 64500 (your network):</span>
+8.8.8.0/24    AS_PATH: 64500 <span class="val">3356 15169</span>
+                              ^     ^
+                              |     Google's AS
+                              Level 3 (transit)
+
+<span class="cm"># From a different vantage point:</span>
+8.8.8.0/24    AS_PATH: 64501 <span class="val">1299 15169</span>
+                              ^     ^
+                              |     Google's AS
+                              Telia (different transit)
+
+<span class="cm"># Shorter AS_PATH is generally preferred</span></code></pre>
+  </div>
+
+  <h3>AS Numbers</h3>
+
+  <table>
+    <tr>
+      <th>Range</th>
+      <th>Type</th>
+      <th>Description</th>
+    </tr>
+    <tr>
+      <td>1 — 64,495</td>
+      <td>16-bit public</td>
+      <td>Assigned by RIRs (ARIN, RIPE, APNIC, etc.) for use on the global internet</td>
+    </tr>
+    <tr>
+      <td>64,496 — 64,511</td>
+      <td>16-bit documentation</td>
+      <td>Reserved for documentation/examples</td>
+    </tr>
+    <tr>
+      <td>64,512 — 65,534</td>
+      <td>16-bit private</td>
+      <td>For internal/private use. Like RFC 1918 for ASNs. Used in K8s Calico BGP peering.</td>
+    </tr>
+    <tr>
+      <td>65,535</td>
+      <td>Reserved</td>
+      <td>Not assignable</td>
+    </tr>
+    <tr>
+      <td>131,072 — 4,199,999,999</td>
+      <td>32-bit (extended)</td>
+      <td>RFC 6793. Written as plain integers. 16-bit ASN space was running out (similar to IPv4 exhaustion).</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Calico BGP:</strong> In K8s with Calico, each node typically uses a private ASN (64512-65534) and peers with a ToR switch or route reflector. <code>calicoctl node status</code> shows BGP peering state. MetalLB can also announce LoadBalancer IPs via BGP.
+  </div>
+
+  <h3>eBGP vs iBGP</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">eBGP (External BGP)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Peering between <strong>different</strong> AS numbers</li>
+          <li>Typically over directly connected links</li>
+          <li>TTL = 1 by default (must be neighbors)</li>
+          <li>AS_PATH is modified (prepends local ASN)</li>
+          <li>Next-hop is updated to the eBGP peer's address</li>
+          <li>AD = 20 (highly trusted)</li>
+          <li>Learned routes are advertised to all peers</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l4">iBGP (Internal BGP)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Peering within the <strong>same</strong> AS</li>
+          <li>Can peer with any router in the AS (uses loopback IPs, IGP provides reachability)</li>
+          <li>TTL = 255 (multihop by default)</li>
+          <li>AS_PATH is NOT modified</li>
+          <li>Next-hop is NOT changed (must resolve via IGP)</li>
+          <li>AD = 200 (less trusted than OSPF)</li>
+          <li><strong>iBGP split-horizon:</strong> routes learned from an iBGP peer are NOT advertised to other iBGP peers (requires full mesh or route reflectors)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>BGP Peering</h3>
+
+  <div class="panel">
+    <div class="panel-title">BGP Session Establishment</div>
+    <p>BGP uses <strong>TCP port 179</strong> for reliable transport. Peers are <strong>explicitly configured</strong> (no autodiscovery like OSPF Hello).</p>
+    <div class="state-diagram">
+      <div class="state initial">Idle</div>
+      <div class="state-arrow">--></div>
+      <div class="state waiting">Connect</div>
+      <div class="state-arrow">--></div>
+      <div class="state waiting">Active</div>
+      <div class="state-arrow">--></div>
+      <div class="state waiting">OpenSent</div>
+      <div class="state-arrow">--></div>
+      <div class="state waiting">OpenConfirm</div>
+      <div class="state-arrow">--></div>
+      <div class="state active">Established</div>
+    </div>
+    <pre><code><span class="cm"># FRRouting (common on Linux) BGP config example</span>
+router bgp 64512
+  bgp router-id 10.0.0.1
+  neighbor 10.0.0.2 remote-as 64513     <span class="cm"># eBGP peer (different AS)</span>
+  neighbor 10.0.0.3 remote-as 64512     <span class="cm"># iBGP peer (same AS)</span>
+  !
+  address-family ipv4 unicast
+    network 192.168.1.0/24              <span class="cm"># Originate this prefix</span>
+    neighbor 10.0.0.2 route-map IMPORT-POLICY in
+    neighbor 10.0.0.2 route-map EXPORT-POLICY out
+  exit-address-family</code></pre>
+  </div>
+
+  <h3>BGP Route Selection</h3>
+
+  <p>When BGP receives multiple routes to the same prefix, it applies this decision process <strong>in order</strong>. The first criterion that breaks the tie wins.</p>
+
+  <table>
+    <tr>
+      <th>Step</th>
+      <th>Criterion</th>
+      <th>Prefer</th>
+      <th>Who Controls It</th>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td><strong>Weight</strong> (Cisco-specific)</td>
+      <td>Highest</td>
+      <td>Local router config (not propagated)</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><strong>Local Preference</strong></td>
+      <td>Highest</td>
+      <td>iBGP attribute. Set by inbound policy. Used to prefer one ISP over another for outbound traffic.</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><strong>Locally originated</strong></td>
+      <td>Yes</td>
+      <td>Routes originated by this router via <code>network</code> or <code>redistribute</code></td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td><strong>AS_PATH length</strong></td>
+      <td>Shortest</td>
+      <td>Determined by internet topology. Can be manipulated with AS_PATH prepending.</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td><strong>Origin</strong></td>
+      <td>IGP > EGP > Incomplete</td>
+      <td>How the route was introduced into BGP (rarely a tiebreaker)</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td><strong>MED</strong> (Multi-Exit Discriminator)</td>
+      <td>Lowest</td>
+      <td>Set by the neighboring AS to indicate preferred entry point. Only compared between routes from the <strong>same</strong> neighboring AS.</td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td><strong>eBGP > iBGP</strong></td>
+      <td>eBGP</td>
+      <td>Prefer routes learned from external peers</td>
+    </tr>
+    <tr>
+      <td>8</td>
+      <td><strong>IGP metric to next-hop</strong></td>
+      <td>Lowest</td>
+      <td>Closest exit point ("hot potato routing")</td>
+    </tr>
+    <tr>
+      <td>9</td>
+      <td><strong>Router ID</strong></td>
+      <td>Lowest</td>
+      <td>Final tiebreaker</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Most common tiebreakers in practice:</strong> Local Preference (step 2) for outbound traffic engineering, AS_PATH length (step 4) as the natural metric, and MED (step 6) for inbound traffic engineering. Most other steps rarely matter.
+  </div>
+
+  <h3>BGP and the Internet</h3>
+
+  <div class="panel">
+    <div class="panel-title">The Global Routing Table</div>
+    <ul>
+      <li>The full BGP table contains approximately <strong>1,000,000+ IPv4 prefixes</strong> and <strong>200,000+ IPv6 prefixes</strong> (as of 2026)</li>
+      <li>A "full table" router (transit provider, IXP participant) must store all of these</li>
+      <li>Edge routers often only take a <strong>default route</strong> from their upstream provider (no need for full table if you only have one exit)</li>
+      <li>Route reflectors and confederations solve the iBGP full-mesh scaling problem (N routers would need N*(N-1)/2 iBGP sessions)</li>
+    </ul>
+  </div>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#127970;</div>
+      <div class="topo-label">AS 64512</div>
+      <div class="topo-detail">Enterprise</div>
+    </div>
+    <div class="topo-link">eBGP</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">AS 3356</div>
+      <div class="topo-detail">Level3 (Transit)</div>
+    </div>
+    <div class="topo-link">eBGP</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">AS 15169</div>
+      <div class="topo-detail">Google</div>
+    </div>
+  </div>
+
+  <div class="topology">
+    <div class="topo-node host">
+      <div class="topo-icon">&#127970;</div>
+      <div class="topo-label">AS 64512</div>
+      <div class="topo-detail">Enterprise</div>
+    </div>
+    <div class="topo-link">eBGP</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">AS 1299</div>
+      <div class="topo-detail">Telia (Transit)</div>
+    </div>
+    <div class="topo-link">eBGP</div>
+    <div class="topo-node cloud">
+      <div class="topo-icon">&#127760;</div>
+      <div class="topo-label">AS 16509</div>
+      <div class="topo-detail">AWS</div>
+    </div>
+  </div>
+
+  <h3>BGP Hijacking</h3>
+
+  <p>BGP has <strong>no built-in authentication of route origins</strong>. Any AS can announce any prefix. If the announcement is more specific (longer prefix) or propagates faster, traffic will follow the hijacked route.</p>
+
+  <div class="panel">
+    <div class="panel-title">Notable BGP Hijack Incidents</div>
+    <table>
+      <tr>
+        <th>Year</th>
+        <th>Incident</th>
+        <th>What Happened</th>
+      </tr>
+      <tr>
+        <td><strong>2008</strong></td>
+        <td>YouTube / Pakistan Telecom</td>
+        <td>Pakistan Telecom announced <code>208.65.153.0/24</code> (YouTube's prefix) to comply with a government censorship order, but the announcement leaked to the global internet via PCCW. YouTube was unreachable worldwide for ~2 hours. The hijacked /24 was more specific than YouTube's /22, winning via longest prefix match.</td>
+      </tr>
+      <tr>
+        <td><strong>2018</strong></td>
+        <td>AWS Route 53 / MyEtherWallet</td>
+        <td>An attacker hijacked an AWS-owned prefix (<code>205.251.192.0/24</code>) used by Route 53 DNS servers. DNS queries for MyEtherWallet.com were redirected to a phishing site. Approximately $150K in cryptocurrency was stolen. Attack originated from an ISP in Columbus, Ohio (eNet/AS10297).</td>
+      </tr>
+      <tr>
+        <td><strong>2019</strong></td>
+        <td>Google traffic via China Telecom</td>
+        <td>China Telecom (AS4134) leaked internal routes, causing Google, Cloudflare, and AWS traffic to route through China for ~2 hours. Likely accidental, but demonstrated the fragility of BGP trust.</td>
+      </tr>
+      <tr>
+        <td><strong>2024</strong></td>
+        <td>Orange Espana</td>
+        <td>Attacker gained access to Orange Spain's RIPE account via stolen credentials, modified their RPKI ROAs, and caused BGP route validation failures that disrupted the carrier's traffic.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Defenses: RPKI + ROV</div>
+    <ul>
+      <li><strong>RPKI (Resource Public Key Infrastructure):</strong> Cryptographically binds IP prefixes to authorized ASNs using ROAs (Route Origin Authorizations). Prefix owners create ROAs signed by RIR certificates.</li>
+      <li><strong>ROV (Route Origin Validation):</strong> Routers validate received BGP announcements against RPKI data. Routes that fail validation (the announcing AS doesn't match the ROA) are marked as "Invalid" and can be rejected.</li>
+      <li><strong>BGPsec:</strong> Extends RPKI to validate the entire AS_PATH (not just origin). Cryptographic signatures at each hop. Not widely deployed due to performance and incremental deployment challenges.</li>
+      <li><strong>IRR (Internet Routing Registry):</strong> Older, non-cryptographic approach. Operators register their prefixes and routing policies. Used for generating prefix filters. Less secure than RPKI (no crypto verification).</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>Reality check:</strong> As of 2026, RPKI adoption is growing but not universal. Major networks (Cloudflare, Google, AWS, most Tier-1 ISPs) validate routes, but many smaller networks don't. "Invalid" routes from non-RPKI-validating networks can still propagate. The internet's routing security remains a work in progress.
+  </div>
+
+  <!-- ===== PROTOCOL COMPARISON ===== -->
+  <h2>Protocol Comparison Summary</h2>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>OSPF</th>
+      <th>IS-IS</th>
+      <th>BGP</th>
+      <th>RIP (legacy)</th>
+    </tr>
+    <tr>
+      <td>Type</td>
+      <td>Link-state IGP</td>
+      <td>Link-state IGP</td>
+      <td>Path-vector EGP</td>
+      <td>Distance-vector IGP</td>
+    </tr>
+    <tr>
+      <td>Algorithm</td>
+      <td>Dijkstra SPF</td>
+      <td>Dijkstra SPF</td>
+      <td>Best path selection</td>
+      <td>Bellman-Ford</td>
+    </tr>
+    <tr>
+      <td>Transport</td>
+      <td>IP protocol 89</td>
+      <td>Directly over L2 (CLNP)</td>
+      <td>TCP port 179</td>
+      <td>UDP port 520</td>
+    </tr>
+    <tr>
+      <td>Metric</td>
+      <td>Cost (bandwidth-based)</td>
+      <td>Cost (configurable)</td>
+      <td>Multiple attributes</td>
+      <td>Hop count (max 15)</td>
+    </tr>
+    <tr>
+      <td>Convergence</td>
+      <td>Fast (sub-second with BFD)</td>
+      <td>Fast (sub-second with BFD)</td>
+      <td>Slow (minutes) by design</td>
+      <td>Slow (minutes)</td>
+    </tr>
+    <tr>
+      <td>Scalability</td>
+      <td>Thousands of routes per area</td>
+      <td>Larger than OSPF (flatter, less overhead)</td>
+      <td>Millions of routes (internet-scale)</td>
+      <td>Very limited</td>
+    </tr>
+    <tr>
+      <td>Hierarchy</td>
+      <td>Areas (backbone + non-backbone)</td>
+      <td>Levels (L1 / L2)</td>
+      <td>ASes (flat within, hierarchical between)</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>AD (Cisco)</td>
+      <td>110</td>
+      <td>115</td>
+      <td>20 (eBGP) / 200 (iBGP)</td>
+      <td>120</td>
+    </tr>
+    <tr>
+      <td>Common use</td>
+      <td>Enterprise, campus, DC underlay</td>
+      <td>ISP backbone, large DCs (Facebook uses IS-IS)</td>
+      <td>Internet peering, DC overlay, K8s (Calico)</td>
+      <td>Almost never (legacy only)</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Data center context:</strong> Modern DC designs often use <strong>BGP as the IGP</strong> in a Clos/leaf-spine topology. Each switch runs BGP with a unique private ASN. This is called "BGP-on-the-host" or "eBGP underlay" — simpler than OSPF for large, uniform DC fabrics. Facebook, Microsoft, and many hyperscalers use this approach. In K8s, Calico leverages this by having nodes peer directly with ToR switches via BGP.
+  </div>
+
+</body>
+</html>

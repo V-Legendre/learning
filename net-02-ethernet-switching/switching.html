@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 02 — Switching</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 02 — Switching</h1>
+  <p class="subtitle">How switches learn, forward, and filter traffic</p>
+
+  <!-- ===== MAC LEARNING ===== -->
+  <h2>How Switches Learn: The MAC Address Table</h2>
+
+  <p>A switch is fundamentally a <strong>MAC-address-to-port mapping engine</strong>. It maintains a table (historically called the <strong>CAM table</strong> — Content Addressable Memory) that maps source MAC addresses to the physical port where that MAC was last seen. This table is built dynamically through observation, not configuration.</p>
+
+  <div class="panel">
+    <div class="panel-title">CAM Table Entry Structure</div>
+    <table>
+      <thead>
+        <tr>
+          <th>MAC Address</th>
+          <th>Port</th>
+          <th>VLAN</th>
+          <th>Age Timer</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>00:1A:2B:3C:4D:5E</code></td>
+          <td>Gi0/1</td>
+          <td>10</td>
+          <td>120s</td>
+        </tr>
+        <tr>
+          <td><code>AA:BB:CC:DD:EE:FF</code></td>
+          <td>Gi0/24</td>
+          <td>10</td>
+          <td>45s</td>
+        </tr>
+        <tr>
+          <td><code>00:50:56:A1:B2:C3</code></td>
+          <td>Gi0/3</td>
+          <td>20</td>
+          <td>290s</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The Learning Process</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Frame arrives on a port</strong> — The switch reads the <em>source</em> MAC address from the Ethernet header.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Update the CAM table</strong> — If the source MAC is not in the table, add it with the ingress port and start an age timer (default: 300 seconds on most switches). If it already exists but on a different port, update the port (the host moved).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Look up the destination MAC</strong> — The switch reads the <em>destination</em> MAC and checks the CAM table for a matching entry.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Forward or flood</strong> — If found, forward out the specific port. If not found, flood out all ports in the same VLAN (except the source port). See the decision logic below.
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Age timer:</strong> Entries expire if the source MAC isn't seen again within the aging time. This prevents stale entries from accumulating. On Cisco switches, view with <code>show mac address-table aging-time</code> and inspect with <code>show mac address-table dynamic</code>.
+  </div>
+
+  <!-- ===== FORWARDING LOGIC ===== -->
+  <h2>Switch Forwarding Decision Logic</h2>
+
+  <p>Every frame that arrives at a switch goes through the same decision tree. This is the core algorithm that makes L2 switching work.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Frame In</div>
+      <div class="desc">Read src + dst MAC</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Learn Source</div>
+      <div class="desc">Add/update CAM table</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Lookup Dest</div>
+      <div class="desc">Search CAM for dst MAC</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Decision</div>
+      <div class="desc">Forward / Filter / Flood</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Known Unicast</div>
+      <p>Destination MAC is in the CAM table.</p>
+      <p style="margin-top: 8px;"><strong>Action: Forward</strong> out the specific port associated with that MAC.</p>
+      <p style="margin-top: 8px; color: #888; font-size: 13px;">If the destination port is the same as the source port, the frame is <strong>filtered</strong> (dropped) — the sender and receiver are on the same segment.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Unknown Unicast</div>
+      <p>Destination MAC is <em>not</em> in the CAM table.</p>
+      <p style="margin-top: 8px;"><strong>Action: Flood</strong> out all ports in the same VLAN except the source port.</p>
+      <p style="margin-top: 8px; color: #888; font-size: 13px;">This is how the switch "discovers" where the destination lives — when the target replies, the switch learns its port.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Broadcast</div>
+      <p>Destination MAC is <code>FF:FF:FF:FF:FF:FF</code>.</p>
+      <p style="margin-top: 8px;"><strong>Action: Flood</strong> out all ports in the same VLAN except the source port.</p>
+      <p style="margin-top: 8px; color: #888; font-size: 13px;">ARP requests, DHCP Discover, and many discovery protocols use broadcast. Every host in the VLAN processes these.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Multicast</div>
+      <p>Destination MAC starts with <code>01:xx:xx</code> (I/G bit set).</p>
+      <p style="margin-top: 8px;"><strong>Action: Flood</strong> out all ports — unless <strong>IGMP snooping</strong> is enabled, in which case the switch only forwards to ports with registered multicast listeners.</p>
+      <p style="margin-top: 8px; color: #888; font-size: 13px;">Without IGMP snooping, multicast is effectively broadcast from the switch's perspective.</p>
+    </div>
+  </div>
+
+  <!-- ===== SWITCHES VS HUBS VS BRIDGES ===== -->
+  <h2>Switches vs. Hubs vs. Bridges</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Hub (Obsolete)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Layer 1 device — a <strong>multiport repeater</strong></li>
+          <li>Receives a signal on one port, blindly <strong>retransmits on all other ports</strong></li>
+          <li>No MAC learning, no intelligence</li>
+          <li>All ports share a single <strong>collision domain</strong></li>
+          <li>Half-duplex only — CSMA/CD required</li>
+          <li>10 ports = 10 devices sharing 10 Mbps</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Switch (Standard)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Layer 2 device — examines Ethernet headers</li>
+          <li>Learns MACs, <strong>forwards intelligently</strong> to specific ports</li>
+          <li>Each port is its own <strong>collision domain</strong></li>
+          <li>Full-duplex — simultaneous send/receive</li>
+          <li>10 ports = 10 devices each with dedicated bandwidth</li>
+          <li>Microsecond forwarding latency via ASIC hardware</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Where Do Bridges Fit?</div>
+    <p>A <strong>bridge</strong> was the predecessor to the switch — a 2-port device that learned MACs and filtered/forwarded between two network segments. A switch is essentially a <strong>multiport bridge</strong>. The terms are sometimes used interchangeably in protocol specifications (STP refers to "bridges," but it runs on switches). Bridges are functionally extinct as standalone hardware, but the concept lives on in software bridges (<code>brctl</code>, <code>ip link add type bridge</code>) used heavily in Linux networking, Docker, and KVM/libvirt.</p>
+  </div>
+
+  <!-- ===== STORE-AND-FORWARD VS CUT-THROUGH ===== -->
+  <h2>Store-and-Forward vs. Cut-Through Switching</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l2">Store-and-Forward</div>
+      <div class="comp-body">
+        <ul>
+          <li>Receives the <strong>entire frame</strong> before forwarding</li>
+          <li>Validates the <strong>FCS (CRC check)</strong> — drops corrupted frames</li>
+          <li>Higher latency (must buffer the full frame)</li>
+          <li>Can perform <strong>MTU enforcement</strong> and error checking</li>
+          <li>Used on most enterprise and access-layer switches</li>
+          <li>Required for frames crossing different speed ports (e.g., 1G to 10G)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header l4">Cut-Through</div>
+      <div class="comp-body">
+        <ul>
+          <li>Reads only the <strong>first 14 bytes</strong> (dest MAC + src MAC + EtherType)</li>
+          <li>Starts forwarding <strong>immediately</strong> — before the frame is fully received</li>
+          <li>No FCS validation — corrupted frames are forwarded</li>
+          <li>Lowest latency (~2-5 microseconds)</li>
+          <li>Used in data center / high-frequency-trading switches</li>
+          <li><strong>Fragment-free</strong> variant: reads first 64 bytes (filters runts from collisions)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>In practice:</strong> Most modern data center switches (Arista, Cisco Nexus) support both modes and can dynamically switch from cut-through to store-and-forward when error rates rise above a threshold. For latency-sensitive workloads (HFT, real-time telemetry), cut-through is preferred. For reliability-focused environments, store-and-forward prevents error propagation.
+  </div>
+
+  <!-- ===== STP ===== -->
+  <h2>STP — Spanning Tree Protocol (IEEE 802.1D)</h2>
+
+  <h3>Why L2 Loops Are Fatal</h3>
+
+  <p>Redundant links between switches are essential for availability, but they create <strong>Layer 2 loops</strong>. Unlike IP (which has TTL to kill looping packets), Ethernet frames have <strong>no TTL</strong>. A frame in a loop circulates forever, consuming bandwidth exponentially.</p>
+
+  <div class="grid-3">
+    <div class="panel" style="border-color: #ef4444;">
+      <div class="panel-title" style="color: #f87171;">Broadcast Storms</div>
+      <p>A broadcast frame is flooded by every switch. In a loop, it comes back, gets flooded again, and multiplies. Within seconds, the network is saturated at 100% utilization on every link.</p>
+    </div>
+    <div class="panel" style="border-color: #ef4444;">
+      <div class="panel-title" style="color: #f87171;">MAC Table Instability</div>
+      <p>The same source MAC appears on different ports as the looped frame arrives from multiple directions. The CAM table flaps constantly, breaking even unicast forwarding.</p>
+    </div>
+    <div class="panel" style="border-color: #ef4444;">
+      <div class="panel-title" style="color: #f87171;">Duplicate Frames</div>
+      <p>Unicast frames reach the destination multiple times via different loop paths. TCP handles this (it deduplicates), but applications relying on UDP or raw L2 may process duplicates incorrectly.</p>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>This is not theoretical.</strong> A single cable creating an L2 loop can take down an entire VLAN within seconds. Broadcast storms are one of the most common causes of total network outages in enterprise environments. If you've seen a Kubernetes cluster lose all Pod-to-Pod connectivity simultaneously, an L2 loop is a prime suspect.
+  </div>
+
+  <h3>How STP Works</h3>
+
+  <p>STP eliminates loops by logically disabling redundant links while keeping them physically connected for failover. It builds a <strong>loop-free tree topology</strong> from the physical mesh.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Root Bridge Election</strong> — All switches exchange BPDUs (Bridge Protocol Data Units). The switch with the <strong>lowest Bridge ID</strong> (priority + MAC address) becomes the root bridge. Default priority is 32768; lower wins. In production, you explicitly set priority to control which switch becomes root (e.g., set your core switch to priority 0 or 4096).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Root Port Selection</strong> — Every non-root switch selects one <strong>root port</strong> — the port with the lowest-cost path to the root bridge. Path cost is based on link speed (10G = 2, 1G = 4, 100M = 19, 10M = 100 using short path cost).
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Designated Port Selection</strong> — On each network segment (link between switches), one port is elected as the <strong>designated port</strong> — the port that forwards traffic toward the root bridge on that segment. The switch with the lowest root path cost wins.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Block Remaining Ports</strong> — Any port that is neither a root port nor a designated port is put into <strong>blocking state</strong>. It does not forward data frames but continues to listen for BPDUs in case the topology changes.
+      </div>
+    </div>
+  </div>
+
+  <h3>STP Port Roles</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title" style="color: #34d399;">Root Port</div>
+      <p>Best path to root bridge. One per non-root switch. <strong>Forwards traffic.</strong></p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #60a5fa;">Designated Port</div>
+      <p>Best port on each segment toward root. One per link. <strong>Forwards traffic.</strong></p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color: #f87171;">Blocked Port</div>
+      <p>Redundant path — logically disabled. <strong>Receives BPDUs only.</strong> Activates if the active path fails.</p>
+    </div>
+  </div>
+
+  <h3>STP Port States</h3>
+
+  <div class="state-diagram">
+    <div class="state initial">Disabled</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state waiting">Blocking</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state waiting">Listening</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state waiting">Learning</div>
+    <div class="state-arrow">&rarr;</div>
+    <div class="state active">Forwarding</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>State</th>
+        <th>Receives BPDUs</th>
+        <th>Learns MACs</th>
+        <th>Forwards Data</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Blocking</strong></td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>No</td>
+        <td>20s (max age)</td>
+      </tr>
+      <tr>
+        <td><strong>Listening</strong></td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>No</td>
+        <td>15s (forward delay)</td>
+      </tr>
+      <tr>
+        <td><strong>Learning</strong></td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>No</td>
+        <td>15s (forward delay)</td>
+      </tr>
+      <tr>
+        <td><strong>Forwarding</strong></td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>Yes</td>
+        <td>Indefinite</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Classic STP convergence time: ~50 seconds.</strong> That's 20s (max age — time before a switch suspects a root bridge failure) + 15s (listening) + 15s (learning). During this window, traffic on affected paths is black-holed. This is unacceptable for modern workloads, which is why RSTP exists.
+  </div>
+
+  <!-- ===== STP TOPOLOGY DIAGRAM ===== -->
+  <h3>STP Topology Example</h3>
+
+  <div class="topology">
+    <div class="topo-node switch">
+      <div class="topo-icon">SW</div>
+      <div class="topo-label">Switch A</div>
+      <div class="topo-detail">Root Bridge (prio 4096)</div>
+    </div>
+    <div class="topo-link">===</div>
+    <div class="topo-node switch">
+      <div class="topo-icon">SW</div>
+      <div class="topo-label">Switch B</div>
+      <div class="topo-detail">Root Port: Gi0/1</div>
+    </div>
+    <div class="topo-link">===</div>
+    <div class="topo-node switch">
+      <div class="topo-icon">SW</div>
+      <div class="topo-label">Switch C</div>
+      <div class="topo-detail">Root Port: Gi0/1</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Reading the Topology</div>
+    <ul>
+      <li><strong>Switch A</strong> is the root bridge (lowest priority: 4096). All its ports are <strong>designated</strong> (forwarding).</li>
+      <li><strong>Switch B</strong> connects to A via Gi0/1 (root port, forwarding). B's port toward C is designated (forwarding).</li>
+      <li><strong>Switch C</strong> connects to B via Gi0/1 (root port, forwarding). C also has a redundant link back to A — that port on C is <strong>blocked</strong> because A's port is the designated port for that segment.</li>
+      <li>If the B-C link fails, C's blocked port toward A transitions to forwarding (after convergence), restoring connectivity.</li>
+    </ul>
+  </div>
+
+  <!-- ===== RSTP ===== -->
+  <h3>RSTP — Rapid Spanning Tree (IEEE 802.1w)</h3>
+
+  <p>RSTP replaced classic STP as the default on virtually all modern switches. It solves the convergence speed problem while maintaining backward compatibility.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">STP (802.1D)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Convergence: <strong>30–50 seconds</strong></li>
+          <li>5 port states (blocking, listening, learning, forwarding, disabled)</li>
+          <li>Only root bridge generates BPDUs — other switches relay them</li>
+          <li>Relies on timers for failover detection</li>
+          <li>Passive topology changes — waits for max age expiry</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">RSTP (802.1w)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Convergence: <strong>1–6 seconds</strong> (often sub-second)</li>
+          <li>3 port states (discarding, learning, forwarding)</li>
+          <li><strong>All switches</strong> generate BPDUs — faster failure detection</li>
+          <li>Proposal/agreement handshake for rapid transition</li>
+          <li>New role: <strong>alternate port</strong> (pre-computed backup root port) and <strong>backup port</strong></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">RSTP Port Roles (vs STP)</div>
+    <table>
+      <thead>
+        <tr>
+          <th>RSTP Role</th>
+          <th>STP Equivalent</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Root</strong></td>
+          <td>Root</td>
+          <td>Best path to root — same as STP</td>
+        </tr>
+        <tr>
+          <td><strong>Designated</strong></td>
+          <td>Designated</td>
+          <td>Forwarding port on each segment — same as STP</td>
+        </tr>
+        <tr>
+          <td><strong>Alternate</strong></td>
+          <td>Blocked</td>
+          <td>Backup root port — instantly takes over if the root port fails</td>
+        </tr>
+        <tr>
+          <td><strong>Backup</strong></td>
+          <td>(no equivalent)</td>
+          <td>Backup for a designated port on the same switch (rare — only with shared media)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tip">
+    <strong>Operational note:</strong> Always enable RSTP (or MSTP for multi-VLAN environments). Configure root bridge priority explicitly — don't leave it to chance. Enable BPDU Guard on access ports (ports connected to hosts) to prevent accidental loops from rogue switches. On Cisco: <code>spanning-tree portfast bpduguard default</code>. This will err-disable a port instantly if it receives a BPDU, which is exactly what you want on a server or workstation port.
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 10 — eBPF Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 10 — eBPF Fundamentals</h1>
+  <p class="subtitle">Sandboxed programs in the kernel — the programmable data plane</p>
+
+  <!-- ===== WHAT IS eBPF ===== -->
+  <h2>What Is eBPF?</h2>
+
+  <p>eBPF (extended Berkeley Packet Filter) allows you to run <strong>sandboxed, event-driven programs inside the Linux kernel</strong> without modifying kernel source code or loading kernel modules. Think of it as a safe, programmable virtual machine embedded in the kernel that lets you hook into virtually any kernel event — networking, tracing, security — and run custom logic at native speed.</p>
+
+  <div class="panel">
+    <div class="panel-title">Why This Matters for Infrastructure</div>
+    <ul>
+      <li><strong>No kernel recompilation</strong> — deploy new kernel-level logic without rebooting or rebuilding the kernel</li>
+      <li><strong>No kernel modules</strong> — no risk of crashing the kernel with buggy <code>.ko</code> modules</li>
+      <li><strong>Safety guaranteed</strong> — the kernel verifier statically analyzes every eBPF program before loading</li>
+      <li><strong>Near-native performance</strong> — JIT-compiled to native machine code, not interpreted</li>
+      <li><strong>Dynamic</strong> — load/unload programs at runtime, no downtime</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>In practice:</strong> eBPF is the technology behind Cilium (K8s CNI), Falco (runtime security), bpftrace (dynamic tracing), Katran (Facebook's L4 load balancer), and Cloudflare's DDoS mitigation. If you're running a modern Linux infrastructure, you're almost certainly running eBPF programs already.
+  </div>
+
+  <!-- ===== HISTORY ===== -->
+  <h2>History: BPF to eBPF</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">BPF (1992)</div>
+      <div class="desc">Berkeley Packet Filter — tcpdump's engine for filtering packets in the kernel</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">cBPF in Linux</div>
+      <div class="desc">"Classic" BPF — limited instruction set, packet filtering only</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">eBPF (2014+)</div>
+      <div class="desc">Extended BPF — general-purpose kernel programmability, 64-bit registers, maps, helpers</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Modern eBPF</div>
+      <div class="desc">CO-RE, BTF, bounded loops, BPF LSM, signed programs — production-grade</div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Feature</th>
+      <th>Classic BPF (cBPF)</th>
+      <th>Extended BPF (eBPF)</th>
+    </tr>
+    <tr>
+      <td>Registers</td>
+      <td>2 (32-bit)</td>
+      <td>11 (64-bit, R0-R10)</td>
+    </tr>
+    <tr>
+      <td>Instruction set</td>
+      <td>~30 instructions</td>
+      <td>~100+ instructions</td>
+    </tr>
+    <tr>
+      <td>Use case</td>
+      <td>Packet filtering only</td>
+      <td>Networking, tracing, security, profiling</td>
+    </tr>
+    <tr>
+      <td>Data sharing</td>
+      <td>None</td>
+      <td>eBPF maps (kernel <-> userspace)</td>
+    </tr>
+    <tr>
+      <td>JIT compilation</td>
+      <td>Optional, limited</td>
+      <td>Default on modern kernels</td>
+    </tr>
+    <tr>
+      <td>Helper functions</td>
+      <td>None</td>
+      <td>Extensive kernel-provided API</td>
+    </tr>
+  </table>
+
+  <!-- ===== VERIFIER ===== -->
+  <h2>The Verifier: The Safety Guarantee</h2>
+
+  <p>The eBPF verifier is a <strong>static analysis engine</strong> inside the kernel that inspects every eBPF program <em>before</em> it is loaded. If the verifier rejects a program, it never runs. This is the fundamental reason eBPF is safe to run in production kernels — it is mathematically impossible for a verified program to crash the kernel.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Write eBPF program</div>
+      <div class="desc">C or Rust, compiled to eBPF bytecode</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">bpf() syscall</div>
+      <div class="desc">Userspace requests program load</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="num">3</div>
+      <div class="label">Verifier</div>
+      <div class="desc">Static analysis — reject or accept</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">JIT Compile</div>
+      <div class="desc">Bytecode -> native machine code</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Attach to hook</div>
+      <div class="desc">XDP, tc, kprobe, tracepoint...</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What the Verifier Checks</div>
+    <div class="grid-2">
+      <div>
+        <h3>Safety Invariants</h3>
+        <ul>
+          <li><strong>No infinite loops</strong> — only bounded loops allowed (verifier must prove termination). Before kernel 5.3, loops were not allowed at all.</li>
+          <li><strong>No null pointer dereferences</strong> — every pointer must be checked before use</li>
+          <li><strong>Stack size limited to 512 bytes</strong> — prevents stack overflow in kernel context</li>
+          <li><strong>Memory access bounds checking</strong> — no out-of-bounds reads/writes</li>
+          <li><strong>All code paths must terminate</strong> — DAG analysis, no unreachable code</li>
+          <li><strong>Only approved helper functions</strong> — cannot call arbitrary kernel functions</li>
+        </ul>
+      </div>
+      <div>
+        <h3>How It Works</h3>
+        <ul>
+          <li>Walks all possible execution paths (DAG traversal)</li>
+          <li>Tracks register types and value ranges at each instruction</li>
+          <li>Ensures map accesses use correct key/value sizes</li>
+          <li>Verifies pointer arithmetic stays within bounds</li>
+          <li>Checks that <code>bpf_probe_read()</code> is used for kernel memory access</li>
+          <li>Complexity limit: max ~1M verified instructions (prevents verifier DoS)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Verifier complexity:</strong> The verifier is the biggest pain point in eBPF development. Programs that are logically correct may be rejected because the verifier can't prove they're safe. This is why toolchains like <code>libbpf</code> + CO-RE and higher-level frameworks like Cilium/bpftrace exist — they generate verifier-friendly code.
+  </div>
+
+  <!-- ===== JIT COMPILATION ===== -->
+  <h2>JIT Compilation</h2>
+
+  <p>After verification, eBPF bytecode is <strong>JIT-compiled to native machine instructions</strong> (x86_64, ARM64, etc.). This means eBPF programs run at near-native speed — there is no interpreter overhead in the hot path.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Without JIT (Interpreter)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Each eBPF instruction decoded at runtime</li>
+          <li>Switch-case dispatch per opcode</li>
+          <li>Significant overhead per packet/event</li>
+          <li>Still safe, just slower</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">With JIT (Default)</div>
+      <div class="comp-body">
+        <ul>
+          <li>eBPF bytecode translated to native instructions once</li>
+          <li>Direct CPU execution, no dispatch overhead</li>
+          <li>Performance within 5-10% of hand-written kernel C</li>
+          <li>Enabled by default: <code>net.core.bpf_jit_enable=1</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ sysctl net.core.bpf_jit_enable</div>
+    <div class="output">net.core.bpf_jit_enable = 1</div>
+    <br>
+    <div class="prompt">$ # Verify JIT is active for loaded programs:</div>
+    <div class="prompt">$ bpftool prog list</div>
+    <div class="output">6: xdp  name xdp_drop  tag abc123  gpl  <strong>jited</strong> 96B  loaded_at 2024-01-15</div>
+  </div>
+
+  <!-- ===== HOOK POINTS ===== -->
+  <h2>Hook Points: Where eBPF Programs Attach</h2>
+
+  <p>eBPF programs are <strong>event-driven</strong> — they execute when a specific kernel event fires. The "hook point" determines when and where your code runs. This is what makes eBPF so versatile: the same technology powers networking, observability, and security.</p>
+
+  <!-- Packet path flow diagram with hook points -->
+  <h3>Packet Path Through the Kernel (with eBPF Hook Points)</h3>
+
+  <div class="flow">
+    <div class="flow-step" style="border-color: #f87171;">
+      <div class="label">NIC (Hardware)</div>
+      <div class="desc">Packet arrives</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #e94560;">
+      <div class="label">XDP</div>
+      <div class="desc">Earliest hook. Before sk_buff allocation. Can DROP/PASS/TX/REDIRECT</div>
+      <span class="who developer">eBPF HOOK</span>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #fbbf24;">
+      <div class="label">tc ingress</div>
+      <div class="desc">Traffic control layer. Has full sk_buff metadata. Can classify/redirect</div>
+      <span class="who developer">eBPF HOOK</span>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Netfilter / iptables</div>
+      <div class="desc">Traditional firewall chains (PREROUTING, INPUT, FORWARD...)</div>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step" style="border-color: #a78bfa;">
+      <div class="label">Socket Layer</div>
+      <div class="desc">cgroup/socket eBPF hooks</div>
+      <span class="who developer">eBPF HOOK</span>
+    </div>
+    <div class="arrow">-></div>
+    <div class="flow-step">
+      <div class="label">Application</div>
+      <div class="desc">Userspace receives data</div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Hook Point</th>
+      <th>When It Fires</th>
+      <th>Use Cases</th>
+      <th>Performance</th>
+    </tr>
+    <tr>
+      <td><code>XDP</code></td>
+      <td>Packet arrives at NIC driver (pre-sk_buff)</td>
+      <td>DDoS mitigation, load balancing, packet filtering</td>
+      <td>Fastest — millions of pps</td>
+    </tr>
+    <tr>
+      <td><code>tc</code> (traffic control)</td>
+      <td>Ingress/egress after initial processing</td>
+      <td>Packet mangling, policy enforcement, redirects</td>
+      <td>Very fast, full sk_buff access</td>
+    </tr>
+    <tr>
+      <td><code>cgroup</code></td>
+      <td>Socket operations for a cgroup</td>
+      <td>Per-container networking policy, connect/bind interception</td>
+      <td>Per-socket granularity</td>
+    </tr>
+    <tr>
+      <td><code>socket_filter</code></td>
+      <td>Per-socket packet filtering</td>
+      <td>Application-level packet inspection</td>
+      <td>Socket-scoped</td>
+    </tr>
+    <tr>
+      <td><code>kprobes</code></td>
+      <td>Any kernel function entry/return (dynamic)</td>
+      <td>Debugging, tracing, profiling kernel internals</td>
+      <td>Overhead per invocation</td>
+    </tr>
+    <tr>
+      <td><code>tracepoints</code></td>
+      <td>Static kernel instrumentation points</td>
+      <td>Stable tracing interface (survives kernel upgrades)</td>
+      <td>Lower overhead than kprobes</td>
+    </tr>
+    <tr>
+      <td><code>fentry/fexit</code></td>
+      <td>Function entry/exit (modern, BTF-based)</td>
+      <td>Safer, faster alternative to kprobes (5.5+)</td>
+      <td>Near-zero overhead</td>
+    </tr>
+    <tr>
+      <td><code>LSM</code></td>
+      <td>Linux Security Module hooks</td>
+      <td>Security policy enforcement (file access, process creation)</td>
+      <td>Security-critical path</td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Key insight:</strong> The earlier in the packet path you attach, the faster you can act — but the less metadata you have. XDP sees raw packets (no sk_buff), so it's blazing fast but has limited context. tc sees full sk_buff metadata. Choose the right hook for your use case.
+  </div>
+
+  <!-- ===== eBPF MAPS ===== -->
+  <h2>eBPF Maps: Shared Data Structures</h2>
+
+  <p>eBPF maps are <strong>kernel-resident data structures</strong> that serve as the primary communication channel between eBPF programs (kernel space) and userspace applications. Maps persist across program invocations — they're how you maintain state, share configuration, and export telemetry.</p>
+
+  <div class="panel">
+    <div class="panel-title">Map Architecture</div>
+    <div class="topology">
+      <div class="topo-node server">
+        <div class="topo-label">Userspace App</div>
+        <div class="topo-detail">bpftool / libbpf / Go / Rust</div>
+      </div>
+      <div class="topo-link">--- bpf() syscall ---</div>
+      <div class="topo-node router">
+        <div class="topo-label">eBPF Map</div>
+        <div class="topo-detail">Kernel memory</div>
+      </div>
+      <div class="topo-link">--- direct access ---</div>
+      <div class="topo-node host">
+        <div class="topo-label">eBPF Program</div>
+        <div class="topo-detail">Runs on kernel events</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Map Type</th>
+      <th>Structure</th>
+      <th>Lookup</th>
+      <th>Use Cases</th>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_HASH</code></td>
+      <td>Key-value hash table</td>
+      <td>O(1)</td>
+      <td>Connection tracking, rate limiting, blocklists</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_ARRAY</code></td>
+      <td>Fixed-size indexed array</td>
+      <td>O(1)</td>
+      <td>Configuration, counters, per-CPU stats</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_RINGBUF</code></td>
+      <td>Lock-free ring buffer</td>
+      <td>FIFO</td>
+      <td>Stream events to userspace efficiently (preferred over perf_event)</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_LRU_HASH</code></td>
+      <td>Hash table with LRU eviction</td>
+      <td>O(1)</td>
+      <td>Bounded-size caches, conntrack tables with auto-cleanup</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_PERCPU_HASH</code></td>
+      <td>Per-CPU hash (no locks)</td>
+      <td>O(1)</td>
+      <td>High-throughput counters, stats without lock contention</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_PERCPU_ARRAY</code></td>
+      <td>Per-CPU array (no locks)</td>
+      <td>O(1)</td>
+      <td>Per-CPU scratch space, histogram buckets</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_LPM_TRIE</code></td>
+      <td>Longest prefix match trie</td>
+      <td>O(log n)</td>
+      <td>IP prefix/CIDR matching, routing tables</td>
+    </tr>
+    <tr>
+      <td><code>BPF_MAP_TYPE_PROG_ARRAY</code></td>
+      <td>Array of eBPF program fds</td>
+      <td>O(1)</td>
+      <td>Tail calls — chain eBPF programs together</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Per-CPU maps are critical for performance:</strong> In a networking hot path processing millions of packets per second, lock contention on shared maps would destroy throughput. Per-CPU variants give each core its own copy — userspace aggregates when reading.
+  </div>
+
+  <h3>Map Lifecycle</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>Create</strong> — <code>bpf(BPF_MAP_CREATE, ...)</code> at program load time (usually via libbpf)</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Pin</strong> — optionally pin to <code>/sys/fs/bpf/</code> so maps persist beyond process lifetime</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>Use</strong> — eBPF programs call <code>bpf_map_lookup_elem()</code>, <code>bpf_map_update_elem()</code>, <code>bpf_map_delete_elem()</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Read from userspace</strong> — control plane reads/writes maps via <code>bpf()</code> syscall or <code>bpftool map dump</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Cleanup</strong> — maps are reference-counted; destroyed when no programs or file descriptors reference them</div>
+    </div>
+  </div>
+
+  <!-- ===== HELPER FUNCTIONS ===== -->
+  <h2>Helper Functions</h2>
+
+  <p>eBPF programs cannot call arbitrary kernel functions. Instead, the kernel exposes a curated set of <strong>helper functions</strong> that eBPF programs can invoke. The verifier ensures only valid helpers are called for the given program type.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Map Operations</div>
+      <pre><code><span class="cm">// Lookup a value by key</span>
+<span class="type">void</span> *<span class="fn">bpf_map_lookup_elem</span>(&map, &key);
+
+<span class="cm">// Insert or update</span>
+<span class="type">int</span> <span class="fn">bpf_map_update_elem</span>(&map, &key, &val, flags);
+
+<span class="cm">// Delete an entry</span>
+<span class="type">int</span> <span class="fn">bpf_map_delete_elem</span>(&map, &key);</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Packet Operations</div>
+      <pre><code><span class="cm">// Redirect packet to another interface</span>
+<span class="type">int</span> <span class="fn">bpf_redirect</span>(ifindex, flags);
+
+<span class="cm">// Modify packet bytes</span>
+<span class="type">int</span> <span class="fn">bpf_skb_store_bytes</span>(skb, off, &data, len, flags);
+
+<span class="cm">// Adjust packet headroom</span>
+<span class="type">int</span> <span class="fn">bpf_xdp_adjust_head</span>(xdp_md, delta);</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Tracing & Context</div>
+      <pre><code><span class="cm">// Get current PID and TID</span>
+<span class="type">u64</span> <span class="fn">bpf_get_current_pid_tgid</span>();
+
+<span class="cm">// Safely read kernel memory</span>
+<span class="type">int</span> <span class="fn">bpf_probe_read</span>(&dst, size, &src);
+
+<span class="cm">// Get current timestamp (ns)</span>
+<span class="type">u64</span> <span class="fn">bpf_ktime_get_ns</span>();</code></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Output & Debug</div>
+      <pre><code><span class="cm">// Send event to ring buffer</span>
+<span class="type">int</span> <span class="fn">bpf_ringbuf_output</span>(&ringbuf, &data, size, flags);
+
+<span class="cm">// Print to trace pipe (debug only)</span>
+<span class="type">int</span> <span class="fn">bpf_trace_printk</span>(fmt, fmt_size, ...);
+
+<span class="cm">// Get current cgroup id</span>
+<span class="type">u64</span> <span class="fn">bpf_get_current_cgroup_id</span>();</code></pre>
+    </div>
+  </div>
+
+  <!-- ===== PROGRAM TYPES ===== -->
+  <h2>eBPF Program Types</h2>
+
+  <p>Each eBPF program has a <strong>type</strong> that determines which hook points it can attach to, which helpers it can call, and what context (input data) it receives. The verifier enforces these constraints.</p>
+
+  <table>
+    <tr>
+      <th>Program Type</th>
+      <th>Context Struct</th>
+      <th>Attach Point</th>
+      <th>Primary Use</th>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_XDP</code></td>
+      <td><code>xdp_md</code></td>
+      <td>NIC driver (pre-sk_buff)</td>
+      <td>Packet filtering, DDoS, load balancing</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_SCHED_CLS</code></td>
+      <td><code>__sk_buff</code></td>
+      <td>tc ingress/egress</td>
+      <td>Traffic shaping, policy, packet mangling</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_CGROUP_SKB</code></td>
+      <td><code>__sk_buff</code></td>
+      <td>cgroup ingress/egress</td>
+      <td>Per-container network policy</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_SOCKET_FILTER</code></td>
+      <td><code>__sk_buff</code></td>
+      <td>Socket</td>
+      <td>Per-socket packet filtering</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_KPROBE</code></td>
+      <td><code>pt_regs</code></td>
+      <td>Any kernel function</td>
+      <td>Dynamic tracing, debugging</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_TRACEPOINT</code></td>
+      <td>Varies per tracepoint</td>
+      <td>Static kernel tracepoints</td>
+      <td>Stable tracing interface</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_SOCK_OPS</code></td>
+      <td><code>bpf_sock_ops</code></td>
+      <td>Socket operations</td>
+      <td>TCP tuning, socket-level decisions</td>
+    </tr>
+    <tr>
+      <td><code>BPF_PROG_TYPE_LSM</code></td>
+      <td>Varies per hook</td>
+      <td>LSM security hooks</td>
+      <td>Security policy enforcement</td>
+    </tr>
+  </table>
+
+  <!-- ===== ARCHITECTURE SUMMARY ===== -->
+  <h2>eBPF Architecture Summary</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Complete Picture</div>
+    <div class="mental-model">
+      <div class="mm-box mm-figma">
+        <div class="mm-title">Userspace (Control Plane)</div>
+        <div class="mm-detail">
+          libbpf / cilium-agent / bpftool<br>
+          Loads programs, reads/writes maps<br>
+          Configures policy and routes
+        </div>
+      </div>
+      <div class="mm-arrow">bpf() syscall</div>
+      <div class="mm-box mm-code">
+        <div class="mm-title">Kernel (Data Plane)</div>
+        <div class="mm-detail">
+          Verifier -> JIT -> Hook<br>
+          eBPF programs execute on events<br>
+          Maps store shared state
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>The split architecture pattern:</strong> In production eBPF systems (Cilium, Falco, Katran), you always have a <strong>userspace control plane</strong> (Go, Rust, C++) that manages eBPF programs and maps, plus <strong>kernel data plane</strong> eBPF programs that do the fast-path work. The control plane configures policy via maps; the data plane enforces it at line rate.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">eBPF Development Ecosystem</div>
+    <table>
+      <tr>
+        <th>Tool / Library</th>
+        <th>Language</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>libbpf</code></td>
+        <td>C</td>
+        <td>Reference library for loading eBPF programs. CO-RE (Compile Once, Run Everywhere)</td>
+      </tr>
+      <tr>
+        <td><code>cilium/ebpf</code></td>
+        <td>Go</td>
+        <td>Pure-Go library for eBPF. Used by Cilium, Hubble, Tetragon</td>
+      </tr>
+      <tr>
+        <td><code>aya</code></td>
+        <td>Rust</td>
+        <td>Write eBPF programs and userspace in Rust. No C dependency</td>
+      </tr>
+      <tr>
+        <td><code>bpftrace</code></td>
+        <td>DSL</td>
+        <td>High-level tracing language (like awk for eBPF). One-liners for debugging</td>
+      </tr>
+      <tr>
+        <td><code>bpftool</code></td>
+        <td>CLI</td>
+        <td>Inspect loaded eBPF programs, maps, links. Essential debugging tool</td>
+      </tr>
+      <tr>
+        <td><code>bcc</code></td>
+        <td>Python/C</td>
+        <td>BPF Compiler Collection. Older toolchain, being superseded by libbpf + CO-RE</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="terminal">
+    <div class="prompt">$ # List all loaded eBPF programs</div>
+    <div class="prompt">$ bpftool prog list</div>
+    <div class="output">6: xdp  name xdp_firewall  tag a1b2c3d4  gpl  jited 208B</div>
+    <div class="output">12: sched_cls  name tc_policy  tag e5f6a7b8  gpl  jited 384B</div>
+    <br>
+    <div class="prompt">$ # Dump a map's contents</div>
+    <div class="prompt">$ bpftool map dump id 4</div>
+    <div class="output">key: 0a 00 01 01  value: 00 00 00 42</div>
+    <div class="output">key: 0a 00 01 02  value: 00 00 01 a3</div>
+    <br>
+    <div class="prompt">$ # One-liner: count syscalls by process</div>
+    <div class="prompt">$ bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'</div>
+    <div class="output">Attaching 1 probe...</div>
+    <div class="output">@[kubelet]: 4521</div>
+    <div class="output">@[containerd]: 3102</div>
+    <div class="output">@[cilium-agent]: 1847</div>
+  </div>
+
+</body>
+</html>
