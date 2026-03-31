@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Frontend Learning</title>
+  <title>Learning</title>
   <link rel="stylesheet" href="styles/notes.css">
   <style>
     .topic-grid {
@@ -44,8 +44,11 @@
 </head>
 <body>
 
-  <h1>Frontend Learning</h1>
+  <h1>Learning</h1>
   <p class="subtitle">Notes, examples, and practice files — organized by topic</p>
+
+  <!-- ===== FRONTEND TRACK ===== -->
+  <h2 style="color: #e94560; margin: 40px 0 0;">Frontend</h2>
 
   <div class="section-label">Fundamentals</div>
   <div class="topic-grid">
@@ -243,6 +246,172 @@
         <li><a href="16-ecosystem/storybook.html">Storybook</a></li>
         <li><a href="16-ecosystem/e2e-testing.html">E2E Testing (Playwright)</a></li>
         <li><a href="16-ecosystem/graphql.html">GraphQL</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <!-- ===== NETWORKING TRACK ===== -->
+  <h2 style="color: #34d399; margin: 60px 0 0;">Networking</h2>
+
+  <div class="section-label">Foundations</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 01 — Fundamentals</h3>
+      <p class="desc">OSI model, TCP/IP model, encapsulation — how data moves across networks</p>
+      <ul>
+        <li><a href="net-01-fundamentals/osi-model.html">The OSI Model</a></li>
+        <li><a href="net-01-fundamentals/tcp-ip-model.html">The TCP/IP Model</a></li>
+        <li><a href="net-01-fundamentals/encapsulation.html">Encapsulation</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 02 — Ethernet & Switching</h3>
+      <p class="desc">Layer 2 — frames, MAC addresses, switches, VLANs, and STP</p>
+      <ul>
+        <li><a href="net-02-ethernet-switching/ethernet.html">Ethernet</a></li>
+        <li><a href="net-02-ethernet-switching/switching.html">Switching</a></li>
+        <li><a href="net-02-ethernet-switching/vlans.html">VLANs (802.1Q)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 03 — IP & Routing</h3>
+      <p class="desc">Layer 3 — IPv4, IPv6, subnetting, routing tables, OSPF, and BGP</p>
+      <ul>
+        <li><a href="net-03-ip-routing/ipv4.html">IPv4</a></li>
+        <li><a href="net-03-ip-routing/ipv6.html">IPv6</a></li>
+        <li><a href="net-03-ip-routing/routing.html">IP Routing</a></li>
+        <li><a href="net-03-ip-routing/dynamic-routing.html">Dynamic Routing (OSPF & BGP)</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Transport & Application</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 04 — TCP & UDP</h3>
+      <p class="desc">Layer 4 — reliable vs fast transport, state machines, ports, and sockets</p>
+      <ul>
+        <li><a href="net-04-tcp-udp/tcp-deep-dive.html">TCP Deep Dive</a></li>
+        <li><a href="net-04-tcp-udp/tcp-states.html">TCP State Machine</a></li>
+        <li><a href="net-04-tcp-udp/udp.html">UDP</a></li>
+        <li><a href="net-04-tcp-udp/ports-sockets.html">Ports & Sockets</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 05 — DNS</h3>
+      <p class="desc">Name resolution — record types, resolution flow, DNSSEC, and encrypted DNS</p>
+      <ul>
+        <li><a href="net-05-dns/how-dns-works.html">How DNS Works</a></li>
+        <li><a href="net-05-dns/record-types.html">Record Types</a></li>
+        <li><a href="net-05-dns/dns-advanced.html">Advanced DNS</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 06 — HTTP & TLS</h3>
+      <p class="desc">Application layer — HTTP/1.1 through HTTP/3, TLS 1.3, mTLS, certificates</p>
+      <ul>
+        <li><a href="net-06-http-tls/http.html">HTTP (1.1 / 2 / 3)</a></li>
+        <li><a href="net-06-http-tls/tls.html">TLS</a></li>
+        <li><a href="net-06-http-tls/mtls-certs.html">mTLS & Certificate Management</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Security & Tunnels</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 07 — Firewalls, NAT & VPN</h3>
+      <p class="desc">iptables/nftables, NAT mechanics, IPsec, OpenVPN, and WireGuard</p>
+      <ul>
+        <li><a href="net-07-firewalls-nat-vpn/firewalls.html">Firewalls</a></li>
+        <li><a href="net-07-firewalls-nat-vpn/nat.html">NAT</a></li>
+        <li><a href="net-07-firewalls-nat-vpn/vpn.html">VPNs</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 08 — NAT Traversal & Tailscale</h3>
+      <p class="desc">STUN/TURN/ICE, hole punching, Tailscale architecture, MagicDNS, ACLs</p>
+      <ul>
+        <li><a href="net-08-nat-traversal-tailscale/nat-types.html">NAT Types & Behavior</a></li>
+        <li><a href="net-08-nat-traversal-tailscale/stun-turn-ice.html">STUN, TURN & ICE</a></li>
+        <li><a href="net-08-nat-traversal-tailscale/tailscale.html">Tailscale Architecture</a></li>
+        <li><a href="net-08-nat-traversal-tailscale/tailscale-features.html">Tailscale Features</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Linux & Kernel Networking</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 09 — Linux Internals</h3>
+      <p class="desc">Network namespaces, veth, bridges, netfilter, iproute2, tc, and sysctl</p>
+      <ul>
+        <li><a href="net-09-linux-internals/namespaces-veth.html">Namespaces & Virtual Interfaces</a></li>
+        <li><a href="net-09-linux-internals/netfilter.html">Netfilter Internals</a></li>
+        <li><a href="net-09-linux-internals/iproute2.html">iproute2 & Traffic Control</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 10 — eBPF & XDP</h3>
+      <p class="desc">Programmable kernel networking — eBPF verifier, XDP, tc-bpf, and Cilium</p>
+      <ul>
+        <li><a href="net-10-ebpf-xdp/ebpf-fundamentals.html">eBPF Fundamentals</a></li>
+        <li><a href="net-10-ebpf-xdp/xdp-tc.html">XDP & tc-bpf</a></li>
+        <li><a href="net-10-ebpf-xdp/cilium.html">Cilium</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Infrastructure & Provisioning</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 11 — Cloud-Init</h3>
+      <p class="desc">Instance initialization — boot stages, user-data, cloud-config, Netplan</p>
+      <ul>
+        <li><a href="net-11-cloud-init/cloud-init-basics.html">Cloud-Init Basics</a></li>
+        <li><a href="net-11-cloud-init/user-data.html">User-Data & Cloud-Config</a></li>
+        <li><a href="net-11-cloud-init/network-config.html">Network Configuration</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Container & Kubernetes Networking</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Net 12 — Container Networking</h3>
+      <p class="desc">Docker networking from the kernel up, and the CNI plugin specification</p>
+      <ul>
+        <li><a href="net-12-container-networking/docker-networking.html">Docker Networking</a></li>
+        <li><a href="net-12-container-networking/cni.html">CNI (Container Network Interface)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Net 13 — Kubernetes Networking</h3>
+      <p class="desc">Pod networking, Services, Ingress, Gateway API, NetworkPolicy, service mesh</p>
+      <ul>
+        <li><a href="net-13-kubernetes-networking/pod-networking.html">Pod Networking</a></li>
+        <li><a href="net-13-kubernetes-networking/services.html">Services</a></li>
+        <li><a href="net-13-kubernetes-networking/ingress-gateway.html">Ingress & Gateway API</a></li>
+        <li><a href="net-13-kubernetes-networking/network-policies.html">Network Policies</a></li>
       </ul>
     </div>
 
