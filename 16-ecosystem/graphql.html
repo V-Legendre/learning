@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — GraphQL</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>16 — GraphQL</h1>
+  <p class="subtitle">A query language for APIs — the client asks for exactly what it needs, nothing more.</p>
+
+  <!-- ===== WHAT IS GRAPHQL ===== -->
+  <h2>What Is GraphQL?</h2>
+
+  <div class="panel">
+    <div class="panel-title">Core idea</div>
+    <p>GraphQL is a query language and runtime for APIs. Instead of multiple REST endpoints returning fixed data shapes, you have <strong>one endpoint</strong> where the client specifies the exact fields it needs. The server returns only those fields.</p>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> GraphQL is like writing SQL queries from the frontend. REST is like calling stored procedures or pre-defined views — the backend decides what data comes back. GraphQL lets the frontend decide.
+  </div>
+
+  <!-- ===== GRAPHQL VS REST ===== -->
+  <h2>GraphQL vs REST</h2>
+
+  <p>Imagine fetching a user's profile page that shows their name, their 5 most recent posts, and each post's comments.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header code">REST — 3 requests</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Request 1: Get user</span>
+<span class="fn">GET</span> <span class="str">/api/users/42</span>
+<span class="cm">// Returns: id, name, email, avatar,
+// bio, createdAt, ... (20 fields)
+// You only need name + avatar</span>
+
+<span class="cm">// Request 2: Get posts</span>
+<span class="fn">GET</span> <span class="str">/api/users/42/posts?limit=5</span>
+<span class="cm">// Returns: id, title, body, tags,
+// likes, shares, ... (15 fields per post)
+// You only need title + createdAt</span>
+
+<span class="cm">// Request 3: Get comments for each post</span>
+<span class="fn">GET</span> <span class="str">/api/posts/101/comments</span>
+<span class="fn">GET</span> <span class="str">/api/posts/102/comments</span>
+<span class="cm">// ... N+1 problem</span></code></pre>
+        <p style="color: #f87171; margin-top: 10px;">Over-fetching (too many fields) + under-fetching (too many requests)</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header jsx">GraphQL — 1 request</div>
+      <div class="comp-body">
+<pre><code><span class="cm"># Single query, exact data needed</span>
+<span class="kw">query</span> {
+  <span class="fn">user</span>(<span class="attr">id</span>: <span class="num">42</span>) {
+    <span class="prop">name</span>
+    <span class="prop">avatar</span>
+    <span class="fn">posts</span>(<span class="attr">limit</span>: <span class="num">5</span>) {
+      <span class="prop">title</span>
+      <span class="prop">createdAt</span>
+      <span class="prop">comments</span> {
+        <span class="prop">text</span>
+        <span class="prop">author</span> {
+          <span class="prop">name</span>
+        }
+      }
+    }
+  }
+}</code></pre>
+        <p style="color: #34d399; margin-top: 10px;">Exactly the fields you need, in one round trip</p>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>REST</th><th>GraphQL</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Endpoints</td><td>Many (<code>/users</code>, <code>/posts</code>, <code>/comments</code>)</td><td>One (<code>/graphql</code>)</td></tr>
+      <tr><td>Data shape</td><td>Server decides</td><td>Client decides</td></tr>
+      <tr><td>Over-fetching</td><td>Common (get all fields)</td><td>Never (pick fields)</td></tr>
+      <tr><td>Under-fetching</td><td>Common (N+1 requests)</td><td>Rare (nested queries)</td></tr>
+      <tr><td>Versioning</td><td>URL versioning (<code>/v1</code>, <code>/v2</code>)</td><td>Schema evolution (add fields, deprecate old ones)</td></tr>
+      <tr><td>Caching</td><td>Easy (HTTP cache by URL)</td><td>Harder (single URL, normalized cache)</td></tr>
+      <tr><td>Type system</td><td>Optional (OpenAPI)</td><td>Built-in (schema is the contract)</td></tr>
+      <tr><td>Learning curve</td><td>Low</td><td>Medium</td></tr>
+      <tr><td>File uploads</td><td>Native</td><td>Requires extra spec</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== KEY CONCEPTS ===== -->
+  <h2>Key Concepts</h2>
+
+  <h3>Schema — The Type System</h3>
+
+  <p>The server defines a schema that describes all available data and operations. This is the contract between frontend and backend.</p>
+
+<pre><code><span class="cm"># Schema definition (server side)</span>
+<span class="kw">type</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">ID!</span>
+  <span class="prop">name</span>: <span class="type">String!</span>
+  <span class="prop">email</span>: <span class="type">String!</span>
+  <span class="prop">posts</span>: [<span class="type">Post!</span>]!
+}
+
+<span class="kw">type</span> <span class="type">Post</span> {
+  <span class="prop">id</span>: <span class="type">ID!</span>
+  <span class="prop">title</span>: <span class="type">String!</span>
+  <span class="prop">body</span>: <span class="type">String!</span>
+  <span class="prop">author</span>: <span class="type">User!</span>
+  <span class="prop">comments</span>: [<span class="type">Comment!</span>]!
+}
+
+<span class="kw">type</span> <span class="type">Query</span> {
+  <span class="fn">user</span>(<span class="attr">id</span>: <span class="type">ID!</span>): <span class="type">User</span>
+  <span class="fn">posts</span>(<span class="attr">limit</span>: <span class="type">Int</span>): [<span class="type">Post!</span>]!
+}
+
+<span class="kw">type</span> <span class="type">Mutation</span> {
+  <span class="fn">createPost</span>(<span class="attr">title</span>: <span class="type">String!</span>, <span class="attr">body</span>: <span class="type">String!</span>): <span class="type">Post!</span>
+  <span class="fn">deletePost</span>(<span class="attr">id</span>: <span class="type">ID!</span>): <span class="type">Boolean!</span>
+}</code></pre>
+
+  <div class="note">
+    <strong><code>!</code> means non-nullable.</strong> <code>String!</code> = always a string, never null. <code>[Post!]!</code> = always an array (never null), containing non-null Posts. Like TypeScript's strict null checks but in the schema.
+  </div>
+
+  <h3>Queries — Read Data</h3>
+
+<pre><code><span class="cm"># Client sends this query</span>
+<span class="kw">query</span> <span class="fn">GetUser</span> {
+  <span class="fn">user</span>(<span class="attr">id</span>: <span class="str">"42"</span>) {
+    <span class="prop">name</span>
+    <span class="prop">email</span>
+    <span class="prop">posts</span> {
+      <span class="prop">title</span>
+    }
+  }
+}
+
+<span class="cm"># Server responds with exactly this shape</span>
+{
+  <span class="str">"data"</span>: {
+    <span class="str">"user"</span>: {
+      <span class="str">"name"</span>: <span class="str">"Alice"</span>,
+      <span class="str">"email"</span>: <span class="str">"alice@example.com"</span>,
+      <span class="str">"posts"</span>: [
+        { <span class="str">"title"</span>: <span class="str">"My First Post"</span> },
+        { <span class="str">"title"</span>: <span class="str">"GraphQL Is Neat"</span> }
+      ]
+    }
+  }
+}</code></pre>
+
+  <h3>Mutations — Write Data</h3>
+
+<pre><code><span class="kw">mutation</span> <span class="fn">CreatePost</span> {
+  <span class="fn">createPost</span>(<span class="attr">title</span>: <span class="str">"Hello World"</span>, <span class="attr">body</span>: <span class="str">"My first post"</span>) {
+    <span class="prop">id</span>
+    <span class="prop">title</span>
+    <span class="prop">author</span> {
+      <span class="prop">name</span>
+    }
+  }
+}</code></pre>
+
+  <h3>Subscriptions — Real-Time Data</h3>
+
+<pre><code><span class="cm"># Subscribe to new messages (WebSocket)</span>
+<span class="kw">subscription</span> <span class="fn">OnNewMessage</span> {
+  <span class="fn">messageAdded</span>(<span class="attr">channelId</span>: <span class="str">"general"</span>) {
+    <span class="prop">text</span>
+    <span class="prop">sender</span> {
+      <span class="prop">name</span>
+    }
+    <span class="prop">createdAt</span>
+  }
+}</code></pre>
+
+  <!-- ===== CLIENT LIBRARIES ===== -->
+  <h2>Client Libraries</h2>
+
+  <table>
+    <thead>
+      <tr><th>Library</th><th>Size</th><th>Philosophy</th><th>Best for</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Apollo Client</strong></td>
+        <td>~40KB</td>
+        <td>Full-featured: normalized cache, devtools, local state, subscriptions</td>
+        <td>Large apps with complex caching needs</td>
+      </tr>
+      <tr>
+        <td><strong>urql</strong></td>
+        <td>~15KB</td>
+        <td>Lightweight, extensible via exchanges (plugins), simpler mental model</td>
+        <td>Most projects — good default choice</td>
+      </tr>
+      <tr>
+        <td><strong>graphql-request</strong></td>
+        <td>~5KB</td>
+        <td>Minimal — just a fetch wrapper, no cache</td>
+        <td>Simple scripts, SSR data fetching</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Basic Apollo Client Usage</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useQuery</span>, <span class="fn">gql</span> } <span class="kw">from</span> <span class="str">"@apollo/client"</span>
+
+<span class="kw">const</span> GET_USERS = <span class="fn">gql</span><span class="str">`
+  query GetUsers {
+    users {
+      id
+      name
+      email
+    }
+  }
+`</span>
+
+<span class="kw">const</span> <span class="fn">UserList</span> = () => {
+  <span class="kw">const</span> { loading, error, data } = <span class="fn">useQuery</span>(GET_USERS)
+
+  <span class="kw">if</span> (loading) <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>Loading...<span class="tag">&lt;/p&gt;</span>
+  <span class="kw">if</span> (error) <span class="kw">return</span> <span class="tag">&lt;p&gt;</span>Error: {error.message}<span class="tag">&lt;/p&gt;</span>
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;ul&gt;</span>
+      {data.users.<span class="fn">map</span>((user) => (
+        <span class="tag">&lt;li</span> <span class="attr">key</span>={user.id}<span class="tag">&gt;</span>{user.name}<span class="tag">&lt;/li&gt;</span>
+      ))}
+    <span class="tag">&lt;/ul&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Notice the similarity to TanStack Query.</strong> The hooks pattern (<code>useQuery</code> returning <code>{ loading, error, data }</code>) is the same concept. If you know TanStack Query, GraphQL clients feel familiar — the difference is the query language, not the React integration.
+  </div>
+
+  <!-- ===== CODE GENERATION ===== -->
+  <h2>TypeScript + GraphQL Codegen</h2>
+
+  <p>One of GraphQL's best features: <strong>auto-generate TypeScript types from your schema</strong>. No manual type definitions.</p>
+
+<pre><code><span class="cm">// Without codegen: manual types that might drift</span>
+<span class="kw">interface</span> <span class="type">User</span> {
+  <span class="prop">id</span>: <span class="type">string</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">email</span>: <span class="type">string</span>  <span class="cm">// did the server add a field? remove one? you don't know</span>
+}
+
+<span class="cm">// With codegen: types are auto-generated from the schema</span>
+<span class="cm">// Run: pnpm graphql-codegen</span>
+<span class="cm">// Generates typed hooks automatically:</span>
+<span class="kw">const</span> { data } = <span class="fn">useGetUsersQuery</span>()
+<span class="cm">// data.users[0].name — fully typed, autocomplete works</span>
+<span class="cm">// data.users[0].nonExistent — TypeScript error!</span></code></pre>
+
+  <div class="tip">
+    <strong>GraphQL Codegen</strong> (<code>@graphql-codegen/cli</code>) reads your schema + queries and generates TypeScript types and typed React hooks. It's the main reason GraphQL has excellent TypeScript DX.
+  </div>
+
+  <!-- ===== WHEN TO USE ===== -->
+  <h2>When GraphQL Is Worth It</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">GraphQL shines when...</div>
+      <ul>
+        <li>Multiple clients need different data shapes (web, mobile, third-party)</li>
+        <li>Complex, deeply nested data relationships</li>
+        <li>Backend team is separate from frontend team (schema = contract)</li>
+        <li>You want auto-generated TypeScript types from the schema</li>
+        <li>You need real-time subscriptions</li>
+        <li>Large, evolving APIs where versioning is painful</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">REST is simpler when...</div>
+      <ul>
+        <li>Simple CRUD with one client (you control both ends)</li>
+        <li>Small API surface area</li>
+        <li>You want simple HTTP caching (each URL = cacheable resource)</li>
+        <li>File uploads are a core use case</li>
+        <li>Team is unfamiliar with GraphQL and there's no time to learn</li>
+        <li>Most projects should start with REST</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Our roadmap uses REST + TanStack Query.</strong> For most apps (especially those behind a login where SEO doesn't matter), REST with a good caching layer (TanStack Query) is simpler and sufficient. GraphQL adds value when the data graph is complex or when you have multiple consumers. Don't adopt it just because it's trendy.
+  </div>
+
+  <!-- ===== COMMON CONCERNS ===== -->
+  <h2>Common Concerns</h2>
+
+  <table>
+    <thead>
+      <tr><th>Concern</th><th>Reality</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>"Isn't it slow?"</td>
+        <td>Not inherently. Performance depends on your resolvers and query complexity, just like REST depends on your endpoints. Use <code>dataloader</code> to batch database queries.</td>
+      </tr>
+      <tr>
+        <td>"Can clients query anything?"</td>
+        <td>You control the schema. Use depth limiting, query complexity analysis, and persisted queries to prevent abuse.</td>
+      </tr>
+      <tr>
+        <td>"How do I cache?"</td>
+        <td>Apollo and urql have normalized caches. Not as simple as HTTP caching, but more powerful for complex data relationships.</td>
+      </tr>
+      <tr>
+        <td>"Do I need to rewrite my backend?"</td>
+        <td>No. A GraphQL server can sit in front of existing REST APIs, databases, or microservices. It's a gateway layer.</td>
+      </tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

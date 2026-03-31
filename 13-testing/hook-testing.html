@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>13 — Hook & Store Testing</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>13 — Hook & Store Testing</h1>
+  <p class="subtitle">Testing custom hooks, Zustand stores, and TanStack Query hooks outside of components.</p>
+
+  <!-- ===== RENDER HOOK ===== -->
+  <h2>renderHook — Testing Hooks in Isolation</h2>
+
+  <p>Hooks can only run inside React components. <code>renderHook</code> creates a minimal wrapper component so you can test hooks directly.</p>
+
+<pre><code><span class="kw">import</span> { <span class="fn">renderHook</span>, <span class="fn">act</span> } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+<span class="kw">import</span> { <span class="fn">useCounter</span> } <span class="kw">from</span> <span class="str">"./useCounter"</span>
+
+<span class="fn">describe</span>(<span class="str">"useCounter"</span>, () => {
+  <span class="fn">it</span>(<span class="str">"starts at initial value"</span>, () => {
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() => <span class="fn">useCounter</span>(<span class="num">10</span>))
+
+    <span class="fn">expect</span>(result.current.count).<span class="fn">toBe</span>(<span class="num">10</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"increments the count"</span>, () => {
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() => <span class="fn">useCounter</span>(<span class="num">0</span>))
+
+    <span class="cm">// Wrap state updates in act()</span>
+    <span class="fn">act</span>(() => {
+      result.current.<span class="fn">increment</span>()
+    })
+
+    <span class="fn">expect</span>(result.current.count).<span class="fn">toBe</span>(<span class="num">1</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"resets to initial value"</span>, () => {
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() => <span class="fn">useCounter</span>(<span class="num">5</span>))
+
+    <span class="fn">act</span>(() => {
+      result.current.<span class="fn">increment</span>()
+      result.current.<span class="fn">increment</span>()
+      result.current.<span class="fn">reset</span>()
+    })
+
+    <span class="fn">expect</span>(result.current.count).<span class="fn">toBe</span>(<span class="num">5</span>)
+  })
+})</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Key concepts</div>
+    <ul>
+      <li><code>result.current</code> — always points to the latest return value of your hook</li>
+      <li><code>act()</code> — wraps state updates so React processes them before you assert</li>
+      <li><code>rerender(newProps)</code> — simulate prop changes to the hook</li>
+    </ul>
+  </div>
+
+  <!-- ===== ACT ===== -->
+  <h2>Understanding act()</h2>
+
+  <p><code>act()</code> tells React: "I'm about to trigger state updates — process them all before I check the result."</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Without act()</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// State update is queued but not processed</span>
+result.current.<span class="fn">increment</span>()
+
+<span class="cm">// This might see the OLD value!</span>
+<span class="fn">expect</span>(result.current.count).<span class="fn">toBe</span>(<span class="num">1</span>)
+<span class="cm">// Warning: state update not wrapped in act()</span></code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">With act()</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// State update is processed synchronously</span>
+<span class="fn">act</span>(() => {
+  result.current.<span class="fn">increment</span>()
+})
+
+<span class="cm">// Now we see the NEW value</span>
+<span class="fn">expect</span>(result.current.count).<span class="fn">toBe</span>(<span class="num">1</span>)
+<span class="cm">// No warnings</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>When you DON'T need act():</strong> <code>userEvent</code> methods and <code>findBy</code> queries already wrap their operations in <code>act()</code>. You mainly need it when calling hook methods directly in <code>renderHook</code> tests.
+  </div>
+
+  <!-- ===== ASYNC HOOKS ===== -->
+  <h2>Testing Async Hooks</h2>
+
+<pre><code><span class="cm">// useDebounce.ts</span>
+<span class="kw">const</span> <span class="fn">useDebounce</span> = &lt;<span class="type">T</span>&gt;(value: <span class="type">T</span>, delay: <span class="type">number</span>): <span class="type">T</span> => {
+  <span class="kw">const</span> [debounced, setDebounced] = <span class="fn">useState</span>(value)
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">const</span> timer = <span class="fn">setTimeout</span>(() => <span class="fn">setDebounced</span>(value), delay)
+    <span class="kw">return</span> () => <span class="fn">clearTimeout</span>(timer)
+  }, [value, delay])
+  <span class="kw">return</span> debounced
+}</code></pre>
+
+<pre><code><span class="cm">// useDebounce.test.ts</span>
+<span class="fn">describe</span>(<span class="str">"useDebounce"</span>, () => {
+  <span class="fn">beforeEach</span>(() => {
+    vi.<span class="fn">useFakeTimers</span>()  <span class="cm">// Control time manually</span>
+  })
+
+  <span class="fn">afterEach</span>(() => {
+    vi.<span class="fn">restoreAllTimers</span>()
+  })
+
+  <span class="fn">it</span>(<span class="str">"returns initial value immediately"</span>, () => {
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(
+      () => <span class="fn">useDebounce</span>(<span class="str">"hello"</span>, <span class="num">500</span>)
+    )
+    <span class="fn">expect</span>(result.current).<span class="fn">toBe</span>(<span class="str">"hello"</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"updates value after delay"</span>, () => {
+    <span class="kw">const</span> { result, rerender } = <span class="fn">renderHook</span>(
+      ({ value, delay }) => <span class="fn">useDebounce</span>(value, delay),
+      { <span class="prop">initialProps</span>: { <span class="prop">value</span>: <span class="str">"hello"</span>, <span class="prop">delay</span>: <span class="num">500</span> } }
+    )
+
+    <span class="cm">// Change the input value</span>
+    <span class="fn">rerender</span>({ <span class="prop">value</span>: <span class="str">"world"</span>, <span class="prop">delay</span>: <span class="num">500</span> })
+
+    <span class="cm">// Not yet — still debouncing</span>
+    <span class="fn">expect</span>(result.current).<span class="fn">toBe</span>(<span class="str">"hello"</span>)
+
+    <span class="cm">// Fast-forward time</span>
+    <span class="fn">act</span>(() => {
+      vi.<span class="fn">advanceTimersByTime</span>(<span class="num">500</span>)
+    })
+
+    <span class="cm">// Now it's updated</span>
+    <span class="fn">expect</span>(result.current).<span class="fn">toBe</span>(<span class="str">"world"</span>)
+  })
+})</code></pre>
+
+  <div class="tip">
+    <strong>Fake timers</strong> let you control <code>setTimeout</code>/<code>setInterval</code> without actually waiting. <code>vi.advanceTimersByTime(ms)</code> fast-forwards. Python analogy: like <code>freezegun</code> but for timers instead of dates.
+  </div>
+
+  <!-- ===== ZUSTAND STORES ===== -->
+  <h2>Testing Zustand Stores</h2>
+
+  <p>Zustand stores are just functions — test them directly without rendering any React components.</p>
+
+<pre><code><span class="cm">// cartStore.ts</span>
+<span class="kw">interface</span> <span class="type">CartItem</span> {
+  <span class="prop">id</span>: <span class="type">string</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">price</span>: <span class="type">number</span>
+  <span class="prop">quantity</span>: <span class="type">number</span>
+}
+
+<span class="kw">interface</span> <span class="type">CartState</span> {
+  <span class="prop">items</span>: <span class="type">CartItem</span>[]
+  <span class="fn">addItem</span>: (item: <span class="type">Omit</span>&lt;<span class="type">CartItem</span>, <span class="str">"quantity"</span>&gt;) => <span class="type">void</span>
+  <span class="fn">removeItem</span>: (id: <span class="type">string</span>) => <span class="type">void</span>
+  <span class="fn">clearCart</span>: () => <span class="type">void</span>
+  <span class="prop">total</span>: () => <span class="type">number</span>
+}
+
+<span class="kw">export const</span> useCartStore = <span class="fn">create</span>&lt;<span class="type">CartState</span>&gt;()((set, get) => ({
+  <span class="prop">items</span>: [],
+  <span class="fn">addItem</span>: (item) => <span class="fn">set</span>((state) => {
+    <span class="kw">const</span> existing = state.items.<span class="fn">find</span>(i => i.id === item.id)
+    <span class="kw">if</span> (existing) {
+      <span class="kw">return</span> {
+        <span class="prop">items</span>: state.items.<span class="fn">map</span>(i =>
+          i.id === item.id ? { ...i, <span class="prop">quantity</span>: i.quantity + <span class="num">1</span> } : i
+        ),
+      }
+    }
+    <span class="kw">return</span> { <span class="prop">items</span>: [...state.items, { ...item, <span class="prop">quantity</span>: <span class="num">1</span> }] }
+  }),
+  <span class="fn">removeItem</span>: (id) => <span class="fn">set</span>((state) => ({
+    <span class="prop">items</span>: state.items.<span class="fn">filter</span>(i => i.id !== id),
+  })),
+  <span class="fn">clearCart</span>: () => <span class="fn">set</span>({ <span class="prop">items</span>: [] }),
+  <span class="fn">total</span>: () => <span class="fn">get</span>().items.<span class="fn">reduce</span>((sum, i) => sum + i.price * i.quantity, <span class="num">0</span>),
+}))</code></pre>
+
+<pre><code><span class="cm">// cartStore.test.ts</span>
+<span class="kw">import</span> { <span class="fn">useCartStore</span> } <span class="kw">from</span> <span class="str">"./cartStore"</span>
+
+<span class="fn">describe</span>(<span class="str">"Cart Store"</span>, () => {
+  <span class="cm">// Reset store between tests</span>
+  <span class="fn">beforeEach</span>(() => {
+    useCartStore.<span class="fn">setState</span>({ <span class="prop">items</span>: [] })
+  })
+
+  <span class="fn">it</span>(<span class="str">"adds an item"</span>, () => {
+    <span class="kw">const</span> { addItem } = useCartStore.<span class="fn">getState</span>()
+
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+
+    <span class="kw">const</span> { items } = useCartStore.<span class="fn">getState</span>()
+    <span class="fn">expect</span>(items).<span class="fn">toHaveLength</span>(<span class="num">1</span>)
+    <span class="fn">expect</span>(items[<span class="num">0</span>]).<span class="fn">toEqual</span>({
+      <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span>, <span class="prop">quantity</span>: <span class="num">1</span>,
+    })
+  })
+
+  <span class="fn">it</span>(<span class="str">"increments quantity for duplicate items"</span>, () => {
+    <span class="kw">const</span> { addItem } = useCartStore.<span class="fn">getState</span>()
+
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+
+    <span class="kw">const</span> { items } = useCartStore.<span class="fn">getState</span>()
+    <span class="fn">expect</span>(items).<span class="fn">toHaveLength</span>(<span class="num">1</span>)
+    <span class="fn">expect</span>(items[<span class="num">0</span>].quantity).<span class="fn">toBe</span>(<span class="num">2</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"removes an item"</span>, () => {
+    <span class="kw">const</span> { addItem, removeItem } = useCartStore.<span class="fn">getState</span>()
+
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"2"</span>, <span class="prop">name</span>: <span class="str">"Hat"</span>, <span class="prop">price</span>: <span class="num">15</span> })
+    <span class="fn">removeItem</span>(<span class="str">"1"</span>)
+
+    <span class="kw">const</span> { items } = useCartStore.<span class="fn">getState</span>()
+    <span class="fn">expect</span>(items).<span class="fn">toHaveLength</span>(<span class="num">1</span>)
+    <span class="fn">expect</span>(items[<span class="num">0</span>].name).<span class="fn">toBe</span>(<span class="str">"Hat"</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"calculates total"</span>, () => {
+    <span class="kw">const</span> { addItem, total } = useCartStore.<span class="fn">getState</span>()
+
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"2"</span>, <span class="prop">name</span>: <span class="str">"Hat"</span>, <span class="prop">price</span>: <span class="num">15</span> })
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })  <span class="cm">// 2 shirts</span>
+
+    <span class="fn">expect</span>(useCartStore.<span class="fn">getState</span>().<span class="fn">total</span>()).<span class="fn">toBe</span>(<span class="num">73</span>)  <span class="cm">// 29*2 + 15</span>
+  })
+
+  <span class="fn">it</span>(<span class="str">"clears the cart"</span>, () => {
+    <span class="kw">const</span> { addItem, clearCart } = useCartStore.<span class="fn">getState</span>()
+
+    <span class="fn">addItem</span>({ <span class="prop">id</span>: <span class="str">"1"</span>, <span class="prop">name</span>: <span class="str">"Shirt"</span>, <span class="prop">price</span>: <span class="num">29</span> })
+    <span class="fn">clearCart</span>()
+
+    <span class="fn">expect</span>(useCartStore.<span class="fn">getState</span>().items).<span class="fn">toEqual</span>([])
+  })
+})</code></pre>
+
+  <div class="panel">
+    <div class="panel-title">Why this is great</div>
+    <p>No <code>render</code>, no <code>screen</code>, no DOM — just pure function testing. Zustand stores are essentially state machines. Test the transitions.</p>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> This is like testing a Python class or module directly — call methods, check state. No HTTP layer, no framework overhead. The simplest kind of test.
+  </div>
+
+  <!-- ===== TANSTACK QUERY HOOKS ===== -->
+  <h2>Testing TanStack Query Hooks</h2>
+
+  <p>Query hooks need a <code>QueryClientProvider</code>. Create a wrapper for your tests.</p>
+
+<pre><code><span class="cm">// test-utils.tsx</span>
+<span class="kw">import</span> { <span class="type">QueryClient</span>, <span class="type">QueryClientProvider</span> } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+<span class="kw">import</span> { <span class="fn">renderHook</span> } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+
+<span class="kw">const</span> <span class="fn">createWrapper</span> = () => {
+  <span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="type">QueryClient</span>({
+    <span class="prop">defaultOptions</span>: {
+      <span class="prop">queries</span>: { <span class="prop">retry</span>: <span class="kw">false</span> },  <span class="cm">// don't retry in tests</span>
+    },
+  })
+
+  <span class="kw">return</span> ({ children }: { <span class="prop">children</span>: <span class="type">React.ReactNode</span> }) => (
+    <span class="tag">&lt;QueryClientProvider</span> <span class="attr">client</span>={queryClient}<span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/QueryClientProvider&gt;</span>
+  )
+}</code></pre>
+
+<pre><code><span class="cm">// useUsers.test.ts</span>
+<span class="kw">import</span> { <span class="fn">renderHook</span>, <span class="fn">waitFor</span> } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+<span class="kw">import</span> { <span class="fn">useUsers</span> } <span class="kw">from</span> <span class="str">"./useUsers"</span>
+
+<span class="fn">describe</span>(<span class="str">"useUsers"</span>, () => {
+  <span class="fn">it</span>(<span class="str">"fetches users"</span>, <span class="kw">async</span> () => {
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() => <span class="fn">useUsers</span>(), {
+      <span class="prop">wrapper</span>: <span class="fn">createWrapper</span>(),
+    })
+
+    <span class="cm">// Initially loading</span>
+    <span class="fn">expect</span>(result.current.isLoading).<span class="fn">toBe</span>(<span class="kw">true</span>)
+
+    <span class="cm">// Wait for data (MSW handles the API mock)</span>
+    <span class="kw">await</span> <span class="fn">waitFor</span>(() => {
+      <span class="fn">expect</span>(result.current.isSuccess).<span class="fn">toBe</span>(<span class="kw">true</span>)
+    })
+
+    <span class="fn">expect</span>(result.current.data).<span class="fn">toHaveLength</span>(<span class="num">2</span>)
+    <span class="fn">expect</span>(result.current.data[<span class="num">0</span>].name).<span class="fn">toBe</span>(<span class="str">"Alice"</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"handles errors"</span>, <span class="kw">async</span> () => {
+    <span class="cm">// Override MSW handler for this test</span>
+    server.<span class="fn">use</span>(
+      http.<span class="fn">get</span>(<span class="str">"/api/users"</span>, () =>
+        HttpResponse.<span class="fn">json</span>(<span class="kw">null</span>, { <span class="prop">status</span>: <span class="num">500</span> })
+      )
+    )
+
+    <span class="kw">const</span> { result } = <span class="fn">renderHook</span>(() => <span class="fn">useUsers</span>(), {
+      <span class="prop">wrapper</span>: <span class="fn">createWrapper</span>(),
+    })
+
+    <span class="kw">await</span> <span class="fn">waitFor</span>(() => {
+      <span class="fn">expect</span>(result.current.isError).<span class="fn">toBe</span>(<span class="kw">true</span>)
+    })
+  })
+})</code></pre>
+
+  <!-- ===== MOCKING ===== -->
+  <h2>Mocking with vi.mock()</h2>
+
+  <p>When you need to mock modules (not HTTP calls — use MSW for that).</p>
+
+<pre><code><span class="cm">// Mock a module</span>
+vi.<span class="fn">mock</span>(<span class="str">"./analytics"</span>, () => ({
+  <span class="fn">trackEvent</span>: vi.<span class="fn">fn</span>(),
+  <span class="fn">trackPageView</span>: vi.<span class="fn">fn</span>(),
+}))
+
+<span class="cm">// Import the mocked version</span>
+<span class="kw">import</span> { <span class="fn">trackEvent</span> } <span class="kw">from</span> <span class="str">"./analytics"</span>
+
+<span class="fn">it</span>(<span class="str">"tracks click event"</span>, <span class="kw">async</span> () => {
+  <span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+  <span class="fn">render</span>(<span class="tag">&lt;BuyButton /&gt;</span>)
+
+  <span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>))
+
+  <span class="fn">expect</span>(trackEvent).<span class="fn">toHaveBeenCalledWith</span>(<span class="str">"purchase_clicked"</span>)
+})</code></pre>
+
+  <h3>Mock Timers</h3>
+
+<pre><code><span class="fn">beforeEach</span>(() => vi.<span class="fn">useFakeTimers</span>())
+<span class="fn">afterEach</span>(() => vi.<span class="fn">restoreAllTimers</span>())
+
+<span class="fn">it</span>(<span class="str">"auto-saves after 3 seconds"</span>, <span class="kw">async</span> () => {
+  <span class="kw">const</span> onSave = vi.<span class="fn">fn</span>()
+  <span class="fn">renderHook</span>(() => <span class="fn">useAutoSave</span>(data, onSave, <span class="num">3000</span>))
+
+  <span class="fn">expect</span>(onSave).<span class="fn">not</span>.<span class="fn">toHaveBeenCalled</span>()
+
+  <span class="fn">act</span>(() => vi.<span class="fn">advanceTimersByTime</span>(<span class="num">3000</span>))
+
+  <span class="fn">expect</span>(onSave).<span class="fn">toHaveBeenCalledOnce</span>()
+})</code></pre>
+
+  <!-- ===== WHAT TO TEST ===== -->
+  <h2>What to Test: Decision Guide</h2>
+
+  <table>
+    <thead>
+      <tr><th>Thing</th><th>How to test</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Pure utility functions</td><td>Direct unit test</td><td><code>expect(formatDate(date)).toBe("Mar 30")</code></td></tr>
+      <tr><td>Zustand stores</td><td>Direct — <code>getState()</code>/<code>setState()</code></td><td>Call actions, check state</td></tr>
+      <tr><td>Custom hooks (no UI)</td><td><code>renderHook</code></td><td>Test return values + state changes</td></tr>
+      <tr><td>Components (simple)</td><td><code>render</code> + <code>screen</code></td><td>Check rendered output, interactions</td></tr>
+      <tr><td>Components (with API)</td><td><code>render</code> + MSW</td><td>Mock API, check loading/error/data states</td></tr>
+      <tr><td>Query hooks</td><td><code>renderHook</code> + wrapper + MSW</td><td>Check isLoading → isSuccess flow</td></tr>
+      <tr><td>Form logic</td><td><code>render</code> + <code>userEvent</code></td><td>Fill fields, submit, check validation</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> Test the simplest way possible. If you can test without React (stores, utils), do that. If you can test without mocks (render with real child components), do that. Only add complexity when needed.
+  </div>
+
+</body>
+</html>

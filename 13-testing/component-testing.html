@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>13 — Component Testing</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>13 — Component Testing</h1>
+  <p class="subtitle">Test behavior, not implementation. What does the user see and do?</p>
+
+  <!-- ===== PHILOSOPHY ===== -->
+  <h2>Testing Philosophy</h2>
+
+  <div class="panel">
+    <div class="panel-title">The golden rule</div>
+    <p>Test your components the way a user interacts with them. Don't test internal state, hook calls, or implementation details. If you refactor a component's internals and the behavior doesn't change, <strong>no tests should break</strong>.</p>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Implementation testing</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Brittle — breaks on refactor</span>
+<span class="fn">expect</span>(component.state.count).<span class="fn">toBe</span>(<span class="num">1</span>)
+<span class="fn">expect</span>(useStateSpy).<span class="fn">toHaveBeenCalledWith</span>(<span class="num">0</span>)
+<span class="fn">expect</span>(wrapper.<span class="fn">find</span>(<span class="str">".counter-value"</span>))
+  .<span class="fn">text</span>().<span class="fn">toBe</span>(<span class="str">"1"</span>)</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Behavior testing</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Resilient — tests what users see</span>
+<span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+<span class="fn">render</span>(<span class="tag">&lt;Counter /&gt;</span>)
+
+<span class="kw">await</span> user.<span class="fn">click</span>(
+  screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/increment/i</span> })
+)
+<span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">"Count: 1"</span>))
+  .<span class="fn">toBeInTheDocument</span>()</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like testing a Flask endpoint by sending HTTP requests and checking responses, not by inspecting internal function calls. Black-box testing at the right boundary.
+  </div>
+
+  <!-- ===== CORE API ===== -->
+  <h2>Core API: render, screen, queries</h2>
+
+  <h3>render</h3>
+
+<pre><code><span class="kw">import</span> { <span class="fn">render</span>, <span class="fn">screen</span> } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+
+<span class="cm">// Render a component into the virtual DOM</span>
+<span class="fn">render</span>(<span class="tag">&lt;Button</span> <span class="attr">label</span>=<span class="str">"Save"</span> <span class="attr">onClick</span>={mockFn} <span class="tag">/&gt;</span>)
+
+<span class="cm">// With providers (theme, query client, router, etc.)</span>
+<span class="fn">render</span>(<span class="tag">&lt;Button /&gt;</span>, {
+  <span class="prop">wrapper</span>: ({ children }) => (
+    <span class="tag">&lt;QueryClientProvider</span> <span class="attr">client</span>={queryClient}<span class="tag">&gt;</span>
+      {children}
+    <span class="tag">&lt;/QueryClientProvider&gt;</span>
+  ),
+})</code></pre>
+
+  <h3>screen — Query the rendered output</h3>
+
+  <table>
+    <thead>
+      <tr><th>Query Type</th><th>No Match</th><th>1 Match</th><th>1+ Match</th><th>Await?</th><th>Use When</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>getBy...</code></td><td>Throw</td><td>Return</td><td>Throw</td><td>No</td><td>Element exists right now</td></tr>
+      <tr><td><code>queryBy...</code></td><td>null</td><td>Return</td><td>Throw</td><td>No</td><td>Element might not exist (assert absence)</td></tr>
+      <tr><td><code>findBy...</code></td><td>Throw</td><td>Return</td><td>Throw</td><td>Yes</td><td>Element will appear after async operation</td></tr>
+      <tr><td><code>getAllBy...</code></td><td>Throw</td><td>Array</td><td>Array</td><td>No</td><td>Multiple elements</td></tr>
+      <tr><td><code>queryAllBy...</code></td><td>[]</td><td>Array</td><td>Array</td><td>No</td><td>Might be zero elements</td></tr>
+      <tr><td><code>findAllBy...</code></td><td>Throw</td><td>Array</td><td>Array</td><td>Yes</td><td>Multiple elements appearing async</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Query Priority (most to least preferred)</h3>
+
+  <table>
+    <thead>
+      <tr><th>Priority</th><th>Query</th><th>Example</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td><code>getByRole</code></td>
+        <td><code>getByRole("button", { name: /submit/i })</code></td>
+        <td>Accessibility tree — how screen readers see it</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>getByLabelText</code></td>
+        <td><code>getByLabelText("Email")</code></td>
+        <td>Form inputs — what the label says</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>getByPlaceholderText</code></td>
+        <td><code>getByPlaceholderText("Search...")</code></td>
+        <td>When no label exists</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><code>getByText</code></td>
+        <td><code>getByText("Welcome back")</code></td>
+        <td>Non-interactive content</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><code>getByTestId</code></td>
+        <td><code>getByTestId("nav-menu")</code></td>
+        <td>Last resort — no semantic way to find it</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Avoid <code>getByTestId</code></strong> as your first choice. It tests implementation (you added a data-testid), not behavior. If you need it, that's a hint your component may have accessibility gaps.
+  </div>
+
+  <!-- ===== USER EVENTS ===== -->
+  <h2>User Events</h2>
+
+  <p><code>@testing-library/user-event</code> simulates real user interactions (click, type, tab, etc.) more accurately than <code>fireEvent</code>.</p>
+
+<pre><code><span class="kw">import</span> userEvent <span class="kw">from</span> <span class="str">"@testing-library/user-event"</span>
+
+<span class="cm">// Always call setup() first — creates an instance with proper state tracking</span>
+<span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+
+<span class="cm">// Click</span>
+<span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/save/i</span> }))
+
+<span class="cm">// Type text</span>
+<span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByRole</span>(<span class="str">"textbox"</span>), <span class="str">"hello@example.com"</span>)
+
+<span class="cm">// Clear then type (replace existing value)</span>
+<span class="kw">await</span> user.<span class="fn">clear</span>(screen.<span class="fn">getByRole</span>(<span class="str">"textbox"</span>))
+<span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByRole</span>(<span class="str">"textbox"</span>), <span class="str">"new value"</span>)
+
+<span class="cm">// Select dropdown option</span>
+<span class="kw">await</span> user.<span class="fn">selectOptions</span>(
+  screen.<span class="fn">getByRole</span>(<span class="str">"combobox"</span>),
+  screen.<span class="fn">getByRole</span>(<span class="str">"option"</span>, { <span class="prop">name</span>: <span class="str">"France"</span> })
+)
+
+<span class="cm">// Check/uncheck checkbox</span>
+<span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"checkbox"</span>))
+
+<span class="cm">// Tab through elements</span>
+<span class="kw">await</span> user.<span class="fn">tab</span>()
+
+<span class="cm">// Keyboard shortcuts</span>
+<span class="kw">await</span> user.<span class="fn">keyboard</span>(<span class="str">"{Enter}"</span>)
+<span class="kw">await</span> user.<span class="fn">keyboard</span>(<span class="str">"{Escape}"</span>)</code></pre>
+
+  <div class="note">
+    <strong>Why <code>userEvent</code> over <code>fireEvent</code>?</strong> <code>userEvent</code> simulates the full browser event chain: focus → keydown → keypress → input → keyup. <code>fireEvent</code> only dispatches a single event. Use <code>userEvent</code> for realistic interaction testing.
+  </div>
+
+  <!-- ===== ASSERTIONS ===== -->
+  <h2>Common Assertions</h2>
+
+  <p>Extended matchers from <code>@testing-library/jest-dom</code>:</p>
+
+<pre><code><span class="cm">// Presence</span>
+<span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">"Welcome"</span>)).<span class="fn">toBeInTheDocument</span>()
+<span class="fn">expect</span>(screen.<span class="fn">queryByText</span>(<span class="str">"Error"</span>)).<span class="fn">not</span>.<span class="fn">toBeInTheDocument</span>()
+
+<span class="cm">// Content</span>
+<span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"heading"</span>)).<span class="fn">toHaveTextContent</span>(<span class="str">"Dashboard"</span>)
+
+<span class="cm">// Form state</span>
+<span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>)).<span class="fn">toBeDisabled</span>()
+<span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"textbox"</span>)).<span class="fn">toHaveValue</span>(<span class="str">"alice@example.com"</span>)
+<span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"checkbox"</span>)).<span class="fn">toBeChecked</span>()
+
+<span class="cm">// Visibility</span>
+<span class="fn">expect</span>(element).<span class="fn">toBeVisible</span>()
+
+<span class="cm">// CSS classes</span>
+<span class="fn">expect</span>(element).<span class="fn">toHaveClass</span>(<span class="str">"active"</span>)
+
+<span class="cm">// Attributes</span>
+<span class="fn">expect</span>(link).<span class="fn">toHaveAttribute</span>(<span class="str">"href"</span>, <span class="str">"/dashboard"</span>)</code></pre>
+
+  <!-- ===== MSW ===== -->
+  <h2>Mocking APIs with MSW</h2>
+
+  <p>Mock Service Worker intercepts actual network requests at the service worker level. Your component code doesn't know it's being mocked — it makes real <code>fetch</code> calls that MSW intercepts.</p>
+
+  <h3>Setup</h3>
+
+<pre><code><span class="cm">// Install</span>
+<span class="cm">// pnpm add -D msw</span>
+
+<span class="cm">// src/test/handlers.ts — define API mocks</span>
+<span class="kw">import</span> { <span class="fn">http</span>, <span class="type">HttpResponse</span> } <span class="kw">from</span> <span class="str">"msw"</span>
+
+<span class="kw">export const</span> handlers = [
+  http.<span class="fn">get</span>(<span class="str">"/api/users"</span>, () => {
+    <span class="kw">return</span> HttpResponse.<span class="fn">json</span>([
+      { <span class="prop">id</span>: <span class="num">1</span>, <span class="prop">name</span>: <span class="str">"Alice"</span>, <span class="prop">email</span>: <span class="str">"alice@example.com"</span> },
+      { <span class="prop">id</span>: <span class="num">2</span>, <span class="prop">name</span>: <span class="str">"Bob"</span>, <span class="prop">email</span>: <span class="str">"bob@example.com"</span> },
+    ])
+  }),
+
+  http.<span class="fn">post</span>(<span class="str">"/api/users"</span>, <span class="kw">async</span> ({ request }) => {
+    <span class="kw">const</span> body = <span class="kw">await</span> request.<span class="fn">json</span>()
+    <span class="kw">return</span> HttpResponse.<span class="fn">json</span>(
+      { <span class="prop">id</span>: <span class="num">3</span>, ...body },
+      { <span class="prop">status</span>: <span class="num">201</span> }
+    )
+  }),
+
+  http.<span class="fn">delete</span>(<span class="str">"/api/users/:id"</span>, ({ params }) => {
+    <span class="kw">return</span> <span class="kw">new</span> <span class="type">HttpResponse</span>(<span class="kw">null</span>, { <span class="prop">status</span>: <span class="num">204</span> })
+  }),
+]</code></pre>
+
+<pre><code><span class="cm">// src/test/server.ts — create test server</span>
+<span class="kw">import</span> { <span class="fn">setupServer</span> } <span class="kw">from</span> <span class="str">"msw/node"</span>
+<span class="kw">import</span> { handlers } <span class="kw">from</span> <span class="str">"./handlers"</span>
+
+<span class="kw">export const</span> server = <span class="fn">setupServer</span>(...handlers)</code></pre>
+
+<pre><code><span class="cm">// src/test/setup.ts — wire into Vitest</span>
+<span class="kw">import</span> { server } <span class="kw">from</span> <span class="str">"./server"</span>
+
+<span class="fn">beforeAll</span>(() => server.<span class="fn">listen</span>())
+<span class="fn">afterEach</span>(() => server.<span class="fn">resetHandlers</span>())  <span class="cm">// reset per-test overrides</span>
+<span class="fn">afterAll</span>(() => server.<span class="fn">close</span>())</code></pre>
+
+  <h3>Override Handlers in Tests</h3>
+
+<pre><code><span class="fn">it</span>(<span class="str">"shows error when API fails"</span>, <span class="kw">async</span> () => {
+  <span class="cm">// Override the default handler for this test only</span>
+  server.<span class="fn">use</span>(
+    http.<span class="fn">get</span>(<span class="str">"/api/users"</span>, () => {
+      <span class="kw">return</span> HttpResponse.<span class="fn">json</span>(
+        { <span class="prop">message</span>: <span class="str">"Internal Server Error"</span> },
+        { <span class="prop">status</span>: <span class="num">500</span> }
+      )
+    })
+  )
+
+  <span class="fn">render</span>(<span class="tag">&lt;UserList /&gt;</span>)
+
+  <span class="kw">await</span> screen.<span class="fn">findByText</span>(<span class="str">/something went wrong/i</span>)
+})</code></pre>
+
+  <div class="note">
+    <strong>Python analogy:</strong> MSW is like <code>responses</code> or <code>httpretty</code> in Python — intercepts HTTP calls at the transport level. But it works in the browser too (not just tests), so you can use the same mocks during development.
+  </div>
+
+  <!-- ===== FULL EXAMPLE ===== -->
+  <h2>Complete Example: Testing a User Form</h2>
+
+  <p>A realistic test covering form rendering, user interaction, API submission, and success feedback.</p>
+
+<pre><code><span class="cm">// CreateUserForm.test.tsx</span>
+<span class="kw">import</span> { <span class="fn">render</span>, <span class="fn">screen</span>, <span class="fn">waitFor</span> } <span class="kw">from</span> <span class="str">"@testing-library/react"</span>
+<span class="kw">import</span> userEvent <span class="kw">from</span> <span class="str">"@testing-library/user-event"</span>
+<span class="kw">import</span> { <span class="type">QueryClient</span>, <span class="type">QueryClientProvider</span> } <span class="kw">from</span> <span class="str">"@tanstack/react-query"</span>
+<span class="kw">import</span> { <span class="fn">CreateUserForm</span> } <span class="kw">from</span> <span class="str">"./CreateUserForm"</span>
+
+<span class="cm">// Helper to wrap component with providers</span>
+<span class="kw">const</span> <span class="fn">renderWithProviders</span> = (ui: <span class="type">React.ReactElement</span>) => {
+  <span class="kw">const</span> queryClient = <span class="kw">new</span> <span class="type">QueryClient</span>({
+    <span class="prop">defaultOptions</span>: { <span class="prop">queries</span>: { <span class="prop">retry</span>: <span class="kw">false</span> } },
+  })
+  <span class="kw">return</span> <span class="fn">render</span>(ui, {
+    <span class="prop">wrapper</span>: ({ children }) => (
+      <span class="tag">&lt;QueryClientProvider</span> <span class="attr">client</span>={queryClient}<span class="tag">&gt;</span>
+        {children}
+      <span class="tag">&lt;/QueryClientProvider&gt;</span>
+    ),
+  })
+}
+
+<span class="fn">describe</span>(<span class="str">"CreateUserForm"</span>, () => {
+  <span class="fn">it</span>(<span class="str">"renders the form fields"</span>, () => {
+    <span class="fn">renderWithProviders</span>(<span class="tag">&lt;CreateUserForm /&gt;</span>)
+
+    <span class="fn">expect</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/name/i</span>)).<span class="fn">toBeInTheDocument</span>()
+    <span class="fn">expect</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/email/i</span>)).<span class="fn">toBeInTheDocument</span>()
+    <span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/create/i</span> })).<span class="fn">toBeInTheDocument</span>()
+  })
+
+  <span class="fn">it</span>(<span class="str">"shows validation errors for empty fields"</span>, <span class="kw">async</span> () => {
+    <span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+    <span class="fn">renderWithProviders</span>(<span class="tag">&lt;CreateUserForm /&gt;</span>)
+
+    <span class="cm">// Submit without filling fields</span>
+    <span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/create/i</span> }))
+
+    <span class="fn">expect</span>(<span class="kw">await</span> screen.<span class="fn">findByText</span>(<span class="str">/name is required/i</span>)).<span class="fn">toBeInTheDocument</span>()
+    <span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">/email is required/i</span>)).<span class="fn">toBeInTheDocument</span>()
+  })
+
+  <span class="fn">it</span>(<span class="str">"submits the form and shows success"</span>, <span class="kw">async</span> () => {
+    <span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+    <span class="fn">renderWithProviders</span>(<span class="tag">&lt;CreateUserForm /&gt;</span>)
+
+    <span class="cm">// Fill in the form</span>
+    <span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/name/i</span>), <span class="str">"Alice"</span>)
+    <span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/email/i</span>), <span class="str">"alice@example.com"</span>)
+
+    <span class="cm">// Submit</span>
+    <span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/create/i</span> }))
+
+    <span class="cm">// Button should show loading state</span>
+    <span class="fn">expect</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>)).<span class="fn">toBeDisabled</span>()
+
+    <span class="cm">// Wait for success message (API call via MSW)</span>
+    <span class="kw">await</span> screen.<span class="fn">findByText</span>(<span class="str">/user created successfully/i</span>)
+
+    <span class="cm">// Form should be cleared</span>
+    <span class="fn">expect</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/name/i</span>)).<span class="fn">toHaveValue</span>(<span class="str">""</span>)
+  })
+
+  <span class="fn">it</span>(<span class="str">"shows error message on API failure"</span>, <span class="kw">async</span> () => {
+    <span class="cm">// Override handler for this test</span>
+    server.<span class="fn">use</span>(
+      http.<span class="fn">post</span>(<span class="str">"/api/users"</span>, () => {
+        <span class="kw">return</span> HttpResponse.<span class="fn">json</span>(
+          { <span class="prop">message</span>: <span class="str">"Email already exists"</span> },
+          { <span class="prop">status</span>: <span class="num">409</span> }
+        )
+      })
+    )
+
+    <span class="kw">const</span> user = userEvent.<span class="fn">setup</span>()
+    <span class="fn">renderWithProviders</span>(<span class="tag">&lt;CreateUserForm /&gt;</span>)
+
+    <span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/name/i</span>), <span class="str">"Alice"</span>)
+    <span class="kw">await</span> user.<span class="fn">type</span>(screen.<span class="fn">getByLabelText</span>(<span class="str">/email/i</span>), <span class="str">"alice@example.com"</span>)
+    <span class="kw">await</span> user.<span class="fn">click</span>(screen.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">/create/i</span> }))
+
+    <span class="kw">await</span> screen.<span class="fn">findByText</span>(<span class="str">/email already exists/i</span>)
+  })
+})</code></pre>
+
+  <!-- ===== ASYNC PATTERNS ===== -->
+  <h2>Async Testing Patterns</h2>
+
+  <h3>findBy — wait for elements to appear</h3>
+
+<pre><code><span class="cm">// Component fetches data on mount</span>
+<span class="fn">render</span>(<span class="tag">&lt;UserList /&gt;</span>)
+
+<span class="cm">// findBy waits up to 1000ms (configurable) for the element</span>
+<span class="kw">const</span> users = <span class="kw">await</span> screen.<span class="fn">findAllByRole</span>(<span class="str">"listitem"</span>)
+<span class="fn">expect</span>(users).<span class="fn">toHaveLength</span>(<span class="num">2</span>)</code></pre>
+
+  <h3>waitFor — wait for assertions to pass</h3>
+
+<pre><code><span class="cm">// Wait for multiple things to be true</span>
+<span class="kw">await</span> <span class="fn">waitFor</span>(() => {
+  <span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">"Alice"</span>)).<span class="fn">toBeInTheDocument</span>()
+  <span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">"Bob"</span>)).<span class="fn">toBeInTheDocument</span>()
+})</code></pre>
+
+  <h3>waitForElementToBeRemoved — wait for loading states to clear</h3>
+
+<pre><code><span class="fn">render</span>(<span class="tag">&lt;UserList /&gt;</span>)
+
+<span class="cm">// Wait for loading spinner to disappear</span>
+<span class="kw">await</span> <span class="fn">waitForElementToBeRemoved</span>(
+  () => screen.<span class="fn">queryByText</span>(<span class="str">/loading/i</span>)
+)
+
+<span class="cm">// Now assert on the loaded content</span>
+<span class="fn">expect</span>(screen.<span class="fn">getByText</span>(<span class="str">"Alice"</span>)).<span class="fn">toBeInTheDocument</span>()</code></pre>
+
+  <!-- ===== SNAPSHOT TESTING ===== -->
+  <h2>Snapshot Testing</h2>
+
+  <div class="warn">
+    <strong>Mostly avoid snapshots.</strong> They're brittle — any markup change (even whitespace) breaks them. Teams end up blindly updating snapshots. Test specific behavior instead. The one exception: small, stable components where you want to catch unintended markup changes (like an icon library).
+  </div>
+
+<pre><code><span class="cm">// If you must use them:</span>
+<span class="fn">it</span>(<span class="str">"matches snapshot"</span>, () => {
+  <span class="kw">const</span> { container } = <span class="fn">render</span>(<span class="tag">&lt;Badge</span> <span class="attr">variant</span>=<span class="str">"success"</span><span class="tag">&gt;</span>Active<span class="tag">&lt;/Badge&gt;</span>)
+  <span class="fn">expect</span>(container.firstChild).<span class="fn">toMatchSnapshot</span>()
+})
+
+<span class="cm">// Inline snapshots are slightly better (visible in test file):</span>
+<span class="fn">expect</span>(container.firstChild).<span class="fn">toMatchInlineSnapshot</span>(<span class="str">`
+  &lt;span class="badge badge-success"&gt;Active&lt;/span&gt;
+`</span>)</code></pre>
+
+  <!-- ===== CHEAT SHEET ===== -->
+  <h2>Quick Reference</h2>
+
+  <table>
+    <thead>
+      <tr><th>I want to...</th><th>Use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Find a button</td><td><code>screen.getByRole("button", { name: /text/i })</code></td></tr>
+      <tr><td>Find a text input</td><td><code>screen.getByRole("textbox")</code> or <code>getByLabelText("Label")</code></td></tr>
+      <tr><td>Find a checkbox</td><td><code>screen.getByRole("checkbox", { name: /label/i })</code></td></tr>
+      <tr><td>Find a link</td><td><code>screen.getByRole("link", { name: /text/i })</code></td></tr>
+      <tr><td>Find a heading</td><td><code>screen.getByRole("heading", { level: 2 })</code></td></tr>
+      <tr><td>Assert something is gone</td><td><code>expect(screen.queryByText("X")).not.toBeInTheDocument()</code></td></tr>
+      <tr><td>Wait for async content</td><td><code>await screen.findByText("Loaded")</code></td></tr>
+      <tr><td>Click a button</td><td><code>await user.click(screen.getByRole("button"))</code></td></tr>
+      <tr><td>Type in an input</td><td><code>await user.type(screen.getByRole("textbox"), "text")</code></td></tr>
+      <tr><td>Mock an API call</td><td>MSW: <code>http.get("/url", () => HttpResponse.json(data))</code></td></tr>
+      <tr><td>Mock a function</td><td><code>const mockFn = vi.fn()</code></td></tr>
+    </tbody>
+  </table>
+
+</body>
+</html>

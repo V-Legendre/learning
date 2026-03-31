@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>10 — Complex Form Patterns</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>10 — Complex Form Patterns</h1>
+  <p class="subtitle">Multi-step wizards, dynamic fields, watch, setValue, and real-world form architecture.</p>
+
+  <!-- ===== MULTI-STEP FORMS ===== -->
+  <h2>Multi-Step Forms (Wizards)</h2>
+
+  <p>Long forms are overwhelming. Break them into steps. The key challenge: <strong>persisting state between steps</strong> without losing data when navigating back.</p>
+
+  <div class="panel">
+    <div class="panel-title">Strategy: One form, multiple views</div>
+    <p>Use a single <code>useForm</code> instance across all steps. Only validate the current step's fields. The form state persists as you navigate between steps.</p>
+  </div>
+
+  <h3>Step Component Pattern</h3>
+
+<pre><code><span class="cm">// types.ts — shared form data type</span>
+<span class="kw">interface</span> <span class="type">OnboardingForm</span> {
+  <span class="cm">// Step 1: Account</span>
+  <span class="prop">email</span>: <span class="type">string</span>
+  <span class="prop">password</span>: <span class="type">string</span>
+  <span class="cm">// Step 2: Profile</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+  <span class="prop">bio</span>: <span class="type">string</span>
+  <span class="cm">// Step 3: Preferences</span>
+  <span class="prop">theme</span>: <span class="str">"light"</span> | <span class="str">"dark"</span>
+  <span class="prop">notifications</span>: <span class="type">boolean</span>
+}</code></pre>
+
+<pre><code><span class="cm">// OnboardingWizard.tsx</span>
+<span class="kw">import</span> { <span class="fn">useForm</span>, <span class="type">FormProvider</span> } <span class="kw">from</span> <span class="str">"react-hook-form"</span>
+<span class="kw">import</span> { <span class="fn">zodResolver</span> } <span class="kw">from</span> <span class="str">"@hookform/resolvers/zod"</span>
+
+<span class="kw">const</span> <span class="fn">OnboardingWizard</span> = () => {
+  <span class="kw">const</span> [step, setStep] = <span class="fn">useState</span>(<span class="num">0</span>)
+
+  <span class="kw">const</span> methods = <span class="fn">useForm</span>&lt;<span class="type">OnboardingForm</span>&gt;({
+    <span class="prop">resolver</span>: <span class="fn">zodResolver</span>(schemas[step]),  <span class="cm">// validate current step only</span>
+    <span class="prop">mode</span>: <span class="str">"onBlur"</span>,
+  })
+
+  <span class="kw">const</span> steps = [<span class="tag">&lt;AccountStep /&gt;</span>, <span class="tag">&lt;ProfileStep /&gt;</span>, <span class="tag">&lt;PreferencesStep /&gt;</span>]
+
+  <span class="kw">const</span> <span class="fn">next</span> = <span class="kw">async</span> () => {
+    <span class="kw">const</span> valid = <span class="kw">await</span> methods.<span class="fn">trigger</span>()  <span class="cm">// validate current step</span>
+    <span class="kw">if</span> (valid) <span class="fn">setStep</span>(s => s + <span class="num">1</span>)
+  }
+
+  <span class="kw">const</span> <span class="fn">back</span> = () => <span class="fn">setStep</span>(s => s - <span class="num">1</span>)
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = (data: <span class="type">OnboardingForm</span>) => {
+    console.<span class="fn">log</span>(<span class="str">"Final data:"</span>, data)
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;FormProvider</span> <span class="attr">{...methods}</span><span class="tag">&gt;</span>
+      <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={methods.<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+        <span class="cm">{/* Progress indicator */}</span>
+        <span class="tag">&lt;div&gt;</span>Step {step + <span class="num">1</span>} of {steps.length}<span class="tag">&lt;/div&gt;</span>
+
+        {steps[step]}
+
+        <span class="tag">&lt;div&gt;</span>
+          {step &gt; <span class="num">0</span> && <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"button"</span> <span class="attr">onClick</span>={back}<span class="tag">&gt;</span>Back<span class="tag">&lt;/button&gt;</span>}
+          {step &lt; steps.length - <span class="num">1</span>
+            ? <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"button"</span> <span class="attr">onClick</span>={next}<span class="tag">&gt;</span>Next<span class="tag">&lt;/button&gt;</span>
+            : <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span><span class="tag">&gt;</span>Submit<span class="tag">&lt;/button&gt;</span>}
+        <span class="tag">&lt;/div&gt;</span>
+      <span class="tag">&lt;/form&gt;</span>
+    <span class="tag">&lt;/FormProvider&gt;</span>
+  )
+}</code></pre>
+
+  <h3>Step Components Use FormProvider Context</h3>
+
+<pre><code><span class="cm">// AccountStep.tsx — each step accesses the shared form</span>
+<span class="kw">import</span> { <span class="fn">useFormContext</span> } <span class="kw">from</span> <span class="str">"react-hook-form"</span>
+
+<span class="kw">const</span> <span class="fn">AccountStep</span> = () => {
+  <span class="kw">const</span> { register, formState: { errors } } = <span class="fn">useFormContext</span>&lt;<span class="type">OnboardingForm</span>&gt;()
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;div&gt;</span>
+      <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"email"</span>)} <span class="attr">placeholder</span>=<span class="str">"Email"</span> <span class="tag">/&gt;</span>
+      {errors.email && <span class="tag">&lt;span&gt;</span>{errors.email.message}<span class="tag">&lt;/span&gt;</span>}
+
+      <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"password"</span>)} <span class="attr">type</span>=<span class="str">"password"</span> <span class="tag">/&gt;</span>
+      {errors.password && <span class="tag">&lt;span&gt;</span>{errors.password.message}<span class="tag">&lt;/span&gt;</span>}
+    <span class="tag">&lt;/div&gt;</span>
+  )
+}</code></pre>
+
+  <div class="note">
+    <strong>Python analogy:</strong> <code>FormProvider</code> is like Flask's <code>g</code> object or a shared context manager — it makes form state available to any nested component without prop drilling.
+  </div>
+
+  <!-- ===== DYNAMIC FIELDS ===== -->
+  <h2>Dynamic Fields with useFieldArray</h2>
+
+  <p>For lists of items where users can add/remove entries — think: "add another address", "add team member", "add line item".</p>
+
+<pre><code><span class="kw">import</span> { <span class="fn">useForm</span>, <span class="fn">useFieldArray</span> } <span class="kw">from</span> <span class="str">"react-hook-form"</span>
+
+<span class="kw">interface</span> <span class="type">InvoiceForm</span> {
+  <span class="prop">client</span>: <span class="type">string</span>
+  <span class="prop">items</span>: {
+    <span class="prop">description</span>: <span class="type">string</span>
+    <span class="prop">quantity</span>: <span class="type">number</span>
+    <span class="prop">price</span>: <span class="type">number</span>
+  }[]
+}
+
+<span class="kw">const</span> <span class="fn">InvoiceEditor</span> = () => {
+  <span class="kw">const</span> { control, register, handleSubmit } = <span class="fn">useForm</span>&lt;<span class="type">InvoiceForm</span>&gt;({
+    <span class="prop">defaultValues</span>: {
+      <span class="prop">client</span>: <span class="str">""</span>,
+      <span class="prop">items</span>: [{ <span class="prop">description</span>: <span class="str">""</span>, <span class="prop">quantity</span>: <span class="num">1</span>, <span class="prop">price</span>: <span class="num">0</span> }],
+    },
+  })
+
+  <span class="kw">const</span> { fields, append, remove, move } = <span class="fn">useFieldArray</span>({
+    control,
+    <span class="prop">name</span>: <span class="str">"items"</span>,  <span class="cm">// must match the array field name</span>
+  })
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(console.log)}<span class="tag">&gt;</span>
+      <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"client"</span>)} <span class="attr">placeholder</span>=<span class="str">"Client name"</span> <span class="tag">/&gt;</span>
+
+      {fields.<span class="fn">map</span>((field, index) => (
+        <span class="tag">&lt;div</span> <span class="attr">key</span>={field.id}<span class="tag">&gt;</span>  <span class="cm">{/* useFieldArray provides stable IDs */}</span>
+          <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">`items.${index}.description`</span>)} <span class="tag">/&gt;</span>
+          <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">`items.${index}.quantity`</span>, { <span class="prop">valueAsNumber</span>: <span class="kw">true</span> })} <span class="tag">/&gt;</span>
+          <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">`items.${index}.price`</span>, { <span class="prop">valueAsNumber</span>: <span class="kw">true</span> })} <span class="tag">/&gt;</span>
+          <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"button"</span> <span class="attr">onClick</span>={() => <span class="fn">remove</span>(index)}<span class="tag">&gt;</span>Remove<span class="tag">&lt;/button&gt;</span>
+        <span class="tag">&lt;/div&gt;</span>
+      ))}
+
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"button"</span> <span class="attr">onClick</span>={() => <span class="fn">append</span>({
+        <span class="prop">description</span>: <span class="str">""</span>, <span class="prop">quantity</span>: <span class="num">1</span>, <span class="prop">price</span>: <span class="num">0</span>
+      })}<span class="tag">&gt;</span>
+        Add Item
+      <span class="tag">&lt;/button&gt;</span>
+
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span><span class="tag">&gt;</span>Save Invoice<span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <table>
+    <thead>
+      <tr><th>Method</th><th>What it does</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>append(obj)</code></td><td>Add item at end</td><td><code>append({ description: "", quantity: 1, price: 0 })</code></td></tr>
+      <tr><td><code>prepend(obj)</code></td><td>Add item at start</td><td><code>prepend({ description: "First" })</code></td></tr>
+      <tr><td><code>remove(index)</code></td><td>Remove by index</td><td><code>remove(2)</code></td></tr>
+      <tr><td><code>move(from, to)</code></td><td>Reorder items</td><td><code>move(0, 3)</code></td></tr>
+      <tr><td><code>swap(a, b)</code></td><td>Swap two items</td><td><code>swap(1, 2)</code></td></tr>
+      <tr><td><code>insert(index, obj)</code></td><td>Insert at position</td><td><code>insert(1, { ... })</code></td></tr>
+      <tr><td><code>replace(items[])</code></td><td>Replace entire array</td><td><code>replace(newItems)</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Key rule:</strong> Always use <code>field.id</code> as the <code>key</code> in your map — NOT the array index. <code>useFieldArray</code> generates stable IDs. Using index as key causes input values to shift when items are removed.
+  </div>
+
+  <!-- ===== WATCH ===== -->
+  <h2>Watching Field Values</h2>
+
+  <p><code>watch</code> subscribes to field changes — useful for dependent fields, conditional rendering, and live previews.</p>
+
+<pre><code><span class="kw">const</span> { register, watch } = <span class="fn">useForm</span>&lt;<span class="type">ShippingForm</span>&gt;()
+
+<span class="cm">// Watch a single field</span>
+<span class="kw">const</span> country = <span class="fn">watch</span>(<span class="str">"country"</span>)
+
+<span class="cm">// Watch multiple fields</span>
+<span class="kw">const</span> [firstName, lastName] = <span class="fn">watch</span>([<span class="str">"firstName"</span>, <span class="str">"lastName"</span>])
+
+<span class="cm">// Watch all fields (re-renders on ANY change — use sparingly)</span>
+<span class="kw">const</span> allValues = <span class="fn">watch</span>()</code></pre>
+
+  <h3>Common Use Cases</h3>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Dependent Dropdowns</div>
+<pre><code><span class="kw">const</span> country = <span class="fn">watch</span>(<span class="str">"country"</span>)
+
+<span class="cm">// City options depend on country</span>
+<span class="kw">const</span> cities = <span class="fn">useMemo</span>(
+  () => <span class="fn">getCitiesFor</span>(country),
+  [country]
+)
+
+<span class="tag">&lt;select</span> {...<span class="fn">register</span>(<span class="str">"country"</span>)}<span class="tag">&gt;</span>
+  <span class="tag">&lt;option</span> <span class="attr">value</span>=<span class="str">"US"</span><span class="tag">&gt;</span>USA<span class="tag">&lt;/option&gt;</span>
+  <span class="tag">&lt;option</span> <span class="attr">value</span>=<span class="str">"FR"</span><span class="tag">&gt;</span>France<span class="tag">&lt;/option&gt;</span>
+<span class="tag">&lt;/select&gt;</span>
+
+<span class="tag">&lt;select</span> {...<span class="fn">register</span>(<span class="str">"city"</span>)}<span class="tag">&gt;</span>
+  {cities.<span class="fn">map</span>(c => (
+    <span class="tag">&lt;option</span> <span class="attr">key</span>={c} <span class="attr">value</span>={c}<span class="tag">&gt;</span>{c}<span class="tag">&lt;/option&gt;</span>
+  ))}
+<span class="tag">&lt;/select&gt;</span></code></pre>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Conditional Fields</div>
+<pre><code><span class="kw">const</span> hasDiscount = <span class="fn">watch</span>(<span class="str">"hasDiscount"</span>)
+
+<span class="tag">&lt;label&gt;</span>
+  <span class="tag">&lt;input</span>
+    <span class="attr">type</span>=<span class="str">"checkbox"</span>
+    {...<span class="fn">register</span>(<span class="str">"hasDiscount"</span>)}
+  <span class="tag">/&gt;</span>
+  Apply discount?
+<span class="tag">&lt;/label&gt;</span>
+
+{hasDiscount && (
+  <span class="tag">&lt;input</span>
+    {...<span class="fn">register</span>(<span class="str">"discountCode"</span>)}
+    <span class="attr">placeholder</span>=<span class="str">"Enter code"</span>
+  <span class="tag">/&gt;</span>
+)}</code></pre>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Performance tip:</strong> <code>watch</code> causes re-renders on every change of the watched field. For performance-sensitive cases (like a live character count), consider <code>useWatch</code> which can be isolated to a child component.
+  </div>
+
+  <!-- ===== SETVALUE & RESET ===== -->
+  <h2>setValue, reset, and Programmatic Control</h2>
+
+  <h3>setValue — Set a Single Field</h3>
+
+<pre><code><span class="kw">const</span> { setValue } = <span class="fn">useForm</span>&lt;<span class="type">ProfileForm</span>&gt;()
+
+<span class="cm">// Set a field value programmatically</span>
+<span class="fn">setValue</span>(<span class="str">"name"</span>, <span class="str">"Alice"</span>)
+
+<span class="cm">// With options</span>
+<span class="fn">setValue</span>(<span class="str">"name"</span>, <span class="str">"Alice"</span>, {
+  <span class="prop">shouldValidate</span>: <span class="kw">true</span>,   <span class="cm">// trigger validation after setting</span>
+  <span class="prop">shouldDirty</span>: <span class="kw">true</span>,      <span class="cm">// mark field as dirty</span>
+  <span class="prop">shouldTouch</span>: <span class="kw">true</span>,      <span class="cm">// mark field as touched</span>
+})</code></pre>
+
+  <h3>reset — Reset Entire Form</h3>
+
+<pre><code><span class="kw">const</span> { reset } = <span class="fn">useForm</span>&lt;<span class="type">ProfileForm</span>&gt;()
+
+<span class="cm">// Reset to default values</span>
+<span class="fn">reset</span>()
+
+<span class="cm">// Reset to specific values (e.g., from API response)</span>
+<span class="fn">reset</span>({
+  <span class="prop">name</span>: user.name,
+  <span class="prop">email</span>: user.email,
+  <span class="prop">bio</span>: user.bio,
+})
+
+<span class="cm">// Common pattern: populate form from API data</span>
+<span class="kw">const</span> { data: user } = <span class="fn">useQuery</span>({ <span class="prop">queryKey</span>: [<span class="str">"user"</span>], <span class="prop">queryFn</span>: fetchUser })
+
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">if</span> (user) <span class="fn">reset</span>(user)  <span class="cm">// populate form when data arrives</span>
+}, [user, reset])</code></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Don't: manual state sync</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Manually setting every field</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">if</span> (user) {
+    <span class="fn">setValue</span>(<span class="str">"name"</span>, user.name)
+    <span class="fn">setValue</span>(<span class="str">"email"</span>, user.email)
+    <span class="fn">setValue</span>(<span class="str">"bio"</span>, user.bio)
+    <span class="cm">// easy to miss fields...</span>
+  }
+}, [user])</code></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Do: reset with full object</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// One call resets everything</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">if</span> (user) <span class="fn">reset</span>(user)
+}, [user, reset])
+
+<span class="cm">// Cleaner, can't miss fields,
+// resets dirty/touched state too</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== NESTED OBJECTS ===== -->
+  <h2>Nested Objects</h2>
+
+  <p>React Hook Form supports dot notation for nested data structures.</p>
+
+<pre><code><span class="kw">interface</span> <span class="type">OrderForm</span> {
+  <span class="prop">customer</span>: {
+    <span class="prop">name</span>: <span class="type">string</span>
+    <span class="prop">email</span>: <span class="type">string</span>
+  }
+  <span class="prop">shipping</span>: {
+    <span class="prop">street</span>: <span class="type">string</span>
+    <span class="prop">city</span>: <span class="type">string</span>
+    <span class="prop">zip</span>: <span class="type">string</span>
+  }
+}
+
+<span class="cm">// Register with dot notation</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"customer.name"</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"customer.email"</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"shipping.street"</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"shipping.city"</span>)} <span class="tag">/&gt;</span>
+<span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"shipping.zip"</span>)} <span class="tag">/&gt;</span>
+
+<span class="cm">// Access nested errors</span>
+{errors.shipping?.street && <span class="tag">&lt;span&gt;</span>{errors.shipping.street.message}<span class="tag">&lt;/span&gt;</span>}
+
+<span class="cm">// Submit gives you the nested object:</span>
+<span class="cm">// { customer: { name: "Alice", email: "..." }, shipping: { street: "...", ... } }</span></code></pre>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like nested Pydantic models — <code>class Order(BaseModel): customer: Customer; shipping: Address</code>. The dot notation is how RHF flattens nested structures for form fields.
+  </div>
+
+  <!-- ===== DIRTY CHECKING ===== -->
+  <h2>Dirty Checking and Navigation Guards</h2>
+
+  <p>Prevent users from accidentally leaving a form with unsaved changes.</p>
+
+<pre><code><span class="kw">const</span> { formState: { isDirty } } = <span class="fn">useForm</span>()
+
+<span class="cm">// Warn before browser navigation (refresh, close tab)</span>
+<span class="fn">useEffect</span>(() => {
+  <span class="kw">const</span> <span class="fn">handler</span> = (e: <span class="type">BeforeUnloadEvent</span>) => {
+    <span class="kw">if</span> (isDirty) {
+      e.<span class="fn">preventDefault</span>()
+      <span class="cm">// Browser shows "Leave site?" dialog</span>
+    }
+  }
+  window.<span class="fn">addEventListener</span>(<span class="str">"beforeunload"</span>, handler)
+  <span class="kw">return</span> () => window.<span class="fn">removeEventListener</span>(<span class="str">"beforeunload"</span>, handler)
+}, [isDirty])
+
+<span class="cm">// For in-app navigation (TanStack Router):</span>
+<span class="cm">// Use the router's beforeLoad or navigation blocking API</span></code></pre>
+
+  <table>
+    <thead>
+      <tr><th>Form State</th><th>What it tells you</th><th>Use case</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>isDirty</code></td><td>Any field changed from default?</td><td>Enable/disable save button, navigation guard</td></tr>
+      <tr><td><code>dirtyFields</code></td><td>Which specific fields changed</td><td>Partial updates — only send changed fields to API</td></tr>
+      <tr><td><code>isSubmitting</code></td><td>Form submission in progress</td><td>Disable submit button, show spinner</td></tr>
+      <tr><td><code>isSubmitSuccessful</code></td><td>Last submit succeeded</td><td>Show success message, reset form</td></tr>
+      <tr><td><code>isValid</code></td><td>All validation passing</td><td>Enable submit button (with <code>mode: "onChange"</code>)</td></tr>
+      <tr><td><code>touchedFields</code></td><td>Which fields user interacted with</td><td>Show errors only after user touches a field</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== FILE UPLOADS ===== -->
+  <h2>File Uploads</h2>
+
+<pre><code><span class="kw">interface</span> <span class="type">UploadForm</span> {
+  <span class="prop">avatar</span>: <span class="type">FileList</span>
+  <span class="prop">name</span>: <span class="type">string</span>
+}
+
+<span class="kw">const</span> <span class="fn">AvatarUpload</span> = () => {
+  <span class="kw">const</span> { register, handleSubmit, watch } = <span class="fn">useForm</span>&lt;<span class="type">UploadForm</span>&gt;()
+
+  <span class="kw">const</span> avatar = <span class="fn">watch</span>(<span class="str">"avatar"</span>)
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = (data: <span class="type">UploadForm</span>) => {
+    <span class="kw">const</span> formData = <span class="kw">new</span> <span class="type">FormData</span>()
+    formData.<span class="fn">append</span>(<span class="str">"avatar"</span>, data.avatar[<span class="num">0</span>])
+    formData.<span class="fn">append</span>(<span class="str">"name"</span>, data.name)
+    <span class="cm">// POST formData to API</span>
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+      <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"avatar"</span>, {
+        <span class="prop">validate</span>: {
+          <span class="fn">size</span>: (files) =>
+            !files[<span class="num">0</span>] || files[<span class="num">0</span>].size &lt; <span class="num">5_000_000</span> || <span class="str">"Max 5MB"</span>,
+          <span class="fn">type</span>: (files) =>
+            !files[<span class="num">0</span>] || files[<span class="num">0</span>].type.startsWith(<span class="str">"image/"</span>) || <span class="str">"Images only"</span>,
+        }
+      })} <span class="attr">type</span>=<span class="str">"file"</span> <span class="attr">accept</span>=<span class="str">"image/*"</span> <span class="tag">/&gt;</span>
+
+      {avatar?.[<span class="num">0</span>] && (
+        <span class="tag">&lt;img</span> <span class="attr">src</span>={URL.<span class="fn">createObjectURL</span>(avatar[<span class="num">0</span>])} <span class="attr">alt</span>=<span class="str">"Preview"</span> <span class="tag">/&gt;</span>
+      )}
+
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span><span class="tag">&gt;</span>Upload<span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <!-- ===== REAL WORLD EXAMPLE ===== -->
+  <h2>Real-World Example: Settings Page</h2>
+
+  <p>Combining multiple patterns — API-populated defaults, nested objects, dirty checking, and partial updates.</p>
+
+<pre><code><span class="kw">const</span> settingsSchema = z.<span class="fn">object</span>({
+  <span class="prop">profile</span>: z.<span class="fn">object</span>({
+    <span class="prop">name</span>: z.<span class="fn">string</span>().<span class="fn">min</span>(<span class="num">1</span>, <span class="str">"Required"</span>),
+    <span class="prop">bio</span>: z.<span class="fn">string</span>().<span class="fn">max</span>(<span class="num">500</span>),
+  }),
+  <span class="prop">notifications</span>: z.<span class="fn">object</span>({
+    <span class="prop">email</span>: z.<span class="fn">boolean</span>(),
+    <span class="prop">push</span>: z.<span class="fn">boolean</span>(),
+    <span class="prop">frequency</span>: z.<span class="fn">enum</span>([<span class="str">"instant"</span>, <span class="str">"daily"</span>, <span class="str">"weekly"</span>]),
+  }),
+})
+
+<span class="kw">type</span> <span class="type">Settings</span> = z.infer&lt;<span class="kw">typeof</span> settingsSchema&gt;
+
+<span class="kw">const</span> <span class="fn">SettingsPage</span> = () => {
+  <span class="kw">const</span> { data: settings } = <span class="fn">useQuery</span>({
+    <span class="prop">queryKey</span>: [<span class="str">"settings"</span>],
+    <span class="prop">queryFn</span>: fetchSettings,
+  })
+
+  <span class="kw">const</span> mutation = <span class="fn">useMutation</span>({ <span class="prop">mutationFn</span>: updateSettings })
+
+  <span class="kw">const</span> { register, handleSubmit, reset, formState: { isDirty, dirtyFields } } =
+    <span class="fn">useForm</span>&lt;<span class="type">Settings</span>&gt;({
+      <span class="prop">resolver</span>: <span class="fn">zodResolver</span>(settingsSchema),
+    })
+
+  <span class="cm">// Populate form when API data arrives</span>
+  <span class="fn">useEffect</span>(() => {
+    <span class="kw">if</span> (settings) <span class="fn">reset</span>(settings)
+  }, [settings, reset])
+
+  <span class="kw">const</span> <span class="fn">onSubmit</span> = (data: <span class="type">Settings</span>) => {
+    <span class="cm">// Only send changed fields (partial update)</span>
+    mutation.<span class="fn">mutate</span>(data, {
+      <span class="fn">onSuccess</span>: () => <span class="fn">reset</span>(data),  <span class="cm">// reset dirty state after save</span>
+    })
+  }
+
+  <span class="kw">return</span> (
+    <span class="tag">&lt;form</span> <span class="attr">onSubmit</span>={<span class="fn">handleSubmit</span>(onSubmit)}<span class="tag">&gt;</span>
+      <span class="tag">&lt;h2&gt;</span>Profile<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;input</span> {...<span class="fn">register</span>(<span class="str">"profile.name"</span>)} <span class="tag">/&gt;</span>
+      <span class="tag">&lt;textarea</span> {...<span class="fn">register</span>(<span class="str">"profile.bio"</span>)} <span class="tag">/&gt;</span>
+
+      <span class="tag">&lt;h2&gt;</span>Notifications<span class="tag">&lt;/h2&gt;</span>
+      <span class="tag">&lt;label&gt;</span>
+        <span class="tag">&lt;input</span> <span class="attr">type</span>=<span class="str">"checkbox"</span> {...<span class="fn">register</span>(<span class="str">"notifications.email"</span>)} <span class="tag">/&gt;</span>
+        Email notifications
+      <span class="tag">&lt;/label&gt;</span>
+
+      <span class="tag">&lt;button</span> <span class="attr">type</span>=<span class="str">"submit"</span> <span class="attr">disabled</span>={!isDirty}<span class="tag">&gt;</span>
+        Save Changes
+      <span class="tag">&lt;/button&gt;</span>
+    <span class="tag">&lt;/form&gt;</span>
+  )
+}</code></pre>
+
+  <div class="tip">
+    <strong>Pattern summary:</strong> API data → <code>reset(data)</code> on load. User edits → <code>isDirty</code> enables save. Submit → <code>reset(data)</code> after success clears dirty state. Navigation guard uses <code>isDirty</code> to warn about unsaved changes.
+  </div>
+
+</body>
+</html>

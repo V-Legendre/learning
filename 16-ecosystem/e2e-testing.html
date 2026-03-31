@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>16 — E2E Testing (Playwright)</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>16 — E2E Testing (Playwright)</h1>
+  <p class="subtitle">Test the full application from a real user's perspective — real browser, real clicks, real navigation.</p>
+
+  <!-- ===== WHAT E2E TESTS DO ===== -->
+  <h2>What E2E Tests Cover</h2>
+
+  <div class="panel">
+    <div class="panel-title">The testing pyramid</div>
+    <p>E2E tests sit at the top of the pyramid — they're the most realistic but also the slowest and most expensive to maintain.</p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Layer</th><th>Scope</th><th>Speed</th><th>Quantity</th><th>Tool</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Unit</strong></td><td>Functions, utilities, stores</td><td>Fastest</td><td>Many</td><td>Vitest</td></tr>
+      <tr><td><strong>Component</strong></td><td>Individual components + mocked APIs</td><td>Fast</td><td>Some</td><td>Vitest + Testing Library</td></tr>
+      <tr><td><strong>E2E</strong></td><td>Full app, real browser, real API</td><td>Slowest</td><td>Few</td><td>Playwright</td></tr>
+    </tbody>
+  </table>
+
+  <p>E2E tests catch problems that unit/component tests can't:</p>
+  <ul>
+    <li>Routing and navigation between pages</li>
+    <li>Authentication flows end-to-end</li>
+    <li>Real API integration issues</li>
+    <li>Browser-specific bugs (CSS, JavaScript compatibility)</li>
+    <li>Multi-step user journeys (signup → onboard → dashboard)</li>
+  </ul>
+
+  <div class="note">
+    <strong>Python analogy:</strong> Like Selenium tests but modern. Or like integration tests that spin up the full app and hit real endpoints. The frontend equivalent of <code>pytest</code> with a live server + real database.
+  </div>
+
+  <!-- ===== PLAYWRIGHT VS CYPRESS ===== -->
+  <h2>Playwright vs Cypress</h2>
+
+  <table>
+    <thead>
+      <tr><th>Feature</th><th>Playwright</th><th>Cypress</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Browsers</td><td>Chromium, Firefox, WebKit</td><td>Chromium, Firefox, WebKit (limited)</td></tr>
+      <tr><td>Speed</td><td>Faster (parallel by default)</td><td>Slower (sequential by default)</td></tr>
+      <tr><td>TypeScript</td><td>First-class</td><td>Good</td></tr>
+      <tr><td>Auto-waiting</td><td>Built-in, reliable</td><td>Built-in</td></tr>
+      <tr><td>API testing</td><td>Built-in (<code>request</code> fixture)</td><td>Via <code>cy.request()</code></td></tr>
+      <tr><td>Debugging DX</td><td>Good (trace viewer, codegen)</td><td>Excellent (time-travel UI)</td></tr>
+      <tr><td>Multi-tab/iframe</td><td>Supported</td><td>Limited</td></tr>
+      <tr><td>Community</td><td>Growing fast</td><td>Established</td></tr>
+      <tr><td><strong>Verdict</strong></td><td colspan="2"><strong>Playwright</strong> for new projects — faster, more capable, better TS support</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SETUP ===== -->
+  <h2>Playwright Setup</h2>
+
+  <div class="terminal">
+    <span class="prompt">$</span> pnpm create playwright<br>
+    <span class="output">Getting started with writing end-to-end tests with Playwright:</span><br>
+    <span class="output">Initializing project in '.'</span><br>
+    <span class="output">✓ Install Playwright browsers</span><br>
+    <span class="output">✓ Created playwright.config.ts</span><br>
+    <span class="output">✓ Created tests/ directory</span>
+  </div>
+
+<pre><code><span class="cm">// playwright.config.ts</span>
+<span class="kw">import</span> { <span class="fn">defineConfig</span> } <span class="kw">from</span> <span class="str">"@playwright/test"</span>
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  <span class="prop">testDir</span>: <span class="str">"./e2e"</span>,
+  <span class="prop">fullyParallel</span>: <span class="kw">true</span>,
+  <span class="prop">retries</span>: process.env.CI ? <span class="num">2</span> : <span class="num">0</span>,
+
+  <span class="prop">use</span>: {
+    <span class="prop">baseURL</span>: <span class="str">"http://localhost:5173"</span>,
+    <span class="prop">trace</span>: <span class="str">"on-first-retry"</span>,      <span class="cm">// capture trace on failure</span>
+    <span class="prop">screenshot</span>: <span class="str">"only-on-failure"</span>,  <span class="cm">// screenshot on failure</span>
+  },
+
+  <span class="cm">// Start your dev server automatically</span>
+  <span class="prop">webServer</span>: {
+    <span class="prop">command</span>: <span class="str">"pnpm dev"</span>,
+    <span class="prop">url</span>: <span class="str">"http://localhost:5173"</span>,
+    <span class="prop">reuseExistingServer</span>: !process.env.CI,
+  },
+
+  <span class="prop">projects</span>: [
+    { <span class="prop">name</span>: <span class="str">"chromium"</span>, <span class="prop">use</span>: { <span class="prop">browserName</span>: <span class="str">"chromium"</span> } },
+    { <span class="prop">name</span>: <span class="str">"firefox"</span>, <span class="prop">use</span>: { <span class="prop">browserName</span>: <span class="str">"firefox"</span> } },
+    { <span class="prop">name</span>: <span class="str">"webkit"</span>, <span class="prop">use</span>: { <span class="prop">browserName</span>: <span class="str">"webkit"</span> } },
+  ],
+})</code></pre>
+
+  <!-- ===== BASIC EXAMPLE ===== -->
+  <h2>Writing E2E Tests</h2>
+
+  <h3>Basic Navigation Test</h3>
+
+<pre><code><span class="cm">// e2e/navigation.spec.ts</span>
+<span class="kw">import</span> { <span class="fn">test</span>, <span class="fn">expect</span> } <span class="kw">from</span> <span class="str">"@playwright/test"</span>
+
+<span class="fn">test</span>(<span class="str">"homepage has title and navigation"</span>, <span class="kw">async</span> ({ page }) => {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">"/"</span>)
+
+  <span class="cm">// Check page title</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveTitle</span>(<span class="str">/My App/</span>)
+
+  <span class="cm">// Check heading</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">"heading"</span>, { <span class="prop">name</span>: <span class="str">"Welcome"</span> })).<span class="fn">toBeVisible</span>()
+
+  <span class="cm">// Click a navigation link</span>
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">"link"</span>, { <span class="prop">name</span>: <span class="str">"About"</span> }).<span class="fn">click</span>()
+
+  <span class="cm">// Verify URL changed</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">/\/about/</span>)
+})</code></pre>
+
+  <h3>Login Flow</h3>
+
+<pre><code><span class="fn">test</span>(<span class="str">"user can log in and see dashboard"</span>, <span class="kw">async</span> ({ page }) => {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">"/login"</span>)
+
+  <span class="cm">// Fill in the form</span>
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">"Email"</span>).<span class="fn">fill</span>(<span class="str">"test@example.com"</span>)
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">"Password"</span>).<span class="fn">fill</span>(<span class="str">"password123"</span>)
+
+  <span class="cm">// Submit</span>
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">"Sign in"</span> }).<span class="fn">click</span>()
+
+  <span class="cm">// Verify redirect to dashboard</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">"/dashboard"</span>)
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">"Welcome, Test User"</span>)).<span class="fn">toBeVisible</span>()
+})</code></pre>
+
+  <h3>Form Submission with Validation</h3>
+
+<pre><code><span class="fn">test</span>(<span class="str">"shows validation errors and submits successfully"</span>, <span class="kw">async</span> ({ page }) => {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">"/contact"</span>)
+
+  <span class="cm">// Submit empty form</span>
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">"Send"</span> }).<span class="fn">click</span>()
+
+  <span class="cm">// Check validation errors appear</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">"Name is required"</span>)).<span class="fn">toBeVisible</span>()
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">"Email is required"</span>)).<span class="fn">toBeVisible</span>()
+
+  <span class="cm">// Fill in valid data</span>
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">"Name"</span>).<span class="fn">fill</span>(<span class="str">"Alice"</span>)
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">"Email"</span>).<span class="fn">fill</span>(<span class="str">"alice@example.com"</span>)
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">"Message"</span>).<span class="fn">fill</span>(<span class="str">"Hello!"</span>)
+
+  <span class="cm">// Submit</span>
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">"button"</span>, { <span class="prop">name</span>: <span class="str">"Send"</span> }).<span class="fn">click</span>()
+
+  <span class="cm">// Check success</span>
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">"Message sent!"</span>)).<span class="fn">toBeVisible</span>()
+})</code></pre>
+
+  <!-- ===== LOCATORS ===== -->
+  <h2>Finding Elements (Locators)</h2>
+
+  <p>Playwright locators auto-wait for elements to be visible and actionable — no manual <code>sleep</code> or <code>waitFor</code> needed.</p>
+
+  <table>
+    <thead>
+      <tr><th>Locator</th><th>Example</th><th>When to use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>getByRole</code></td><td><code>page.getByRole("button", { name: "Save" })</code></td><td>Best — matches accessibility tree</td></tr>
+      <tr><td><code>getByLabel</code></td><td><code>page.getByLabel("Email")</code></td><td>Form inputs with labels</td></tr>
+      <tr><td><code>getByText</code></td><td><code>page.getByText("Welcome")</code></td><td>Static text content</td></tr>
+      <tr><td><code>getByPlaceholder</code></td><td><code>page.getByPlaceholder("Search...")</code></td><td>Inputs without labels</td></tr>
+      <tr><td><code>getByTestId</code></td><td><code>page.getByTestId("sidebar")</code></td><td>Last resort</td></tr>
+      <tr><td><code>locator</code></td><td><code>page.locator(".card >> text=Alice")</code></td><td>Complex CSS/text combos</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Same priority as Testing Library:</strong> Prefer <code>getByRole</code> → <code>getByLabel</code> → <code>getByText</code> → <code>getByTestId</code>. Accessible locators make your app more accessible too.
+  </div>
+
+  <!-- ===== RUNNING TESTS ===== -->
+  <h2>Running Tests</h2>
+
+  <div class="terminal">
+    <span class="prompt">$</span> pnpm playwright test                  <span class="cm"># Run all tests</span><br>
+    <span class="prompt">$</span> pnpm playwright test --ui              <span class="cm"># Interactive UI mode</span><br>
+    <span class="prompt">$</span> pnpm playwright test login.spec.ts     <span class="cm"># Run specific file</span><br>
+    <span class="prompt">$</span> pnpm playwright test --project=chromium <span class="cm"># Specific browser</span><br>
+    <span class="prompt">$</span> pnpm playwright show-report            <span class="cm"># Open HTML report</span><br>
+    <span class="prompt">$</span> pnpm playwright codegen                <span class="cm"># Record interactions → generate code</span>
+  </div>
+
+  <div class="tip">
+    <strong><code>playwright codegen</code></strong> is incredible for beginners — it opens a browser, records your interactions, and generates the test code for you. Great for bootstrapping tests quickly.
+  </div>
+
+  <!-- ===== WHEN TO ADD ===== -->
+  <h2>When to Add E2E Tests</h2>
+
+  <div class="panel">
+    <div class="panel-title">Good candidates for E2E</div>
+    <ul>
+      <li>Critical user flows: signup, login, checkout, payment</li>
+      <li>Multi-page journeys that span several components and routes</li>
+      <li>Flows that involve real API interactions and data persistence</li>
+      <li>Smoke tests for core functionality (does the app load? can you navigate?)</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Don't E2E test these</div>
+    <ul>
+      <li>Individual component behavior (use component tests)</li>
+      <li>Edge cases and validation rules (use unit tests)</li>
+      <li>Every permutation of a feature (test the happy path + one error path)</li>
+      <li>Styling/visual details (use Storybook + visual regression)</li>
+    </ul>
+  </div>
+
+  <div class="warn">
+    <strong>E2E tests are expensive.</strong> They're slow to run, flaky if not careful, and expensive to maintain. Aim for 10-20 E2E tests covering critical paths, not 200 E2E tests covering everything. The bulk of your test coverage should come from unit and component tests.
+  </div>
+
+</body>
+</html>
