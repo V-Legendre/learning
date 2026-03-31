@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Learning</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f0f1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
   <link rel="stylesheet" href="styles/notes.css">
   <style>
     .topic-grid {
@@ -348,6 +354,7 @@
         <li><a href="net-08-nat-traversal-tailscale/stun-turn-ice.html">STUN, TURN & ICE</a></li>
         <li><a href="net-08-nat-traversal-tailscale/tailscale.html">Tailscale Architecture</a></li>
         <li><a href="net-08-nat-traversal-tailscale/tailscale-features.html">Tailscale Features</a></li>
+        <li><a href="net-08-nat-traversal-tailscale/nat-traversal-deep-dive.html">NAT Traversal Deep Dive</a></li>
       </ul>
     </div>
 
@@ -417,6 +424,144 @@
     </div>
 
   </div>
+
+  <!-- ===== VIRTUALIZATION TRACK ===== -->
+  <h2 style="color: #a78bfa; margin: 60px 0 0;">Virtualization</h2>
+
+  <div class="section-label">Hardware & Kernel Primitives</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Virt 01 — CPU Virtualization</h3>
+      <p class="desc">Protection rings, VT-x/AMD-V, trap-and-emulate, KVM, QEMU, and virtio</p>
+      <ul>
+        <li><a href="virt-01-cpu-virtualization/cpu-rings-traps.html">CPU Rings & Traps</a></li>
+        <li><a href="virt-01-cpu-virtualization/hypervisors.html">Hypervisors (KVM, QEMU, virtio)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 02 — Linux Namespaces</h3>
+      <p class="desc">All 8 namespace types — mount, PID, user, cgroup, time — and how containers are born</p>
+      <ul>
+        <li><a href="virt-02-namespaces/namespace-theory.html">Namespace Theory & Core Types</a></li>
+        <li><a href="virt-02-namespaces/namespace-advanced.html">Advanced Types & Container Birth</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 03 — cgroups</h3>
+      <p class="desc">Resource control — CPU, memory, I/O limits, Docker flag mapping, K8s QoS classes</p>
+      <ul>
+        <li><a href="virt-03-cgroups/cgroup-fundamentals.html">cgroup Fundamentals</a></li>
+        <li><a href="virt-03-cgroups/cgroup-controllers.html">Controllers (CPU, Memory, I/O)</a></li>
+        <li><a href="virt-03-cgroups/cgroup-in-practice.html">cgroups in Practice (Docker & K8s)</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Container Security & Images</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Virt 04 — Container Security</h3>
+      <p class="desc">Capabilities, seccomp-BPF, AppArmor, SELinux — defense in depth</p>
+      <ul>
+        <li><a href="virt-04-security/capabilities-seccomp.html">Capabilities & Seccomp</a></li>
+        <li><a href="virt-04-security/lsm-apparmor.html">LSMs, AppArmor & SELinux</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 05 — Container Images</h3>
+      <p class="desc">OCI image spec, overlay2, layer caching, multi-stage builds, BuildKit</p>
+      <ul>
+        <li><a href="virt-05-container-images/oci-image-spec.html">OCI Image Specification</a></li>
+        <li><a href="virt-05-container-images/union-filesystems.html">Union Filesystems & OverlayFS</a></li>
+        <li><a href="virt-05-container-images/building-images.html">Building Images (Dockerfile & BuildKit)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 06 — Container Runtimes</h3>
+      <p class="desc">OCI runtime spec, runc, containerd, CRI, gVisor, Kata, Firecracker</p>
+      <ul>
+        <li><a href="virt-06-container-runtimes/oci-runtime-spec.html">OCI Runtime Spec & runc</a></li>
+        <li><a href="virt-06-container-runtimes/containerd-cri.html">containerd & CRI</a></li>
+        <li><a href="virt-06-container-runtimes/sandboxed-runtimes.html">Sandboxed Runtimes</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Docker & Kubernetes</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Virt 07 — Docker Internals</h3>
+      <p class="desc">Docker architecture, volumes, bind mounts, CPU/memory/IO resource limits</p>
+      <ul>
+        <li><a href="virt-07-docker-internals/docker-architecture.html">Docker Architecture</a></li>
+        <li><a href="virt-07-docker-internals/volumes-storage.html">Volumes & Storage</a></li>
+        <li><a href="virt-07-docker-internals/docker-resource-limits.html">Resource Limits</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 08 — Kubernetes Architecture</h3>
+      <p class="desc">Control plane, kubelet, CRI, probes, workloads, scheduling</p>
+      <ul>
+        <li><a href="virt-08-kubernetes-architecture/control-plane.html">Control Plane</a></li>
+        <li><a href="virt-08-kubernetes-architecture/kubelet-runtime.html">Kubelet & Container Runtime</a></li>
+        <li><a href="virt-08-kubernetes-architecture/workloads-scheduling.html">Workloads & Scheduling</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Virt 09 — Kubernetes Storage</h3>
+      <p class="desc">PV/PVC, StorageClass, dynamic provisioning, CSI drivers</p>
+      <ul>
+        <li><a href="virt-09-kubernetes-storage/pv-pvc-storageclass.html">PV, PVC & StorageClass</a></li>
+        <li><a href="virt-09-kubernetes-storage/csi.html">Container Storage Interface (CSI)</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Proxmox & KVM</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Virt 10 — Proxmox KVM</h3>
+      <p class="desc">Proxmox VE architecture, VM lifecycle, ZFS, Ceph, clustering, HA</p>
+      <ul>
+        <li><a href="virt-10-proxmox-kvm/proxmox-architecture.html">Proxmox Architecture</a></li>
+        <li><a href="virt-10-proxmox-kvm/vm-lifecycle-networking.html">VM Lifecycle & Networking</a></li>
+        <li><a href="virt-10-proxmox-kvm/storage-ha.html">Storage & High Availability</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <!-- PWA Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((reg) => {
+          // Check for updates on each visit
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'activated') {
+                console.log('Learning Notes cached for offline use');
+              }
+            });
+          });
+        })
+        .catch((err) => console.log('SW registration failed:', err));
+    }
+  </script>
 
 </body>
 </html>
