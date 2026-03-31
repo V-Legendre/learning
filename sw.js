@@ -1,12 +1,14 @@
 // Service Worker for offline access to learning notes
 // Strategy: pre-cache all content on install, serve cache-first
 
-const CACHE_NAME = 'learning-notes-v1';
+const CACHE_NAME = 'learning-notes-v2';
 
 const PRECACHE_URLS = [
   '/',
   '/index.html',
   '/styles/notes.css',
+  '/nav.js',
+  '/pages.json',
   // Frontend
   '/01-html-css/notes.html',
   '/01-html-css/flexbox.html',

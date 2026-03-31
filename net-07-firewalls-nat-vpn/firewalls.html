@@ -530,5 +530,6 @@
     <strong>K8s-specific:</strong> On a busy Kubernetes node running many Services, conntrack exhaustion is a well-known issue. Each Service connection (ClusterIP DNAT) creates a conntrack entry. Nodes with high pod density and many short-lived connections (like gRPC or HTTP/1.1 without keep-alive) are most vulnerable. Monitor <code>node_nf_conntrack_entries</code> in Prometheus and alert at 80% of max.
   </div>
 
+<script src="../nav.js"></script>
 </body>
 </html>

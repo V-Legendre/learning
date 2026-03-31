@@ -492,5 +492,6 @@ default       via 10.0.12.2</code></pre>
     <strong>K8s routing context:</strong> In a K8s cluster, each node has routes for pod CIDRs on other nodes. With Calico (BGP mode), nodes peer via BGP and exchange routes like <code>10.244.1.0/24 via 192.168.1.11</code>. With Cilium (eBPF), the forwarding is done in the kernel datapath, bypassing iptables — but the same longest-prefix-match logic applies at the FIB level.
   </div>
 
+<script src="../nav.js"></script>
 </body>
 </html>

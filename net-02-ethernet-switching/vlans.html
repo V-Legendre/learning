@@ -461,5 +461,6 @@
     <strong>VLANs are not a firewall.</strong> VLANs provide Layer 2 isolation, but they are not a substitute for firewalling. An L3 switch routing between VLANs will happily forward all traffic unless you configure ACLs. In security-sensitive environments (PCI, HIPAA), VLANs are a segmentation mechanism, but the enforcement point is the firewall/ACL at the L3 boundary. Defense in depth: VLANs + ACLs + firewall rules + microsegmentation (Calico NetworkPolicy, Cilium).
   </div>
 
+<script src="../nav.js"></script>
 </body>
 </html>
