@@ -50,6 +50,31 @@ Each topic folder should contain:
 - Use `const` by default, `let` when mutation is needed, never `var`
 - Use arrow functions for component definitions and callbacks
 
+## When Adding New Pages
+
+Every new HTML page must be wired into the navigation and search system. Follow these steps:
+
+1. **`index.html`** — Add a link to the new page in the appropriate section/topic card
+2. **`pages.json`** — Add an entry with `path`, `title`, `section`, and `topic`. The array order defines prev/next navigation, so insert in the correct position
+3. **`sw.js`** — Add the relative path to `PRECACHE_PATHS` so the page is cached for offline reading
+4. **`<script src="../nav.js"></script>`** — Add this before `</body>` in the new HTML file (the nav bar and Cmd+K search are injected by this script)
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `nav.js` | Shared script — injects top bar (home, prev/next, search) and Cmd+K modal into every page |
+| `pages.json` | Page manifest — ordered list of all pages with title/section/topic metadata |
+| `sw.js` | Service worker — pre-caches all pages for offline PWA access. Bump `CACHE_NAME` version when updating |
+| `manifest.json` | PWA manifest — uses relative paths (`./`) to work on GitHub Pages subpaths |
+| `styles/notes.css` | Shared stylesheet — all note pages link to this |
+
+### Learning tracks
+
+- **Frontend** (`01-*` through `16-*`) — React/TypeScript learning path
+- **Networking** (`net-01-*` through `net-13-*`) — Network fundamentals to K8s networking
+- **Virtualization** (`virt-01-*` through `virt-10-*`) — CPU virtualization to Proxmox
+
 ## What NOT to Do
 
 - Don't write code without explaining the *why* first
