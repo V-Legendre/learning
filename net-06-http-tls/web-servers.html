@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net 06 — Web Servers</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Net 06 — Web Servers</h1>
+  <p class="subtitle">What they do, how they handle connections, and how they fit in the stack</p>
+
+  <!-- ===== WHAT A WEB SERVER DOES ===== -->
+  <h2>What a Web Server Actually Does</h2>
+
+  <p>A web server is a process that <strong>listens on a TCP socket</strong> (typically port 80/443), accepts incoming connections, parses HTTP requests, and sends back HTTP responses. That's the core loop — everything else is configuration around it.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Bind & Listen</div>
+      <div class="desc">socket() → bind(:80) → listen()</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Accept Connection</div>
+      <div class="desc">TCP handshake completes, fd returned</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">TLS Handshake</div>
+      <div class="desc">If HTTPS — negotiate cipher, exchange certs</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Read Request</div>
+      <div class="desc">Parse method, path, headers, body</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Route & Handle</div>
+      <div class="desc">Static file? Proxy to backend? Redirect?</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Send Response</div>
+      <div class="desc">Status line, headers, body bytes</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">The Three Core Jobs</div>
+    <div class="grid-3">
+      <div>
+        <h3 style="color: #60a5fa;">Serve Static Files</h3>
+        <p>Read files from disk (HTML, CSS, JS, images) and send them over HTTP. The server maps the URL path to a filesystem path, sets <code>Content-Type</code> from the file extension, and streams the bytes. This is what web servers were originally built for.</p>
+      </div>
+      <div>
+        <h3 style="color: #34d399;">Reverse Proxy</h3>
+        <p>Forward requests to backend application servers (Python/Go/Node/Java) and relay the response back to the client. The web server handles TLS, HTTP parsing, connection management, and load balancing — the app server just processes business logic.</p>
+      </div>
+      <div>
+        <h3 style="color: #a78bfa;">Terminate TLS</h3>
+        <p>Handle the TLS handshake, certificate management, and encryption/decryption so that backend services don't have to. Internal traffic between the web server and backends often runs over plain HTTP on a trusted network.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CONNECTIONS ===== -->
+  <h2>Connections — What They Are and How They're Managed</h2>
+
+  <p>An HTTP connection is a <strong>TCP connection</strong> (or QUIC session for HTTP/3) between the client and the server. Understanding connections is fundamental because they determine performance, resource usage, and concurrency.</p>
+
+  <h3>Anatomy of a Connection</h3>
+
+  <p>Every connection is identified by the <strong>5-tuple</strong>: (protocol, client IP, client port, server IP, server port). Each connection is a file descriptor in the server process — it consumes memory (kernel buffers, TLS state, application buffers) and a slot in the OS's fd table.</p>
+
+  <div class="seq-diagram">
+    <div class="seq-header">
+      <div class="seq-entity">Client</div>
+      <div class="seq-entity">Web Server</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">SYN</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">SYN-ACK</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">ACK (connection open)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">ClientHello (TLS)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">ServerHello + Cert + Finished</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">Finished (TLS complete)</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">GET /index.html HTTP/1.1</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">HTTP/1.1 200 OK + body</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right">
+        <div class="seq-line"><span class="seq-label">GET /style.css HTTP/1.1</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left">
+        <div class="seq-line"><span class="seq-label">HTTP/1.1 200 OK + body</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Cost of a new connection:</strong> TCP handshake (1 RTT) + TLS 1.3 handshake (1 RTT) = <strong>2 RTTs minimum</strong> before the first byte of HTTP data. On a 50ms RTT link, that's 100ms of pure latency before anything useful happens. This is why connection reuse matters so much.
+  </div>
+
+  <h3>Keep-Alive and Connection Reuse</h3>
+
+  <p>In HTTP/1.1, connections are <strong>persistent by default</strong> (<code>Connection: keep-alive</code>). After the server sends a response, the connection stays open for the next request. The server closes it after a configurable idle timeout.</p>
+
+  <table>
+    <tr><th>Behavior</th><th>HTTP/1.0</th><th>HTTP/1.1</th><th>HTTP/2</th><th>HTTP/3</th></tr>
+    <tr><td>Connection per request</td><td>Yes (default)</td><td>No (keep-alive)</td><td>No (multiplexed)</td><td>No (multiplexed)</td></tr>
+    <tr><td>Requests per connection</td><td>1</td><td>Sequential (many)</td><td>Concurrent (many)</td><td>Concurrent (many)</td></tr>
+    <tr><td>Head-of-line blocking</td><td>N/A</td><td>Yes (response ordering)</td><td>Yes (TCP level)</td><td>No (stream independent)</td></tr>
+    <tr><td>Connection setup cost</td><td>TCP + TLS each time</td><td>TCP + TLS once</td><td>TCP + TLS once</td><td>QUIC 1-RTT (or 0-RTT)</td></tr>
+  </table>
+
+  <h3>Connection Limits and Concurrency</h3>
+
+  <p>A web server can handle thousands to millions of concurrent connections, depending on its architecture. Key limits:</p>
+
+  <table>
+    <tr><th>Resource</th><th>Limit</th><th>Tuning</th></tr>
+    <tr><td>File descriptors</td><td>Default 1024 per process (soft limit)</td><td><code>ulimit -n 65535</code> or <code>/etc/security/limits.conf</code></td></tr>
+    <tr><td>Ephemeral ports</td><td>~28K per destination IP (client-side)</td><td><code>net.ipv4.ip_local_port_range</code></td></tr>
+    <tr><td>Memory per connection</td><td>~10-50 KB (kernel buffers + TLS state)</td><td><code>net.ipv4.tcp_rmem</code> / <code>tcp_wmem</code></td></tr>
+    <tr><td>Conntrack table</td><td>Default 65536 entries</td><td><code>net.netfilter.nf_conntrack_max</code></td></tr>
+    <tr><td>Listen backlog</td><td>Default 128-4096</td><td><code>net.core.somaxconn</code></td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>The C10K problem:</strong> In the early 2000s, handling 10,000 concurrent connections was a major engineering challenge. The solution was moving from thread-per-connection to event-driven I/O (epoll/kqueue). Today, a single nginx worker can handle 10K+ connections. The modern challenge is C10M (10 million).
+  </div>
+
+  <!-- ===== CONNECTION HANDLING MODELS ===== -->
+  <h2>Connection Handling Models</h2>
+
+  <p>The fundamental question for any server: <strong>how do you handle many connections at once?</strong> The answer has evolved over decades.</p>
+
+  <h3>1. Process-per-Connection (Fork)</h3>
+
+  <div class="panel">
+    <div class="panel-title">How it works</div>
+    <p>For each incoming connection, <code>fork()</code> a new child process. The child handles the entire request lifecycle and exits. The parent process just accepts and forks.</p>
+    <ul>
+      <li><strong>Isolation:</strong> one connection crashing can't take down others</li>
+      <li><strong>Simple:</strong> no concurrency bugs — each process has its own memory</li>
+      <li><strong>Expensive:</strong> a process is ~1-10 MB of memory, context switching is costly</li>
+      <li><strong>Limit:</strong> hundreds to low thousands of concurrent connections</li>
+    </ul>
+    <p>This is Apache's <code>prefork</code> MPM. Also how old-school CGI worked.</p>
+  </div>
+
+  <h3>2. Thread-per-Connection</h3>
+
+  <div class="panel">
+    <div class="panel-title">How it works</div>
+    <p>Instead of forking a process, spawn a thread. Threads share the process's address space, so they're lighter (~8 KB stack default on Linux vs ~MB for a process).</p>
+    <ul>
+      <li><strong>Lighter:</strong> threads are cheaper to create and switch between</li>
+      <li><strong>Shared state:</strong> threads share memory — need synchronization (mutexes, etc.)</li>
+      <li><strong>Limit:</strong> thousands of connections (thread stacks and scheduling overhead)</li>
+    </ul>
+    <p>This is Apache's <code>worker</code> MPM and how many Java/Go servers work (though Go uses goroutines — green threads multiplexed onto OS threads).</p>
+  </div>
+
+  <h3>3. Event-Driven / Non-Blocking I/O</h3>
+
+  <div class="panel">
+    <div class="panel-title">How it works</div>
+    <p>A single thread uses an <strong>event loop</strong> and the OS's I/O multiplexing API (<code>epoll</code> on Linux, <code>kqueue</code> on macOS/BSD) to monitor thousands of sockets simultaneously. When a socket is ready for reading or writing, the event loop dispatches the work.</p>
+    <ul>
+      <li><strong>Extremely efficient:</strong> one thread handles tens of thousands of connections</li>
+      <li><strong>No thread overhead:</strong> no thread stacks, no context switches, no locks</li>
+      <li><strong>Complexity:</strong> callback/state-machine programming — can't do blocking operations</li>
+      <li><strong>CPU-bound work blocks the loop:</strong> need to offload to worker threads</li>
+    </ul>
+    <p>This is <strong>nginx's architecture</strong> and the model behind Node.js, HAProxy, and Traefik. It's why nginx can handle 10K+ connections per worker with minimal memory.</p>
+  </div>
+
+  <h3>4. Hybrid: Event Loop + Worker Threads</h3>
+
+  <div class="panel">
+    <div class="panel-title">How it works</div>
+    <p>Combine event-driven I/O for network operations with a thread pool for blocking tasks (disk I/O, DNS lookups, upstream connections). The event loop dispatches I/O-ready events; worker threads handle slow operations.</p>
+    <ul>
+      <li>nginx uses this: main event loop + thread pool for <code>aio threads</code></li>
+      <li>Apache's <code>event</code> MPM: event-driven for keep-alive connections, threads for request processing</li>
+      <li>Best of both worlds — async for I/O, threads for computation</li>
+    </ul>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">Thread-per-Connection</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Pseudocode</span>
+<span class="kw">while</span> (<span class="kw">true</span>) {
+  conn = accept(listen_fd)
+  <span class="fn">spawn_thread</span>(() => {
+    request = <span class="fn">read</span>(conn)    <span class="cm">// blocks this thread</span>
+    response = <span class="fn">handle</span>(request)
+    <span class="fn">write</span>(conn, response)  <span class="cm">// blocks this thread</span>
+    <span class="fn">close</span>(conn)
+  })
+}</code></pre>
+        <p style="color:#888; font-size:12px;">1 thread per connection. 10K connections = 10K threads = ~80 MB in stacks alone.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">Event-Driven</div>
+      <div class="comp-body">
+<pre><code><span class="cm">// Pseudocode</span>
+epoll_fd = <span class="fn">epoll_create</span>()
+<span class="fn">epoll_add</span>(epoll_fd, listen_fd)
+
+<span class="kw">while</span> (<span class="kw">true</span>) {
+  events = <span class="fn">epoll_wait</span>(epoll_fd) <span class="cm">// blocks until ANY fd ready</span>
+  <span class="kw">for</span> (ev <span class="kw">in</span> events) {
+    <span class="kw">if</span> (ev.fd == listen_fd)
+      <span class="fn">accept_and_register</span>(ev.fd)
+    <span class="kw">else</span>
+      <span class="fn">handle_io</span>(ev.fd) <span class="cm">// non-blocking read/write</span>
+  }
+}</code></pre>
+        <p style="color:#888; font-size:12px;">1 thread for all connections. 10K connections ≈ 10K fd entries in epoll. Minimal memory.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== WORKER ARCHITECTURE ===== -->
+  <h2>Worker Architecture in Practice</h2>
+
+  <p>Modern web servers don't run a single event loop — they run <strong>multiple worker processes</strong>, each with its own event loop, to use all CPU cores. The master process manages workers, handles config reloads, and binds to privileged ports.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Master Process</div>
+      <div class="desc">Binds ports, manages workers, reads config, handles signals</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="label">Worker 1</div>
+      <div class="desc">Event loop + epoll. Handles connections independently.</div>
+    </div>
+    <div class="arrow">&nbsp;</div>
+    <div class="flow-step">
+      <div class="label">Worker 2</div>
+      <div class="desc">Event loop + epoll. Handles connections independently.</div>
+    </div>
+    <div class="arrow">&nbsp;</div>
+    <div class="flow-step">
+      <div class="label">Worker N</div>
+      <div class="desc">Event loop + epoll. One per CPU core (typically).</div>
+    </div>
+  </div>
+
+  <p>All workers share the same listening socket(s). The kernel distributes incoming connections across workers via <code>SO_REUSEPORT</code> (since Linux 3.9) or the accept mutex.</p>
+
+  <div class="note">
+    <strong>Graceful reload:</strong> On <code>SIGHUP</code> (or equivalent), the master spawns new workers with the new config and tells old workers to drain existing connections and exit. No dropped connections — this is how zero-downtime config reloads work.
+  </div>
+
+  <h3>nginx Example</h3>
+
+  <pre><code><span class="cm"># /etc/nginx/nginx.conf</span>
+<span class="attr">worker_processes</span> <span class="val">auto</span>;          <span class="cm"># one per CPU core</span>
+<span class="attr">worker_connections</span> <span class="num">4096</span>;       <span class="cm"># max connections per worker</span>
+                                    <span class="cm"># total capacity = workers × worker_connections</span>
+
+<span class="kw">events</span> {
+    <span class="attr">use</span> <span class="val">epoll</span>;                   <span class="cm"># Linux event multiplexer</span>
+    <span class="attr">multi_accept</span> <span class="val">on</span>;             <span class="cm"># accept multiple connections at once</span>
+}
+
+<span class="kw">http</span> {
+    <span class="attr">keepalive_timeout</span> <span class="num">65</span>;        <span class="cm"># close idle connections after 65s</span>
+    <span class="attr">keepalive_requests</span> <span class="num">1000</span>;    <span class="cm"># max requests per keep-alive connection</span>
+
+    <span class="kw">server</span> {
+        <span class="attr">listen</span> <span class="num">443</span> <span class="val">ssl http2</span>;
+        <span class="attr">server_name</span> <span class="val">example.com</span>;
+
+        <span class="attr">ssl_certificate</span>     <span class="str">/etc/ssl/certs/example.pem</span>;
+        <span class="attr">ssl_certificate_key</span> <span class="str">/etc/ssl/private/example.key</span>;
+
+        <span class="cm"># Serve static files directly</span>
+        <span class="kw">location</span> <span class="val">/static/</span> {
+            <span class="attr">root</span> <span class="str">/var/www</span>;
+            <span class="attr">expires</span> <span class="num">30d</span>;
+            <span class="attr">add_header</span> <span class="val">Cache-Control</span> <span class="str">"public, immutable"</span>;
+        }
+
+        <span class="cm"># Reverse proxy to application server</span>
+        <span class="kw">location</span> <span class="val">/api/</span> {
+            <span class="attr">proxy_pass</span> <span class="str">http://backend:8000</span>;
+            <span class="attr">proxy_set_header</span> <span class="val">Host</span> <span class="str">$host</span>;
+            <span class="attr">proxy_set_header</span> <span class="val">X-Real-IP</span> <span class="str">$remote_addr</span>;
+            <span class="attr">proxy_set_header</span> <span class="val">X-Forwarded-For</span> <span class="str">$proxy_add_x_forwarded_for</span>;
+            <span class="attr">proxy_set_header</span> <span class="val">X-Forwarded-Proto</span> <span class="str">$scheme</span>;
+        }
+    }
+}</code></pre>
+
+  <!-- ===== REVERSE PROXY ===== -->
+  <h2>Reverse Proxy — The Most Important Role</h2>
+
+  <p>In modern deployments, the web server's primary role isn't serving files — it's acting as a <strong>reverse proxy</strong> in front of application servers. The web server faces the internet; the app server stays internal.</p>
+
+  <div class="topology">
+    <div class="topo-node cloud">
+      <div class="topo-label">Internet</div>
+      <div class="topo-detail">Clients (browsers, APIs)</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node firewall">
+      <div class="topo-label">Web Server</div>
+      <div class="topo-detail">TLS termination, routing, caching</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node server">
+      <div class="topo-label">App Server(s)</div>
+      <div class="topo-detail">gunicorn, uvicorn, Node, Go binary</div>
+    </div>
+    <div class="topo-link">→</div>
+    <div class="topo-node host">
+      <div class="topo-label">Database</div>
+      <div class="topo-detail">PostgreSQL, Redis</div>
+    </div>
+  </div>
+
+  <h3>Why Not Expose the App Server Directly?</h3>
+
+  <table>
+    <tr><th>Concern</th><th>Web Server Handles It</th><th>App Server Alone</th></tr>
+    <tr><td>TLS termination</td><td>Offloads crypto, manages certificates</td><td>Must implement TLS, manage certs in app code</td></tr>
+    <tr><td>Slow clients</td><td>Buffers requests/responses — protects backend from slow connections</td><td>Worker thread held hostage by slow client draining a response at 56 Kbps</td></tr>
+    <tr><td>Static files</td><td>Serves from disk with sendfile() — zero-copy, extremely fast</td><td>Reads file into app memory, writes to socket — wastes CPU</td></tr>
+    <tr><td>Connection management</td><td>Handles 10K+ keep-alive connections efficiently</td><td>Limited worker pool (e.g., gunicorn defaults to 2-4 workers)</td></tr>
+    <tr><td>Load balancing</td><td>Distributes across multiple backends</td><td>Single point</td></tr>
+    <tr><td>Graceful deploys</td><td>Drains connections during reload, zero downtime</td><td>Restart drops active connections</td></tr>
+    <tr><td>HTTP/2, HTTP/3</td><td>Speaks HTTP/2 to clients, HTTP/1.1 to backends — backends don't need to implement it</td><td>Must implement newer protocols</td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>Slow client buffering</strong> is one of the most critical reasons. A Python/Ruby/Node app server typically has a small fixed number of workers (4-16). If a slow client takes 30 seconds to download a response, that worker is occupied for 30 seconds. With a reverse proxy, the web server buffers the full response from the backend instantly (local network, fast), frees the backend worker, and slowly drains to the client using its event loop. The backend worker is free to handle another request in milliseconds.
+  </div>
+
+  <h3>Upstream Connection Pooling</h3>
+
+  <p>The web server maintains a <strong>pool of persistent connections</strong> to each backend (upstream). Instead of opening a new TCP connection for every proxied request, it reuses existing ones — eliminating the TCP + TLS handshake overhead on the backend path.</p>
+
+  <pre><code><span class="cm"># nginx upstream with connection pooling</span>
+<span class="kw">upstream</span> <span class="val">backend</span> {
+    <span class="attr">server</span> <span class="str">10.0.1.10:8000</span>;
+    <span class="attr">server</span> <span class="str">10.0.1.11:8000</span>;
+    <span class="attr">server</span> <span class="str">10.0.1.12:8000</span>;
+    <span class="attr">keepalive</span> <span class="num">32</span>;              <span class="cm"># keep 32 idle connections per worker</span>
+}
+
+<span class="kw">server</span> {
+    <span class="kw">location</span> <span class="val">/api/</span> {
+        <span class="attr">proxy_pass</span> <span class="str">http://backend</span>;
+        <span class="attr">proxy_http_version</span> <span class="num">1.1</span>;                <span class="cm"># required for keepalive to upstreams</span>
+        <span class="attr">proxy_set_header</span> <span class="val">Connection</span> <span class="str">""</span>;        <span class="cm"># clear Connection: close</span>
+    }
+}</code></pre>
+
+  <!-- ===== LOAD BALANCING ===== -->
+  <h2>Load Balancing</h2>
+
+  <p>When proxying to multiple backends, the web server distributes requests across them. This is <strong>L7 load balancing</strong> — the server understands HTTP and can make routing decisions based on URL path, headers, cookies, etc.</p>
+
+  <h3>Load Balancing Algorithms</h3>
+
+  <table>
+    <tr><th>Algorithm</th><th>How It Works</th><th>When To Use</th></tr>
+    <tr><td><strong>Round-robin</strong></td><td>Requests go to backends in order: A, B, C, A, B, C…</td><td>Default. Works when backends are identical.</td></tr>
+    <tr><td><strong>Weighted round-robin</strong></td><td>Higher-weight backends get proportionally more requests</td><td>Backends with different capacities (bigger VM gets more traffic)</td></tr>
+    <tr><td><strong>Least connections</strong></td><td>Send to the backend with the fewest active connections</td><td>Requests have variable processing time</td></tr>
+    <tr><td><strong>IP hash</strong></td><td>Hash the client IP → always goes to the same backend</td><td>Sticky sessions without cookies (careful: breaks behind CGNAT)</td></tr>
+    <tr><td><strong>Random with two choices</strong></td><td>Pick 2 backends at random, send to the one with fewer connections</td><td>Surprisingly effective — avoids the "herd" problem of least-connections</td></tr>
+    <tr><td><strong>Consistent hashing</strong></td><td>Hash a key (URL, header) to a ring of backends</td><td>Caching layers — same URL always hits same backend, maximizing cache hits</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>L4 vs L7 load balancing:</strong> An L4 load balancer (IPVS, AWS NLB, kube-proxy) operates at the TCP level — it forwards connections without understanding HTTP. An L7 load balancer (nginx, Traefik, Envoy, AWS ALB) terminates the HTTP connection and makes routing decisions based on HTTP content. L7 is more flexible but more expensive (must parse HTTP).
+  </div>
+
+  <!-- ===== VIRTUAL HOSTING ===== -->
+  <h2>Virtual Hosting — Multiple Sites on One Server</h2>
+
+  <p>A single web server on one IP can serve different websites based on the <code>Host</code> header (HTTP/1.1) or SNI (TLS). This is how shared hosting works, and how a reverse proxy routes to different backends per domain.</p>
+
+  <h3>How It Works</h3>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Client connects to the server's IP on port 443</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>In the TLS ClientHello, the client includes <strong>SNI</strong> (Server Name Indication): <code>example.com</code></div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>The server selects the correct certificate and completes the TLS handshake</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>The HTTP request includes <code>Host: example.com</code> — the server matches this to a <code>server</code> block</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>The matched server block determines how to handle the request (serve files, proxy, redirect)</div>
+    </div>
+  </div>
+
+  <pre><code><span class="cm"># nginx: two sites on the same IP</span>
+<span class="kw">server</span> {
+    <span class="attr">listen</span> <span class="num">443</span> <span class="val">ssl</span>;
+    <span class="attr">server_name</span> <span class="val">app.example.com</span>;
+    <span class="attr">ssl_certificate</span> <span class="str">/etc/ssl/app.pem</span>;
+    <span class="kw">location</span> <span class="val">/</span> { <span class="attr">proxy_pass</span> <span class="str">http://app-backend:3000</span>; }
+}
+
+<span class="kw">server</span> {
+    <span class="attr">listen</span> <span class="num">443</span> <span class="val">ssl</span>;
+    <span class="attr">server_name</span> <span class="val">api.example.com</span>;
+    <span class="attr">ssl_certificate</span> <span class="str">/etc/ssl/api.pem</span>;
+    <span class="kw">location</span> <span class="val">/</span> { <span class="attr">proxy_pass</span> <span class="str">http://api-backend:8000</span>; }
+}</code></pre>
+
+  <!-- ===== REQUEST ROUTING ===== -->
+  <h2>Request Routing</h2>
+
+  <p>Once the server block is matched (by <code>Host</code>/<code>server_name</code>), the server evaluates the request URI against <strong>location blocks</strong> to decide how to handle it. This is the core routing logic.</p>
+
+  <h3>Common Routing Patterns</h3>
+
+  <table>
+    <tr><th>Pattern</th><th>What It Does</th><th>Example</th></tr>
+    <tr><td>Static files</td><td>Serve files from a directory</td><td><code>/static/</code> → <code>/var/www/static/</code></td></tr>
+    <tr><td>Reverse proxy</td><td>Forward to a backend service</td><td><code>/api/</code> → <code>http://backend:8000</code></td></tr>
+    <tr><td>Redirect</td><td>Send 301/302 to a different URL</td><td><code>http://</code> → <code>https://</code></td></tr>
+    <tr><td>Rewrite</td><td>Internally change the URI before handling</td><td><code>/old-path</code> → <code>/new-path</code></td></tr>
+    <tr><td>Return</td><td>Immediately return a status code</td><td>Health check: <code>/healthz</code> → 200 OK</td></tr>
+    <tr><td>Rate limit</td><td>Limit requests per client/path</td><td>API: 100 req/min per IP</td></tr>
+    <tr><td>Auth proxy</td><td>Subrequest to auth service before proxying</td><td>Check JWT with auth service</td></tr>
+  </table>
+
+  <h3>Traefik Example — Dynamic, Label-Based Routing</h3>
+
+  <p>Traefik takes a different approach from nginx: instead of static config files, it <strong>discovers routes dynamically</strong> from infrastructure (Docker labels, K8s Ingress, Consul). The architecture is based on entrypoints, routers, middlewares, and services.</p>
+
+  <pre><code><span class="cm"># traefik.yml — static configuration</span>
+<span class="attr">entryPoints</span>:
+  <span class="attr">web</span>:
+    <span class="attr">address</span>: <span class="str">":80"</span>
+    <span class="attr">http</span>:
+      <span class="attr">redirections</span>:
+        <span class="attr">entryPoint</span>:
+          <span class="attr">to</span>: <span class="val">websecure</span>
+  <span class="attr">websecure</span>:
+    <span class="attr">address</span>: <span class="str">":443"</span>
+
+<span class="attr">providers</span>:
+  <span class="attr">docker</span>:
+    <span class="attr">exposedByDefault</span>: <span class="val">false</span>        <span class="cm"># only route explicitly labeled containers</span>
+
+<span class="attr">certificatesResolvers</span>:
+  <span class="attr">letsencrypt</span>:
+    <span class="attr">acme</span>:
+      <span class="attr">email</span>: <span class="str">admin@example.com</span>
+      <span class="attr">storage</span>: <span class="str">/data/acme.json</span>
+      <span class="attr">httpChallenge</span>:
+        <span class="attr">entryPoint</span>: <span class="val">web</span></code></pre>
+
+  <pre><code><span class="cm"># docker-compose.yml — routes discovered from labels</span>
+<span class="attr">services</span>:
+  <span class="attr">app</span>:
+    <span class="attr">image</span>: <span class="str">myapp:latest</span>
+    <span class="attr">labels</span>:
+      - <span class="str">"traefik.enable=true"</span>
+      - <span class="str">"traefik.http.routers.app.rule=Host(`app.example.com`)"</span>
+      - <span class="str">"traefik.http.routers.app.tls.certresolver=letsencrypt"</span>
+      - <span class="str">"traefik.http.services.app.loadbalancer.server.port=3000"</span>
+
+  <span class="attr">api</span>:
+    <span class="attr">image</span>: <span class="str">myapi:latest</span>
+    <span class="attr">labels</span>:
+      - <span class="str">"traefik.enable=true"</span>
+      - <span class="str">"traefik.http.routers.api.rule=Host(`api.example.com`)"</span>
+      - <span class="str">"traefik.http.routers.api.tls.certresolver=letsencrypt"</span>
+      - <span class="str">"traefik.http.routers.api.middlewares=ratelimit"</span>
+      - <span class="str">"traefik.http.middlewares.ratelimit.ratelimit.average=100"</span>
+      - <span class="str">"traefik.http.services.api.loadbalancer.server.port=8000"</span></code></pre>
+
+  <div class="tip">
+    <strong>Static vs dynamic config:</strong> nginx reads config files and requires a reload (<code>nginx -s reload</code>) to pick up changes. Traefik watches its providers (Docker, K8s, file) and updates routes in real-time — no reload, no downtime. Both approaches work; the choice depends on how dynamic your infrastructure is.
+  </div>
+
+  <!-- ===== HTTP VERSION HANDLING ===== -->
+  <h2>HTTP Version Handling</h2>
+
+  <p>A web server must negotiate which HTTP version to use with the client, and separately which version to use with backends. These are often different.</p>
+
+  <h3>Client-Facing (Frontend)</h3>
+
+  <table>
+    <tr><th>Version</th><th>Negotiation</th><th>Server Requirement</th></tr>
+    <tr><td>HTTP/1.1</td><td>Default — text-based request on TCP connection</td><td>Always supported</td></tr>
+    <tr><td>HTTP/2</td><td>ALPN during TLS handshake — client offers <code>h2</code>, server agrees</td><td>TLS required (in practice). <code>listen 443 ssl http2;</code> in nginx</td></tr>
+    <tr><td>HTTP/3</td><td>Client learns about it via <code>Alt-Svc</code> header in HTTP/2 response, then connects on QUIC/UDP</td><td>QUIC listener on UDP 443. <code>listen 443 quic;</code> in nginx (1.25+)</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>HTTP/3 discovery:</strong> The first request always uses HTTP/1.1 or HTTP/2 over TCP. The server's response includes <code>Alt-Svc: h3=":443"; ma=86400</code>. The client then opens a QUIC connection for subsequent requests. This means you always need TCP 443 open alongside UDP 443.
+  </div>
+
+  <h3>Backend-Facing (Upstream)</h3>
+
+  <p>The web server typically speaks <strong>HTTP/1.1 to backends</strong>, even if it speaks HTTP/2 or HTTP/3 to clients. Reasons:</p>
+
+  <ul>
+    <li>App servers (gunicorn, uvicorn, Node) already handle HTTP/1.1 well</li>
+    <li>HTTP/2's multiplexing benefit is on the internet (high latency) — on a local network with sub-millisecond RTT, there's little advantage</li>
+    <li>Connection pooling with HTTP/1.1 keepalive is sufficient for backend traffic</li>
+    <li>Simpler to debug — you can <code>curl</code> or <code>tcpdump</code> the backend directly</li>
+  </ul>
+
+  <pre><code><span class="cm"># nginx: HTTP/2 to clients, HTTP/1.1 to backends</span>
+<span class="kw">server</span> {
+    <span class="attr">listen</span> <span class="num">443</span> <span class="val">ssl http2</span>;     <span class="cm"># client-facing: HTTP/2</span>
+    <span class="attr">listen</span> <span class="num">443</span> <span class="val">quic</span>;           <span class="cm"># client-facing: HTTP/3</span>
+    <span class="attr">add_header</span> <span class="val">Alt-Svc</span> <span class="str">'h3=":443"; ma=86400'</span>;  <span class="cm"># advertise HTTP/3</span>
+
+    <span class="kw">location</span> <span class="val">/</span> {
+        <span class="attr">proxy_pass</span> <span class="str">http://backend:8000</span>;     <span class="cm"># backend: plain HTTP/1.1</span>
+        <span class="attr">proxy_http_version</span> <span class="num">1.1</span>;              <span class="cm"># keepalive requires 1.1</span>
+    }
+}</code></pre>
+
+  <!-- ===== CACHING ===== -->
+  <h2>Response Caching</h2>
+
+  <p>The web server can <strong>cache backend responses</strong> and serve them directly for subsequent requests, avoiding a round-trip to the app server entirely.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Request arrives</div>
+      <div class="desc">GET /api/products</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Cache lookup</div>
+      <div class="desc">Key = method + URI + Vary headers</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3a</div>
+      <div class="label">HIT</div>
+      <div class="desc">Return cached response immediately</div>
+    </div>
+    <div class="arrow">&nbsp;</div>
+    <div class="flow-step">
+      <div class="num">3b</div>
+      <div class="label">MISS</div>
+      <div class="desc">Proxy to backend, cache response, return</div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Cache Directive</th><th>Meaning</th><th>Example</th></tr>
+    <tr><td><code>Cache-Control: public, max-age=3600</code></td><td>Anyone can cache, valid for 1 hour</td><td>Static assets, public API responses</td></tr>
+    <tr><td><code>Cache-Control: private, no-cache</code></td><td>Only browser can cache, must revalidate every time</td><td>User-specific pages</td></tr>
+    <tr><td><code>Cache-Control: no-store</code></td><td>Never cache</td><td>Authentication tokens, sensitive data</td></tr>
+    <tr><td><code>ETag</code> + <code>If-None-Match</code></td><td>Conditional request — return 304 if unchanged</td><td>API responses that change infrequently</td></tr>
+    <tr><td><code>Vary: Accept-Encoding</code></td><td>Cache separately for different Accept-Encoding values</td><td>gzip vs brotli compressed versions</td></tr>
+  </table>
+
+  <!-- ===== COMMON HEADERS ADDED BY THE SERVER ===== -->
+  <h2>Headers the Web Server Adds</h2>
+
+  <p>When reverse proxying, the web server should pass along client information that the backend needs. These headers are not part of the original client request — the proxy adds them.</p>
+
+  <table>
+    <tr><th>Header</th><th>Purpose</th><th>Example Value</th></tr>
+    <tr><td><code>X-Forwarded-For</code></td><td>Client's real IP (may be a chain if multiple proxies)</td><td><code>203.0.113.50, 10.0.0.1</code></td></tr>
+    <tr><td><code>X-Forwarded-Proto</code></td><td>Original protocol (https) — backend sees http</td><td><code>https</code></td></tr>
+    <tr><td><code>X-Forwarded-Host</code></td><td>Original Host header</td><td><code>example.com</code></td></tr>
+    <tr><td><code>X-Real-IP</code></td><td>Client IP (single, set by first proxy)</td><td><code>203.0.113.50</code></td></tr>
+    <tr><td><code>Forwarded</code></td><td>Standardized version (RFC 7239) — replaces X-Forwarded-*</td><td><code>for=203.0.113.50;proto=https;host=example.com</code></td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>Security: trust boundaries.</strong> <code>X-Forwarded-For</code> can be spoofed by the client. The web server should <strong>overwrite</strong> (not append to) these headers unless it trusts the upstream proxy. In nginx: <code>proxy_set_header X-Real-IP $remote_addr;</code> sets it to the direct connection's IP, which can't be spoofed.
+  </div>
+
+  <!-- ===== ACCESS LOGGING ===== -->
+  <h2>Access Logging</h2>
+
+  <p>Every request processed by the web server can be logged. These access logs are the primary source of truth for traffic analysis, debugging, and security monitoring.</p>
+
+  <h3>Common Log Fields</h3>
+
+  <pre><code><span class="cm"># nginx combined log format</span>
+<span class="attr">log_format</span> <span class="val">combined</span>
+    <span class="str">'$remote_addr - $remote_user [$time_local] '
+    '"$request" $status $body_bytes_sent '
+    '"$http_referer" "$http_user_agent"'</span>;
+
+<span class="cm"># Example output:</span>
+<span class="str">203.0.113.50</span> - - [<span class="num">31/Mar/2026:14:23:01 +0000</span>] <span class="str">"GET /api/users HTTP/2.0"</span> <span class="num">200</span> <span class="num">1234</span> <span class="str">"-"</span> <span class="str">"curl/8.5.0"</span></code></pre>
+
+  <p>For observability, add timing fields:</p>
+
+  <pre><code><span class="cm"># nginx with upstream timing</span>
+<span class="attr">log_format</span> <span class="val">timed</span>
+    <span class="str">'$remote_addr [$time_local] "$request" $status '
+    'rt=$request_time uct=$upstream_connect_time '
+    'uht=$upstream_header_time urt=$upstream_response_time'</span>;
+
+<span class="cm"># Example:</span>
+<span class="str">203.0.113.50</span> [<span class="num">31/Mar/2026:14:23:01</span>] <span class="str">"GET /api/users HTTP/2.0"</span> <span class="num">200</span> rt=<span class="num">0.045</span> uct=<span class="num">0.001</span> uht=<span class="num">0.040</span> urt=<span class="num">0.040</span></code></pre>
+
+  <table>
+    <tr><th>Timing Field</th><th>What It Measures</th></tr>
+    <tr><td><code>request_time</code></td><td>Total time from first byte received to last byte sent to client</td></tr>
+    <tr><td><code>upstream_connect_time</code></td><td>Time to establish TCP connection to backend</td></tr>
+    <tr><td><code>upstream_header_time</code></td><td>Time until first byte of response from backend</td></tr>
+    <tr><td><code>upstream_response_time</code></td><td>Time until last byte of response from backend</td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>Debugging slow requests:</strong> If <code>request_time</code> is high but <code>upstream_response_time</code> is low, the bottleneck is the client connection (slow download). If <code>upstream_response_time</code> is high, the backend is slow. If <code>upstream_connect_time</code> is high, the backend can't accept connections fast enough (overloaded, listen backlog full).
+  </div>
+
+  <!-- ===== SECURITY HEADERS ===== -->
+  <h2>Security Headers</h2>
+
+  <p>The web server is the right place to enforce security headers — they apply globally and don't depend on the backend implementing them.</p>
+
+  <table>
+    <tr><th>Header</th><th>Purpose</th><th>Recommended Value</th></tr>
+    <tr><td><code>Strict-Transport-Security</code></td><td>Force HTTPS for future visits (HSTS)</td><td><code>max-age=31536000; includeSubDomains; preload</code></td></tr>
+    <tr><td><code>X-Content-Type-Options</code></td><td>Prevent MIME-type sniffing</td><td><code>nosniff</code></td></tr>
+    <tr><td><code>X-Frame-Options</code></td><td>Prevent clickjacking (iframe embedding)</td><td><code>DENY</code> or <code>SAMEORIGIN</code></td></tr>
+    <tr><td><code>Content-Security-Policy</code></td><td>Control which resources can load (XSS mitigation)</td><td>Depends on app — start with <code>default-src 'self'</code></td></tr>
+    <tr><td><code>Referrer-Policy</code></td><td>Control how much referrer info is sent</td><td><code>strict-origin-when-cross-origin</code></td></tr>
+    <tr><td><code>Permissions-Policy</code></td><td>Disable browser features (camera, mic, geolocation)</td><td><code>camera=(), microphone=(), geolocation=()</code></td></tr>
+  </table>
+
+  <pre><code><span class="cm"># nginx: add security headers globally</span>
+<span class="kw">server</span> {
+    <span class="attr">add_header</span> <span class="val">Strict-Transport-Security</span> <span class="str">"max-age=31536000; includeSubDomains; preload"</span> <span class="val">always</span>;
+    <span class="attr">add_header</span> <span class="val">X-Content-Type-Options</span> <span class="str">"nosniff"</span> <span class="val">always</span>;
+    <span class="attr">add_header</span> <span class="val">X-Frame-Options</span> <span class="str">"DENY"</span> <span class="val">always</span>;
+    <span class="attr">add_header</span> <span class="val">Referrer-Policy</span> <span class="str">"strict-origin-when-cross-origin"</span> <span class="val">always</span>;
+}</code></pre>
+
+  <!-- ===== WHERE IT FITS IN THE STACK ===== -->
+  <h2>Where the Web Server Fits</h2>
+
+  <p>Zooming out — the web server sits at a specific point in the request lifecycle, and different deployment models place it differently.</p>
+
+  <h3>Traditional: Dedicated Reverse Proxy</h3>
+
+  <div class="panel">
+    <p><strong>Client → nginx/Traefik → gunicorn/uvicorn → Python app</strong></p>
+    <p>The web server is a separate process (or container) running on the same host or a dedicated proxy tier. This is the most common production pattern.</p>
+  </div>
+
+  <h3>Kubernetes: Ingress Controller</h3>
+
+  <div class="panel">
+    <p><strong>Client → Ingress Controller (nginx/Traefik pod) → ClusterIP Service → App Pod</strong></p>
+    <p>The Ingress controller IS a web server deployed as a K8s pod. It reads Ingress/HTTPRoute resources and configures its routing rules dynamically. See <a href="../net-13-kubernetes-networking/ingress-gateway.html">Net 13 — Ingress & Gateway API</a>.</p>
+  </div>
+
+  <h3>CDN Edge: Cloud-Managed</h3>
+
+  <div class="panel">
+    <p><strong>Client → CDN edge (Cloudflare, AWS CloudFront) → Origin server</strong></p>
+    <p>The CDN acts as a global web server — TLS termination, caching, DDoS protection, HTTP/3 — at points of presence worldwide. Your origin server may still run nginx, but it only sees traffic from the CDN.</p>
+  </div>
+
+  <h3>Sidecar Proxy: Service Mesh</h3>
+
+  <div class="panel">
+    <p><strong>Client Pod → Envoy sidecar → Network → Envoy sidecar → App Pod</strong></p>
+    <p>In a service mesh (Istio, Linkerd), every pod gets a sidecar proxy that handles mTLS, retries, circuit breaking, and observability. The sidecar IS a web server (Envoy) — just one per pod instead of one per cluster. See <a href="../net-13-kubernetes-networking/network-policies.html">Net 13 — Network Policies</a>.</p>
+  </div>
+
+</body>
+</html>
