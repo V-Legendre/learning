@@ -247,7 +247,7 @@
 
   <p>The secret <code>K</code> never appears outside the TPM unless the policy is satisfied. If a malicious bootloader is substituted, PCR 4 changes, the digest differs, and unseal fails. The attacker has the ciphertext but cannot decrypt it — and <em>cannot</em> lie to the TPM about PCR values, because the TPM checks them itself.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> tpm2_createprimary -C o -c primary.ctx
 <span class="prompt">$</span> tpm2_create -C primary.ctx -u seal.pub -r seal.priv \
       -i secret.bin \
@@ -256,7 +256,7 @@
 <span class="prompt">$</span> tpm2_load -C primary.ctx -u seal.pub -r seal.priv -c seal.ctx
 <span class="prompt">$</span> tpm2_unseal -c seal.ctx -p "policypcr:sha256:7=abcd..."
 <span class="output">&lt;secret bytes&gt;</span>
-  </div>
+  </pre>
 
   <!-- ===== REMOTE ATTESTATION ===== -->
   <h2>Remote Attestation</h2>
@@ -317,7 +317,7 @@
 
   <h3>Reading PCRs</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> tpm2_pcrread sha256
 <span class="output">  sha256:
     0 : 0x5B8D8A2E9E11C5A4A2D3F10B... (firmware)
@@ -331,13 +331,13 @@
     9 : 0xCAFEBABE0000000000000000... (kernel+initrd)
    10 : 0x0000000000000000000000...  (IMA disabled)
    23 : 0x0000000000000000000000...  (resettable)</span>
-  </div>
+  </pre>
 
   <h3>The Event Log</h3>
 
   <p>The firmware publishes a log of <em>what it extended and why</em> to <code>/sys/kernel/security/tpm0/binary_bios_measurements</code>. The PCRs are the authoritative hash; the event log is the (untrusted but useful) narrative. Replaying the log should reproduce the PCR values — if it doesn't, the log has been tampered with (or the TPM was extended by something that didn't log).</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
 <span class="output">---
 events:
@@ -357,7 +357,7 @@ events:
     Digest:   "7f8e6d5c4b3a2918..."
     Event:    "SecureBoot = 1"
   ...</span>
-  </div>
+  </pre>
 
   <!-- ===== DEVICE NODES & RESOURCE MANAGER ===== -->
   <h2>Device Nodes &amp; the Resource Manager</h2>
@@ -387,7 +387,7 @@ events:
 
   <h3>Detecting a TPM</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> ls /dev/tpm*
 <span class="output">/dev/tpm0  /dev/tpmrm0</span>
 <span class="prompt">$</span> cat /sys/class/tpm/tpm0/tpm_version_major
@@ -397,7 +397,7 @@ events:
 <span class="prompt">$</span> systemd-cryptenroll --tpm2-device=list
 <span class="output">PATH        DEVICE         DRIVER
 /dev/tpmrm0 STMicro ST33   tpm_crb</span>
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>Proxmox note:</strong> On a VM, <code>Hardware &rarr; Add &rarr; TPM State</code> attaches a <code>swtpm</code>-backed device. The guest sees <code>/dev/tpmrm0</code> identically to a physical machine, but the TPM's keys live in a file under <code>/var/lib/vz/images/&lt;vmid&gt;/</code>. Back that file up alongside the VM disks — and encrypt it, because anyone with it owns the "TPM".

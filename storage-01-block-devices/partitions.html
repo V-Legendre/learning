@@ -335,7 +335,7 @@
 
   <h3>fdisk — Quick Inspection</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> fdisk -l /dev/nvme0n1<br>
     <span class="output">Disk /dev/nvme0n1: 1.82 TiB, 2000398934016 bytes, 3907029168 sectors<br>
     Disk model: Samsung SSD 980 PRO 2TB<br>
@@ -349,11 +349,11 @@
     /dev/nvme0n1p1     2048    1050623    1048576  512M EFI System<br>
     /dev/nvme0n1p2  1050624    3147775    2097152    1G Linux filesystem<br>
     /dev/nvme0n1p3  3147776 3907028991 3903881216  1.8T Linux LUKS</span>
-  </div>
+  </pre>
 
   <h3>parted — Scriptable and Resize-Capable</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> parted /dev/nvme0n1 print<br>
     <span class="output">Model: Samsung SSD 980 PRO 2TB (nvme)<br>
     Disk /dev/nvme0n1: 2000GB<br>
@@ -368,11 +368,11 @@
     <span class="prompt">#</span> parted -s /dev/sdb mklabel gpt \<br>
     &nbsp;&nbsp;&nbsp;&nbsp;mkpart ESP fat32 1MiB 513MiB set 1 esp on \<br>
     &nbsp;&nbsp;&nbsp;&nbsp;mkpart root ext4 513MiB 100%
-  </div>
+  </pre>
 
   <h3>sgdisk — Automation Friend</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> sgdisk -p /dev/nvme0n1<br>
     <span class="output">Disk /dev/nvme0n1: 3907029168 sectors, 1.8 TiB<br>
     Sector size (logical/physical): 512/512 bytes<br>
@@ -392,7 +392,7 @@
     <span class="prompt">#</span> sgdisk -n 1:0:+512M -t 1:ef00 -c 1:"EFI" \<br>
     &nbsp;&nbsp;&nbsp;&nbsp;-n 2:0:+1G   -t 2:8300 -c 2:"boot" \<br>
     &nbsp;&nbsp;&nbsp;&nbsp;-n 3:0:0     -t 3:8309 -c 3:"crypt" /dev/sdb
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>sgdisk code shortcuts:</strong> <code>ef00</code> = ESP, <code>8300</code> = Linux FS, <code>8309</code> = LUKS, <code>8e00</code> = LVM, <code>fd00</code> = RAID, <code>8200</code> = swap. These are sgdisk's 4-hex-digit aliases for the full type GUIDs.
@@ -440,7 +440,7 @@
 
   <p>A <strong>loop device</strong> binds a regular file to a <code>/dev/loopN</code> node so the kernel treats it as a block device. This is how disk images (<code>.img</code>, <code>.iso</code>, qcow2 when combined with <code>qemu-nbd</code>) are mounted, and how utilities like <code>losetup</code>, snap, or cloud-init handle image-based storage.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> dd if=/dev/zero of=/tmp/disk.img bs=1M count=1024<br>
     <span class="prompt">#</span> losetup -f --show /tmp/disk.img<br>
     <span class="output">/dev/loop0</span><br>
@@ -454,7 +454,7 @@
     <span class="prompt">#</span> mount /dev/loop0p2 /mnt<br>
     <span class="prompt">#</span> <span class="cm">... use it ...</span><br>
     <span class="prompt">#</span> umount /mnt && losetup -d /dev/loop0
-  </div>
+  </pre>
 
   <div class="tip">
     <strong><code>losetup -P</code></strong> tells the kernel to scan the loop device for a partition table and expose each partition as <code>/dev/loopNpM</code>. Without <code>-P</code> (or without a subsequent <code>partprobe</code>), only the whole-disk node exists and the partitions are invisible to userspace.
@@ -484,7 +484,7 @@
 
   <p>GPT has a native backup (the table at the end of disk), but if the whole disk is dying or you want off-device safety, <code>sgdisk</code> can export the entire table to a file.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="cm"># Back up the table</span><br>
     <span class="prompt">#</span> sgdisk --backup=/root/nvme0n1.gpt.bak /dev/nvme0n1<br>
     <br>
@@ -497,7 +497,7 @@
     <span class="cm"># If only the primary header is corrupt, regenerate from backup:</span><br>
     <span class="prompt">#</span> sgdisk --move-second-header /dev/nvme0n1<br>
     <span class="prompt">#</span> gdisk /dev/nvme0n1         <span class="cm"># interactive 'r' recovery menu</span>
-  </div>
+  </pre>
 
   <div class="note">
     <strong>What a backup file contains:</strong> disk GUID, all 128 partition entries (type GUID, unique GUID, first/last LBA, attributes, name), and header checksums. It does <strong>not</strong> contain partition contents — if your data is gone, so is your data. Backups are for re-deriving a valid partition layout after accidental deletion.

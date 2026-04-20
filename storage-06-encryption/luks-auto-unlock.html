@@ -42,18 +42,18 @@
 
   <p>The simplest credential: a string typed at a prompt. Goes through the KDF (Argon2id on LUKS2) to derive the slot key. Typically occupies slot 0.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX
 <span class="output">Enter any existing passphrase: ****
 Enter new passphrase for key slot: ****
 Verify passphrase: ****</span>
-  </div>
+  </pre>
 
   <h3>Keyfile</h3>
 
   <p>A keyfile is just <strong>bytes</strong> — any file. <code>cryptsetup</code> hashes the content (with the configured KDF) to derive the slot key. The file can be 4 KiB of random data or a sentence in a text file; cryptographic strength depends on the content's entropy.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Generate a strong keyfile</span>
 <span class="prompt">$</span> dd if=/dev/urandom of=/root/keys/data.key bs=512 count=8
 <span class="prompt">$</span> chmod 0400 /root/keys/data.key
@@ -61,13 +61,13 @@ Verify passphrase: ****</span>
 <span class="prompt"># Enroll it to a LUKS slot</span>
 <span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX /root/keys/data.key
 <span class="output">Enter any existing passphrase: ****</span>
-  </div>
+  </pre>
 
   <h3>TPM 2.0 (LUKS2 token)</h3>
 
   <p>The <code>systemd-cryptenroll</code> tool seals a random key to the TPM, bound to a set of PCR values (firmware, bootloader, kernel measurements). The sealed blob is stored as a <strong>LUKS2 token</strong> in the header, referencing a key slot. At boot, systemd asks the TPM to unseal — the TPM only releases the key if the PCRs still match.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Bind to default PCRs (7 = Secure Boot state, usually)</span>
 <span class="prompt">$</span> systemd-cryptenroll --tpm2-device=auto /dev/sdX
 
@@ -76,7 +76,7 @@ Verify passphrase: ****</span>
       --tpm2-device=auto \
       --tpm2-pcrs=0+2+4+7 \
       /dev/sdX
-  </div>
+  </pre>
 
   <p>Details of PCR selection, sealing, and Measured Boot live in <a href="../storage-07-tpm-secure-boot/">Storage 07 — TPM &amp; Secure Boot</a>.</p>
 
@@ -84,17 +84,17 @@ Verify passphrase: ****</span>
 
   <p>A YubiKey or similar. The unlock requires <strong>user presence</strong> (touch the key). Useful for portable unlock that doesn't depend on a single TPM.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> systemd-cryptenroll --fido2-device=auto /dev/sdX
 <span class="output">Requested to enroll FIDO2 security token...
 Please touch security token: ...</span>
-  </div>
+  </pre>
 
   <h3>Tang / Clevis (Network-Bound Disk Encryption)</h3>
 
   <p>NBDE binds unlock to <strong>reachability of a trusted network service</strong>. Tang is a lightweight HTTP server that holds asymmetric keys; Clevis is the client that talks to Tang. The disk unlocks automatically only when the machine is on a network where Tang is reachable. Remove the network &rarr; no unlock &rarr; disk stays encrypted at rest.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Simple single-Tang binding</span>
 <span class="prompt">$</span> clevis luks bind -d /dev/sdX tang '{"url":"http://tang.example.com"}'
 
@@ -109,7 +109,7 @@ Please touch security token: ...</span>
         "tpm2": {"pcr_ids": "7"}
       }
     }'
-  </div>
+  </pre>
 
   <p>Use cases: servers in a trusted datacenter that should auto-recover from power cycles without operator intervention, but should <em>not</em> be trivially readable if someone steals the disk and takes it home.</p>
 
@@ -188,13 +188,13 @@ Please touch security token: ...</span>
 
   <h3>A realistic crypttab</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># /etc/crypttab</span>
 <span class="output"># name          source                  key-file           options
 cryptroot       UUID=3e2d6bc8-8d1c...   none               luks,discard,tpm2-device=auto,x-initrd.attach
 cryptdata       UUID=def01234-5678...   /root/data.key     luks,discard,nofail
 cryptbak        UUID=ghi56789-abcd...   none               luks,headless,nofail,noauto</span>
-  </div>
+  </pre>
 
   <ul>
     <li><strong>cryptroot</strong> — root disk. Unlocks via TPM2 in initramfs; falls back to passphrase if the TPM refuses (PCR mismatch).</li>
@@ -233,7 +233,7 @@ cryptbak        UUID=ghi56789-abcd...   none               luks,headless,nofail,
     </div>
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># See the generated units</span>
 <span class="prompt">$</span> systemctl list-units 'systemd-cryptsetup*'
 <span class="output">UNIT                                 LOAD   ACTIVE SUB     DESCRIPTION
@@ -242,7 +242,7 @@ systemd-cryptsetup@cryptdata.service loaded active exited  Cryptography Setup fo
 
 <span class="prompt"># Inspect one</span>
 <span class="prompt">$</span> systemctl cat systemd-cryptsetup@cryptdata.service
-  </div>
+  </pre>
 
   <!-- ===== INITRAMFS UNLOCK ===== -->
   <h2>Initramfs Unlock (Root Disk)</h2>
@@ -299,7 +299,7 @@ systemd-cryptsetup@cryptdata.service loaded active exited  Cryptography Setup fo
 
   <p>Embeds a minimal SSH server in the initramfs. On boot, the system acquires an IP (via DHCP) and waits for an SSH connection. The operator SSHes in and types the passphrase (or runs <code>cryptroot-unlock</code>).</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Debian/Ubuntu</span>
 <span class="prompt">$</span> apt install dropbear-initramfs
 
@@ -321,7 +321,7 @@ systemd-cryptsetup@cryptdata.service loaded active exited  Cryptography Setup fo
 <span class="output">Please unlock disk cryptroot: ****
 cryptsetup: cryptroot set up successfully
 </span>
-  </div>
+  </pre>
 
   <h3>tinyssh-initramfs</h3>
 

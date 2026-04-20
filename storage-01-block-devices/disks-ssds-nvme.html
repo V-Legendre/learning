@@ -291,13 +291,13 @@
     <li><strong>Minor number:</strong> identifies a specific device instance (and partition) handled by that driver</li>
   </ul>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> ls -l /dev/sda /dev/sda1 /dev/nvme0n1 /dev/nvme0n1p1<br>
     <span class="output">brw-rw---- 1 root disk   8,   0 Apr 20 10:12 /dev/sda<br>
     brw-rw---- 1 root disk   8,   1 Apr 20 10:12 /dev/sda1<br>
     brw-rw---- 1 root disk 259,   0 Apr 20 10:12 /dev/nvme0n1<br>
     brw-rw---- 1 root disk 259,   1 Apr 20 10:12 /dev/nvme0n1p1</span>
-  </div>
+  </pre>
 
   <div class="note">
     The leading <strong>b</strong> in <code>brw-rw----</code> means block device (vs <code>c</code> for character). The two numbers after the group are major and minor.
@@ -339,7 +339,7 @@
 
   <h3>lsblk — The Tree View</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL<br>
     <span class="output">NAME          SIZE TYPE FSTYPE      MOUNTPOINTS   MODEL<br>
     nvme0n1       1.8T disk                           Samsung SSD 980 PRO 2TB<br>
@@ -352,23 +352,23 @@
         └─vg-home 1.6T lvm  ext4        /home<br>
     sda         931.5G disk                           WDC WD10EZEX-00BN5A0<br>
     └─sda1      931.5G part ext4        /mnt/backup</span>
-  </div>
+  </pre>
 
   <h3>blkid — UUIDs and Labels</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> blkid<br>
     <span class="output">/dev/nvme0n1p1: UUID="1234-ABCD" TYPE="vfat" PARTLABEL="EFI" PARTUUID="..."<br>
     /dev/nvme0n1p2: UUID="a1b2c3d4-..." TYPE="ext4" PARTLABEL="boot" PARTUUID="..."<br>
     /dev/nvme0n1p3: UUID="9a8b7c6d-..." TYPE="crypto_LUKS" PARTLABEL="crypt" PARTUUID="..."<br>
     /dev/mapper/cryptroot: UUID="..." TYPE="LVM2_member"</span>
-  </div>
+  </pre>
 
   <h3>smartctl — SMART Data</h3>
 
   <p>SMART (Self-Monitoring, Analysis, and Reporting Technology) is a standard set of health and wear counters exposed by every modern drive. <code>smartctl</code> from <code>smartmontools</code> is the canonical tool.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> smartctl -a /dev/nvme0n1<br>
     <span class="output">=== START OF INFORMATION SECTION ===<br>
     Model Number: Samsung SSD 980 PRO 2TB<br>
@@ -392,7 +392,7 @@
     Unsafe Shutdowns:                   3<br>
     Media and Data Integrity Errors:    0<br>
     Error Information Log Entries:      0</span>
-  </div>
+  </pre>
 
   <h3>SMART Attributes That Matter (HDDs)</h3>
 
@@ -425,7 +425,7 @@
 
   <h3>nvme-cli — The NVMe-Specific Swiss Army Knife</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> nvme list<br>
     <span class="output">Node          SN           Model                  Namespace Usage        Format           FW Rev<br>
     /dev/nvme0n1  S5P2NF0R...  Samsung SSD 980 PRO    1         2.00 TB/2.00 TB 512  B +  0 B   5B2QGXA7</span>
@@ -450,15 +450,15 @@
     <span class="prompt">#</span> nvme smart-log /dev/nvme0<br>
     <span class="prompt">#</span> nvme error-log /dev/nvme0<br>
     <span class="prompt">#</span> nvme format /dev/nvme0n1 --lbaf=1 --ses=1     <span class="cm"># reformat namespace to 4K sectors, secure erase</span>
-  </div>
+  </pre>
 
   <h3>hdparm — Legacy but Useful</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> hdparm -I /dev/sda          <span class="cm"># identify info</span><br>
     <span class="prompt">#</span> hdparm -tT /dev/sda         <span class="cm"># quick read benchmark (cached + buffered)</span><br>
     <span class="prompt">#</span> hdparm -W 0 /dev/sda        <span class="cm"># disable drive write cache (for consistency guarantees)</span>
-  </div>
+  </pre>
 
   <h3>/sys/block/ — The Kernel's View</h3>
 
@@ -512,7 +512,7 @@
     </div>
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">#</span> systemctl status fstrim.timer<br>
     <span class="output">fstrim.timer - Discard unused blocks once a week<br>
        Loaded: loaded (/lib/systemd/system/fstrim.timer; enabled)<br>
@@ -522,7 +522,7 @@
     <span class="prompt">#</span> fstrim -av<br>
     <span class="output">/boot: 398.4 MiB (417714176 bytes) trimmed on /dev/nvme0n1p2<br>
     /: 47.2 GiB (50693652480 bytes) trimmed on /dev/mapper/vg-root</span>
-  </div>
+  </pre>
 
   <h3>The LUKS Discard Trade-off</h3>
 
@@ -545,12 +545,12 @@
     <tr><td><strong>kyber</strong></td><td>Tracks completion latency and throttles queue depth to keep tail latency in check.</td><td>Fast SSDs where you want to cap p99 latency at the cost of some throughput. Rarely the default.</td></tr>
   </table>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/scheduler<br>
     <span class="output">[none] mq-deadline kyber bfq</span>
     <br>
     <span class="prompt">#</span> echo mq-deadline &gt; /sys/block/sda/queue/scheduler    <span class="cm"># switch SATA disk to deadline</span>
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>Persistent scheduler selection:</strong> udev rule is the clean way.
@@ -589,12 +589,12 @@
     </div>
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/logical_block_size<br>
     <span class="output">512</span><br>
     <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/physical_block_size<br>
     <span class="output">4096</span>
-  </div>
+  </pre>
 
   <h3>Why Misalignment Kills Performance</h3>
 
@@ -604,7 +604,7 @@
     <strong>The 1 MiB rule:</strong> modern partitioning tools align the first partition to an LBA that is a multiple of <strong>2048 sectors (1 MiB)</strong>. 1 MiB is a common multiple of every realistic physical sector size (4K, 8K, 16K), NAND page size, NAND erase block size (up to 1 MiB), and RAID stripe size. Aligning to 1 MiB is correct for all modern devices.
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
     <span class="prompt">$</span> fdisk -l /dev/nvme0n1 | head<br>
     <span class="output">Disk /dev/nvme0n1: 1.82 TiB, 2000398934016 bytes, 3907029168 sectors<br>
     Units: sectors of 1 * 512 = 512 bytes<br>
@@ -615,7 +615,7 @@
     Device          Start        End    Sectors  Size Type<br>
     /dev/nvme0n1p1   <strong>2048</strong>    1050623    1048576  512M EFI System<br>
     /dev/nvme0n1p2  1050624    3147775    2097152    1G Linux filesystem</span>
-  </div>
+  </pre>
 
   <div class="tip">
     First partition starts at LBA <strong>2048</strong> (= 2048 × 512 B = 1 MiB). Every subsequent partition ends on an LBA whose next sector is also aligned. This is what <code>parted</code>, <code>sgdisk</code>, and modern <code>fdisk</code> do by default.

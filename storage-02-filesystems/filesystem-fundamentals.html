@@ -130,12 +130,12 @@
   <h3>Inode Exhaustion</h3>
   <p>On ext filesystems, inodes are <strong>pre-allocated at mkfs time</strong>. The default is roughly one inode per 16 KiB of filesystem capacity. On a workload full of tiny files (Maildir, node_modules, container image layers), you can <strong>run out of inodes while still having free blocks</strong>.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> df -i /var
 <span class="output">Filesystem       Inodes  IUsed    IFree IUse% Mounted on
 /dev/sda1      6553600 6553600       0  100% /var</span>
 <span class="prompt">$</span> <span class="cm"># ENOSPC despite "df" showing free space</span>
-  </div>
+  </pre>
 
   <div class="warn">
     <strong>Gotcha:</strong> <code>df</code> shows free <em>blocks</em>; <code>df -i</code> shows free <em>inodes</em>. Running out of either produces <code>ENOSPC</code>. XFS dynamically allocates inodes, so this class of bug effectively doesn't exist there.
@@ -237,19 +237,19 @@
 
   <p>Mounting attaches a filesystem to a point in the VFS namespace. The <code>mount(2)</code> syscall takes a source (device or spec string), a target directory, a filesystem type, flags, and type-specific options.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> mount -t ext4 -o noatime,discard /dev/sda1 /mnt/data
 <span class="prompt">#</span> mount -t xfs   -o noatime,logbsize=256k /dev/sdb1 /srv
 <span class="prompt">#</span> mount -t tmpfs -o size=2G tmpfs /run/cache
-  </div>
+  </pre>
 
   <h3>Bind Mounts</h3>
   <p>A bind mount exposes an existing directory subtree at another location, without copying. Essential for chroot/container setups.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> mount --bind  /var/log  /mnt/chroot/var/log   <span class="cm"># flat bind</span>
 <span class="prompt">#</span> mount --rbind /dev      /mnt/chroot/dev        <span class="cm"># recursive: includes /dev/pts, /dev/shm...</span>
-  </div>
+  </pre>
 
   <h3>Mount Propagation Types</h3>
   <p>Mounts live inside <strong>mount namespaces</strong>. When a namespace is cloned, each mount carries a propagation flag controlling whether subsequent mount/umount events cross the namespace boundary.</p>
@@ -271,7 +271,7 @@
 
   <p>The mount manifest, read at boot by systemd (via <code>systemd-fstab-generator</code>). Six whitespace-separated fields per line:</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="output"># &lt;source&gt;                               &lt;mountpoint&gt;  &lt;type&gt;  &lt;options&gt;                       &lt;dump&gt; &lt;pass&gt;
 UUID=3f9a1b6e-...-01                   /             ext4    defaults,errors=remount-ro      0      1
 UUID=6eba52a0-...-02                   /home         xfs     defaults,noatime                0      2
@@ -279,7 +279,7 @@ LABEL=swap                             none          swap    sw                 
 /dev/vg_data/lv_backup                 /backup       xfs     noauto,x-systemd.automount      0      0
 tmpfs                                  /tmp          tmpfs   size=4G,noexec,nosuid,nodev     0      0
 192.0.2.10:/export/share               /mnt/nfs      nfs     rw,_netdev,nofail,x-systemd.after=network-online.target  0 0</span>
-  </div>
+  </pre>
 
   <h3>Source Identifier — Pick Wisely</h3>
 

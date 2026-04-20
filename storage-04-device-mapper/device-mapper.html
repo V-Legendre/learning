@@ -385,7 +385,7 @@ mymap  253:0    0  200M  0 dm
 
   <p>Here's what a typical encrypted-LVM laptop looks like. NVMe partition holds a LUKS container, LUKS-decrypted device is a PV, PV holds a VG with root/swap/home LVs:</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> dmsetup ls --tree
 <span class="output">vg0-home     (253:4)
  └─cryptroot (253:0)
@@ -428,7 +428,7 @@ lrwxrwxrwx 1 root root       7 vg0-home  -&gt; ../dm-4</span>
 
 <span class="prompt">#</span> dmsetup table vg0-root
 <span class="output">0 104857600 linear 253:0 2048</span>
-  </div>
+  </pre>
 
   <div class="note">
     <strong>Read this carefully.</strong> <code>vg0-root</code> is a <em>linear</em> map onto <code>253:0</code> (which is <code>cryptroot</code>). A write to <code>/</code> hits ext4 → <code>dm-linear</code> (<code>vg0-root</code>) → <code>dm-crypt</code> (<code>cryptroot</code>) → partition → NVMe. Every layer is a dm target. Every major-minor <code>253:X</code> is just another row in someone's table.

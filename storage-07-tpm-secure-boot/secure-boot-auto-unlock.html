@@ -164,13 +164,13 @@
 
   <h3>Basic Enrollment</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> systemd-cryptenroll --tpm2-device=auto \
       --tpm2-pcrs=7 \
       /dev/nvme0n1p3
 <span class="output">Please enter current passphrase for /dev/nvme0n1p3:
 New TPM2 token enrolled as key slot 1.</span>
-  </div>
+  </pre>
 
   <h3>Options</h3>
 
@@ -191,7 +191,7 @@ New TPM2 token enrolled as key slot 1.</span>
 
   <h3>Inspecting and Removing</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> systemd-cryptenroll /dev/nvme0n1p3
 <span class="output">SLOT TYPE
    0 password
@@ -200,7 +200,7 @@ New TPM2 token enrolled as key slot 1.</span>
 
 <span class="prompt">#</span> systemd-cryptenroll --wipe-slot=tpm2 /dev/nvme0n1p3
 <span class="output">Wiped slot 1.</span>
-  </div>
+  </pre>
 
   <h3><code>/etc/crypttab</code> Entry</h3>
 
@@ -268,12 +268,12 @@ root-crypt  UUID=a1b2c3d4-...                      none      tpm2-device=auto,di
 
   <p>If the PCR selection includes anything that changes with system updates (firmware, bootloader, kernel, initramfs), the sealed policy will not match current PCRs after the update, and the TPM will refuse to unseal. The machine reboots to a passphrase prompt. You must <strong>re-enroll</strong>.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> <span class="output"># After a kernel update that invalidated PCR 9 binding:</span>
 <span class="prompt">#</span> systemd-cryptenroll --wipe-slot=tpm2 \
       --tpm2-device=auto --tpm2-pcrs=7+9 \
       /dev/nvme0n1p3
-  </div>
+  </pre>
 
   <h3>Automating Re-seal</h3>
 
@@ -337,7 +337,7 @@ root-crypt  UUID=a1b2c3d4-...                      none      tpm2-device=auto,di
     </div>
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> clevis luks bind -d /dev/nvme0n1p3 tang \
       '{"url":"http://tang.internal.example"}'
 <span class="prompt">#</span> <span class="output"># M-of-N with Shamir: need 2 of (TPM, tang1, tang2)</span>
@@ -351,7 +351,7 @@ root-crypt  UUID=a1b2c3d4-...                      none      tpm2-device=auto,di
         ]
       }
     }'
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>Defence in depth:</strong> Combine TPM + Tang via SSS. Stolen from the rack &rarr; no Tang network &rarr; cannot unlock. Stolen and the TPM cloned &rarr; still needs Tang. Tang compromised &rarr; still needs the TPM. This is a common pattern for on-prem server fleets.

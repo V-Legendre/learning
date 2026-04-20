@@ -82,7 +82,7 @@
   <!-- ===== EXT4 TUNING ===== -->
   <h2>ext4 Tuning</h2>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> <span class="cm"># Create a filesystem tuned for a specific workload</span>
 <span class="prompt">#</span> mkfs.ext4 -T largefile4   /dev/sdb1      <span class="cm"># 1 inode per 4 MiB — huge media library</span>
 <span class="prompt">#</span> mkfs.ext4 -T news          /dev/sdc1     <span class="cm"># 1 inode per 4 KiB — Maildir/news spool</span>
@@ -93,15 +93,15 @@
 <span class="prompt">#</span>
 <span class="prompt">#</span> <span class="cm"># RAID stripe alignment (stride = chunk/block, stripe-width = stride * data disks)</span>
 <span class="prompt">#</span> mkfs.ext4 -E stride=16,stripe-width=64 /dev/md0
-  </div>
+  </pre>
 
   <h3>Reserved Blocks</h3>
   <p>By default, ext4 reserves <strong>5% of the filesystem for root</strong>. This prevents unprivileged users from filling the disk and starving <code>systemd-journald</code>, syslog, or anything else that must keep writing. On a 10 TiB data volume, this is 500 GiB wasted — adjust with:</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> tune2fs -m 1 /dev/sda1     <span class="cm"># drop reserve to 1%</span>
 <span class="prompt">#</span> tune2fs -m 0 /dev/sdb1     <span class="cm"># no reserve (fine for data-only volumes)</span>
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>Rule of thumb:</strong> keep the 5% reserve on the root FS. Drop it to 0 on pure-data mounts (backups, media, object stores, container image layers).
@@ -120,7 +120,7 @@
     <tr><td><code>e2fsck</code> / <code>fsck.ext4</code></td><td>Check and repair.</td></tr>
   </table>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> dumpe2fs -h /dev/sda1 | head -30
 <span class="output">Filesystem volume name:   root
 Last mounted on:          /
@@ -137,7 +137,7 @@ Block count:              26214400
 Block size:               4096
 Reserved block count:     1310720
 ...</span>
-  </div>
+  </pre>
 
   <!-- ===== XFS HISTORY ===== -->
   <h2>XFS: Scalable From Day One</h2>
@@ -188,7 +188,7 @@ Reserved block count:     1310720
   <!-- ===== XFS TUNING ===== -->
   <h2>XFS Tuning</h2>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">#</span> <span class="cm"># Default mkfs is already sane. Tune only when needed.</span>
 <span class="prompt">#</span> mkfs.xfs /dev/sda1
 <span class="prompt">#</span>
@@ -212,7 +212,7 @@ naming   =version 2     bsize=4096   ascii-ci=0, ftype=1
 log      =internal log  bsize=4096   blocks=12800, version=2
          =              sectsz=4096  sunit=1 blks, lazy-count=1
 realtime =none          extsz=4096   blocks=0, rtextents=0</span>
-  </div>
+  </pre>
 
   <h3>XFS Utilities Cheat Sheet</h3>
   <ul>

@@ -59,7 +59,7 @@
 
   <p>You can use dm-crypt directly without LUKS. Because nothing is stored on the disk, <strong>you must remember every crypto parameter</strong>. Forget any of them — cipher, mode, key size, hash, IV — and the data is gone. There's no header to look at, no tool that can introspect the device.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Plain mode — no metadata. You must never forget these params.</span>
 <span class="prompt">$</span> cryptsetup open --type plain \
       --cipher aes-xts-plain64 \
@@ -67,7 +67,7 @@
       --hash sha256 \
       /dev/sdX plainvol
 <span class="output">Enter passphrase: ****</span>
-  </div>
+  </pre>
 
   <div class="warn">
     <strong>When to use plain mode:</strong> almost never. It exists for <strong>plausible deniability</strong> (the disk looks like random data — no header, no "this is encrypted" signal) and for special cases like encrypting swap with a random key at boot. For anything you care about keeping, use LUKS.
@@ -283,7 +283,7 @@
 
   <h3>Format a new device</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Simple — distro defaults (LUKS2, argon2id, aes-xts-plain64 on modern cryptsetup)</span>
 <span class="prompt">$</span> cryptsetup luksFormat /dev/sdX
 
@@ -305,11 +305,11 @@ Verify passphrase: ****
       --pbkdf-memory 1048576 \
       --pbkdf-parallel 4 \
       /dev/sdX
-  </div>
+  </pre>
 
   <h3>Open and close</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Open — creates /dev/mapper/cryptroot</span>
 <span class="prompt">$</span> cryptsetup open /dev/sdX cryptroot
 <span class="output">Enter passphrase for /dev/sdX: ****</span>
@@ -323,11 +323,11 @@ Verify passphrase: ****
 
 <span class="prompt"># Close</span>
 <span class="prompt">$</span> cryptsetup close cryptroot
-  </div>
+  </pre>
 
   <h3>Manage key slots</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Add a passphrase to the next free slot (prompts for existing + new)</span>
 <span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX
 
@@ -345,11 +345,11 @@ Verify passphrase: ****
 
 <span class="prompt"># Destroy ALL key slots (device becomes unopenable forever)</span>
 <span class="prompt">$</span> cryptsetup luksErase /dev/sdX
-  </div>
+  </pre>
 
   <h3>Inspect the header</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt">$</span> cryptsetup luksDump /dev/sdX
 <span class="output">LUKS header information
 Version:        2
@@ -405,11 +405,11 @@ Digests:
         Iterations: 95320
         Salt:       a1 2f ...
         Digest:     fa 8c ...</span>
-  </div>
+  </pre>
 
   <h3>Header backup and restore</h3>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Backup the 16 MiB header to a file — do this after every slot change</span>
 <span class="prompt">$</span> cryptsetup luksHeaderBackup \
       --header-backup-file /root/cryptroot-header.bin \
@@ -422,7 +422,7 @@ Digests:
 <span class="prompt">$</span> cryptsetup luksHeaderRestore \
       --header-backup-file /root/cryptroot-header.bin \
       /dev/sdX
-  </div>
+  </pre>
 
   <div class="warn">
     <strong>Header backups are sensitive.</strong> They contain the encrypted master key. An attacker with your header backup + a weak passphrase can brute-force offline, with unlimited parallelism. Treat header backup files with the same care as the passphrases themselves.
@@ -494,7 +494,7 @@ Digests:
 
   <p>Because the master key is only recoverable from the header, destroying the header destroys the only path to the plaintext. This is orders of magnitude faster than overwriting the payload.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Official: erase all LUKS key slots</span>
 <span class="prompt">$</span> cryptsetup erase /dev/sdX
 
@@ -504,7 +504,7 @@ Digests:
 <span class="prompt"># Verification — header is gone</span>
 <span class="prompt">$</span> cryptsetup luksDump /dev/sdX
 <span class="output">Device /dev/sdX is not a valid LUKS device.</span>
-  </div>
+  </pre>
 
   <div class="tip">
     <strong>Why this matters for SRE:</strong> decommissioning a 20 TB disk by wiping 16 MiB takes seconds instead of hours. Combined with SED (self-encrypting drives) or TCG Opal, you can "instantly retire" disks at scale. Just be sure the header backup is also destroyed.
@@ -515,7 +515,7 @@ Digests:
 
   <p>LUKS2 can re-encrypt an in-use device while applications keep reading and writing. Useful for rotating the master key after a suspected compromise, or migrating from CBC to XTS.</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Rotate the master key (same cipher). Active and resumable.</span>
 <span class="prompt">$</span> cryptsetup reencrypt /dev/sdX
 
@@ -524,7 +524,7 @@ Digests:
 
 <span class="prompt"># Resume an interrupted reencryption (after crash or SIGINT)</span>
 <span class="prompt">$</span> cryptsetup reencrypt --resume-only /dev/sdX
-  </div>
+  </pre>
 
   <p>Internally, LUKS2 keeps a <strong>reencryption journal</strong> in the header that records progress. If the system crashes mid-reencryption, the operation resumes from the last committed segment. No data loss, no "broken" state.</p>
 
@@ -542,7 +542,7 @@ Digests:
     <div class="encap-layer eth">Block device</div>
   </div>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Format with integrity (LUKS2 only)</span>
 <span class="prompt">$</span> cryptsetup luksFormat \
       --type luks2 \
@@ -550,7 +550,7 @@ Digests:
       --integrity aead \
       --key-size 256 \
       /dev/sdX
-  </div>
+  </pre>
 
   <table>
     <thead>
@@ -572,13 +572,13 @@ Digests:
 
   <p>Enable pass-through with <code>--allow-discards</code>:</p>
 
-  <div class="terminal">
+  <pre class="terminal">
 <span class="prompt"># Per-open (not persisted)</span>
 <span class="prompt">$</span> cryptsetup open --allow-discards /dev/sdX cryptroot
 
 <span class="prompt"># In /etc/crypttab (persistent)</span>
 cryptroot  UUID=...  none  luks,discard
-  </div>
+  </pre>
 
   <div class="note">
     <strong>Trade-off:</strong> TRIM pass-through leaks information — an attacker with raw disk access can see <em>which sectors are in use</em> and which are free. Depending on filesystem usage patterns, this can reveal file size distributions. For SSDs in server fleets where the performance and longevity win is significant, most operators accept the leak. For highly adversarial threat models (seized laptop), you may want to disable discards.
