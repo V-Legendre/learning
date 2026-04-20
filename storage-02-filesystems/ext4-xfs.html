@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 02 — ext4 and XFS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 02 — ext4 and XFS</h1>
+  <p class="subtitle">The two mainstream Linux filesystems — internals and trade-offs</p>
+
+  <!-- ===== WHY THESE TWO ===== -->
+  <h2>Why These Two</h2>
+
+  <p>On a modern Linux system, the default root filesystem is almost always <strong>ext4</strong> (Debian, Ubuntu) or <strong>XFS</strong> (RHEL, Fedora Server, Oracle Linux, Rocky, Alma). Both are mature, journaled, extent-based, and production-proven on PB-scale deployments. They differ in design philosophy — and in a few operational properties that will bite you if you pick wrong.</p>
+
+  <!-- ===== EXT4 HISTORY ===== -->
+  <h2>ext4: Evolutionary Line</h2>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">🌱</div>
+      <div class="label">ext2</div>
+      <div class="desc">1993 — no journal, fast but fragile after crash</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">📓</div>
+      <div class="label">ext3</div>
+      <div class="desc">2001 — added journaling (JBD), otherwise same on-disk layout</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">🚀</div>
+      <div class="label">ext4</div>
+      <div class="desc">2008 — extents, 48-bit block nrs, dir_index, delayed allocation, checksums</div>
+    </div>
+  </div>
+
+  <p>ext4 preserves forward and backward compatibility with ext2/ext3 for features not in use — you can mount an ext3 volume as ext4 and vice versa. This lineage is part of its appeal: battle-tested code with incremental, well-understood evolution.</p>
+
+  <!-- ===== EXT4 LAYOUT ===== -->
+  <h2>ext4 On-Disk Layout</h2>
+
+  <p>ext4 divides the block device into <strong>block groups</strong>, typically 128 MiB each. Each group holds everything needed to allocate files near their metadata — a locality strategy inherited from BSD's FFS.</p>
+
+  <div class="panel">
+    <div class="panel-title">Anatomy of a Block Group</div>
+    <table>
+      <tr><th>Region</th><th>Purpose</th></tr>
+      <tr><td>Superblock (copy)</td><td>Filesystem-wide metadata. Not in every group — only in groups 0, 1, and powers of 3, 5, 7 (<code>sparse_super</code>).</td></tr>
+      <tr><td>Group descriptor table</td><td>Points to this group's bitmaps and inode table. Duplicated wherever the superblock is.</td></tr>
+      <tr><td>Block bitmap</td><td>One bit per data block: free or in use.</td></tr>
+      <tr><td>Inode bitmap</td><td>One bit per inode slot: free or in use.</td></tr>
+      <tr><td>Inode table</td><td>Array of fixed-size inode structures (default 256 B each).</td></tr>
+      <tr><td>Data blocks</td><td>The rest — where file contents live.</td></tr>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>Why backup superblocks matter:</strong> if block 0 gets corrupted, you can recover by pointing <code>e2fsck</code> at a backup: <code>e2fsck -b 32768 /dev/sdX</code>. <code>mke2fs -n</code> prints the locations without actually creating the FS.
+  </div>
+
+  <!-- ===== EXT4 FEATURES ===== -->
+  <h2>ext4 Features Worth Knowing</h2>
+
+  <table>
+    <tr><th>Feature</th><th>What it does</th></tr>
+    <tr><td><code>extents</code></td><td>Replaces ext3's triple-indirect block tree with (offset, length, physical_block) triplets. Lower metadata overhead, faster for large files.</td></tr>
+    <tr><td><code>dir_index</code></td><td>Hashed B-tree for large directories. Without it, directory lookup is linear — miserable past ~10k entries.</td></tr>
+    <tr><td><code>flex_bg</code></td><td>"Flexible block groups": consolidates bitmaps and inode tables from several adjacent groups into one place, reducing seeks.</td></tr>
+    <tr><td><code>huge_file</code></td><td>Uses <code>i_blocks</code> in cluster units instead of 512 B sectors — allows files &gt; 2 TiB.</td></tr>
+    <tr><td><code>uninit_bg</code></td><td>Marks unused block groups so fsck can skip them — drastically faster checks on large empty filesystems.</td></tr>
+    <tr><td><code>inline_data</code></td><td>Small files (&lt; ~60 B) stored entirely inside the inode's block-pointer area. No data block needed at all.</td></tr>
+    <tr><td><code>64bit</code></td><td>48-bit block numbers, enabling filesystems larger than 16 TiB (up to 1 EiB theoretical).</td></tr>
+    <tr><td><code>metadata_csum</code></td><td>CRC32c checksums on superblock, group descriptors, bitmaps, inode table, extent tree, directory blocks. Detects silent corruption.</td></tr>
+    <tr><td><code>encrypt</code></td><td>Per-directory encryption (fscrypt). Same key API used by Android and Chrome OS.</td></tr>
+  </table>
+
+  <!-- ===== EXT4 TUNING ===== -->
+  <h2>ext4 Tuning</h2>
+
+  <div class="terminal">
+<span class="prompt">#</span> <span class="cm"># Create a filesystem tuned for a specific workload</span>
+<span class="prompt">#</span> mkfs.ext4 -T largefile4   /dev/sdb1      <span class="cm"># 1 inode per 4 MiB — huge media library</span>
+<span class="prompt">#</span> mkfs.ext4 -T news          /dev/sdc1     <span class="cm"># 1 inode per 4 KiB — Maildir/news spool</span>
+<span class="prompt">#</span> mkfs.ext4 -T largefile     /dev/sdd1     <span class="cm"># 1 inode per 1 MiB — sweet spot for bulk</span>
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># Explicit inode count override</span>
+<span class="prompt">#</span> mkfs.ext4 -N 5000000 /dev/sde1            <span class="cm"># force 5M inodes regardless of size</span>
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># RAID stripe alignment (stride = chunk/block, stripe-width = stride * data disks)</span>
+<span class="prompt">#</span> mkfs.ext4 -E stride=16,stripe-width=64 /dev/md0
+  </div>
+
+  <h3>Reserved Blocks</h3>
+  <p>By default, ext4 reserves <strong>5% of the filesystem for root</strong>. This prevents unprivileged users from filling the disk and starving <code>systemd-journald</code>, syslog, or anything else that must keep writing. On a 10 TiB data volume, this is 500 GiB wasted — adjust with:</p>
+
+  <div class="terminal">
+<span class="prompt">#</span> tune2fs -m 1 /dev/sda1     <span class="cm"># drop reserve to 1%</span>
+<span class="prompt">#</span> tune2fs -m 0 /dev/sdb1     <span class="cm"># no reserve (fine for data-only volumes)</span>
+  </div>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> keep the 5% reserve on the root FS. Drop it to 0 on pure-data mounts (backups, media, object stores, container image layers).
+  </div>
+
+  <!-- ===== EXT4 COMMANDS ===== -->
+  <h2>ext4 Command Line</h2>
+
+  <table>
+    <tr><th>Command</th><th>Use</th></tr>
+    <tr><td><code>mkfs.ext4</code></td><td>Create a new ext4 filesystem.</td></tr>
+    <tr><td><code>tune2fs</code></td><td>Change parameters on an existing FS: reserve %, mount count, label, UUID, feature flags.</td></tr>
+    <tr><td><code>resize2fs</code></td><td>Grow (online) or shrink (offline) the filesystem. Grow is routine; shrink requires unmount and is slower.</td></tr>
+    <tr><td><code>dumpe2fs</code></td><td>Print superblock and group info — fantastic for forensics.</td></tr>
+    <tr><td><code>debugfs</code></td><td>Interactive low-level repair/inspection shell. Undelete files, inspect inodes by number, dump blocks.</td></tr>
+    <tr><td><code>e2fsck</code> / <code>fsck.ext4</code></td><td>Check and repair.</td></tr>
+  </table>
+
+  <div class="terminal">
+<span class="prompt">#</span> dumpe2fs -h /dev/sda1 | head -30
+<span class="output">Filesystem volume name:   root
+Last mounted on:          /
+Filesystem UUID:          3f9a1b6e-...
+Filesystem magic number:  0xEF53
+Filesystem revision #:    1 (dynamic)
+Filesystem features:      has_journal ext_attr resize_inode dir_index
+                          filetype needs_recovery extent 64bit flex_bg
+                          metadata_csum_seed sparse_super large_file
+                          huge_file uninit_bg dir_nlink extra_isize
+                          encrypt
+Inode count:              6553600
+Block count:              26214400
+Block size:               4096
+Reserved block count:     1310720
+...</span>
+  </div>
+
+  <!-- ===== XFS HISTORY ===== -->
+  <h2>XFS: Scalable From Day One</h2>
+
+  <p>XFS was designed by Silicon Graphics in 1993 for <strong>IRIX</strong> — specifically to serve TB-sized video-editing workloads on multi-CPU workstations. Ported to Linux in 2001, merged upstream in 2002. Its entire design is oriented around <strong>scalability</strong> and <strong>concurrency</strong>: B+trees everywhere, parallel allocation groups, dynamic inode allocation.</p>
+
+  <p>RHEL made XFS the default root filesystem in RHEL 7 (2014), reflecting a quarter-century of production use.</p>
+
+  <!-- ===== XFS DESIGN ===== -->
+  <h2>XFS Design Principles</h2>
+
+  <h3>Allocation Groups (AGs)</h3>
+  <p>An XFS filesystem is carved into a small number (usually 4–32) of <strong>allocation groups</strong>. Each AG is effectively a mini-filesystem with its own free-space and inode indexes. Because allocations within different AGs don't contend for the same locks, XFS scales to <strong>many concurrent writers</strong> far better than ext4.</p>
+
+  <h3>B+ Trees Everywhere</h3>
+  <ul>
+    <li><strong>Free-space by block number</strong> — locate free runs adjacent to existing data.</li>
+    <li><strong>Free-space by length</strong> — find a run of exactly N free blocks.</li>
+    <li><strong>Inode B+tree</strong> — track which inode slots are allocated (inodes themselves are assigned dynamically, no pre-allocation).</li>
+    <li><strong>Directory B+tree</strong> — O(log n) lookups in directories with millions of entries.</li>
+    <li><strong>Extent B+tree inside the inode</strong> — maps logical offsets to physical extents for large files.</li>
+  </ul>
+
+  <h3>Dynamic Inode Allocation</h3>
+  <p>XFS does <strong>not</strong> pre-allocate inodes at mkfs time. New inodes are carved out of free space on demand. Practical consequences:</p>
+  <ul>
+    <li>You can't run out of inodes while having free space — a common ext4 failure mode.</li>
+    <li>Deleted inode space isn't automatically reclaimed to the pool of data blocks until the chunk is empty (this is usually invisible in practice).</li>
+  </ul>
+
+  <h3>Metadata-Only Journal</h3>
+  <p>XFS journals metadata <strong>only</strong>. File data is never journaled. Ordering is enforced by writing data blocks before the metadata that references them, similar to ext4's <code>data=ordered</code>. There is no <code>data=journal</code> equivalent — if you need that level of durability, put the workload on a FS that supports it, or use application-level <code>fsync</code>.</p>
+
+  <!-- ===== XFS FEATURES ===== -->
+  <h2>XFS Features</h2>
+
+  <table>
+    <tr><th>Feature</th><th>What it does</th></tr>
+    <tr><td>Delayed allocation</td><td>Writes stay in memory; physical blocks aren't chosen until flush. Lets the allocator see the full size of the write and place it contiguously. Excellent for reducing fragmentation.</td></tr>
+    <tr><td>Online defrag</td><td><code>xfs_fsr</code> (filesystem reorganizer) runs while mounted and writable. Walks files, rewrites fragmented ones into contiguous extents.</td></tr>
+    <tr><td>Reflinks</td><td>Copy-on-write copies within a file or between files: <code>cp --reflink=always a b</code> shares extents until one side writes. Used heavily by container storage drivers and backup tools (borg, restic).</td></tr>
+    <tr><td>Quotas</td><td>User, group, and <strong>project</strong> quotas. Project quotas set limits on arbitrary directory trees — the mechanism Kubernetes uses for enforced per-volume quotas on XFS PVs.</td></tr>
+    <tr><td>Realtime subvolume</td><td>Separate data region with no metadata — extents allocated in fixed-size contiguous chunks. Deterministic I/O latency for video/audio workloads. Rare in practice.</td></tr>
+    <tr><td>CRC32c metadata checksums</td><td>On by default since <code>mkfs.xfs</code> 3.2.3 (2014). Every metadata block is verified on read. Silent corruption produces an explicit error, not mysterious misbehavior.</td></tr>
+    <tr><td>Scalability ceiling</td><td>500 TiB per filesystem on 64-bit systems is routine; 8 EiB theoretical. Directories with tens of millions of entries remain fast.</td></tr>
+  </table>
+
+  <!-- ===== XFS TUNING ===== -->
+  <h2>XFS Tuning</h2>
+
+  <div class="terminal">
+<span class="prompt">#</span> <span class="cm"># Default mkfs is already sane. Tune only when needed.</span>
+<span class="prompt">#</span> mkfs.xfs /dev/sda1
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># RAID alignment — sunit in 512B sectors, swidth = sunit * data disks</span>
+<span class="prompt">#</span> mkfs.xfs -d sunit=128,swidth=512 /dev/md0
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># More allocation groups for a high-concurrency workload</span>
+<span class="prompt">#</span> mkfs.xfs -d agcount=32 /dev/sdb1
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># Larger log buffer — reduces log commit frequency under heavy metadata load</span>
+<span class="prompt">#</span> mount -o logbsize=256k /dev/sda1 /data
+<span class="prompt">#</span>
+<span class="prompt">#</span> <span class="cm"># Inspect an existing XFS</span>
+<span class="prompt">#</span> xfs_info /data
+<span class="output">meta-data=/dev/sda1   isize=512    agcount=4, agsize=6553600 blks
+         =              sectsz=4096  attr=2, projid32bit=1
+         =              crc=1        finobt=1, sparse=1, rmapbt=0
+data     =              bsize=4096   blocks=26214400, imaxpct=25
+         =              sunit=0      swidth=0 blks
+naming   =version 2     bsize=4096   ascii-ci=0, ftype=1
+log      =internal log  bsize=4096   blocks=12800, version=2
+         =              sectsz=4096  sunit=1 blks, lazy-count=1
+realtime =none          extsz=4096   blocks=0, rtextents=0</span>
+  </div>
+
+  <h3>XFS Utilities Cheat Sheet</h3>
+  <ul>
+    <li><code>mkfs.xfs</code> — create</li>
+    <li><code>xfs_info</code> — like <code>dumpe2fs -h</code>, but for XFS</li>
+    <li><code>xfs_admin</code> — change label / UUID</li>
+    <li><code>xfs_growfs</code> — online grow (no offline option)</li>
+    <li><code>xfs_fsr</code> — online defragmenter</li>
+    <li><code>xfs_repair</code> — offline checker/repair (XFS has no <code>fsck.xfs</code> that does real work; the mount-time log replay handles most cases)</li>
+    <li><code>xfs_db</code> — low-level debugger, equivalent to <code>debugfs</code></li>
+    <li><code>xfs_quota</code> — manage user/group/project quotas</li>
+  </ul>
+
+  <!-- ===== GROWING / SHRINKING ===== -->
+  <h2>Growing and Shrinking</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header code">ext4</div>
+      <div class="comp-body">
+        <p><strong>Grow:</strong> online, with <code>resize2fs /dev/sda1</code> after the underlying block device/LV has been enlarged.</p>
+        <p><strong>Shrink:</strong> offline only — unmount, <code>e2fsck -f</code>, <code>resize2fs &lt;dev&gt; &lt;size&gt;</code>, then shrink the block device. Slow but supported.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">XFS</div>
+      <div class="comp-body">
+        <p><strong>Grow:</strong> online, with <code>xfs_growfs /mount/point</code>.</p>
+        <p><strong>Shrink:</strong> <strong>NOT SUPPORTED. Ever.</strong> There is no tool. The only way to "shrink" an XFS volume is <code>xfs_dump</code>/<code>xfsrestore</code> to a smaller one, or <code>rsync</code> + reformat.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The XFS shrink gotcha:</strong> If you provision an XFS volume too large — say, a 10 TiB LV on a thin-provisioned pool — you're committed. There's no going back without downtime and data migration. Always err on the side of <em>smaller</em> XFS volumes and grow later. On LVM, plan capacity carefully; on cloud (EBS, GCE PD), remember that volume shrink isn't supported at the block layer anyway, so this is often moot.
+  </div>
+
+  <!-- ===== EXT4 VS XFS ===== -->
+  <h2>ext4 vs XFS — Side by Side</h2>
+
+  <table>
+    <tr><th>Property</th><th>ext4</th><th>XFS</th></tr>
+    <tr><td>Max filesystem size (practical)</td><td>~50 TiB recommended</td><td>PB scale, tested to 500+ TiB</td></tr>
+    <tr><td>Max file size</td><td>16 TiB</td><td>8 EiB</td></tr>
+    <tr><td>Inodes</td><td>Pre-allocated at mkfs (can run out)</td><td>Dynamic (cannot run out independently)</td></tr>
+    <tr><td>Journaling</td><td>Metadata + optional data journaling</td><td>Metadata only</td></tr>
+    <tr><td>Allocation</td><td>Block bitmap + extent tree</td><td>B+ trees (free by block, free by length)</td></tr>
+    <tr><td>Concurrency</td><td>Good; serialized on group bitmap locks</td><td>Excellent; independent AGs</td></tr>
+    <tr><td>Delayed allocation</td><td>Yes (since 2.6.30)</td><td>Yes (original)</td></tr>
+    <tr><td>Reflinks (CoW)</td><td>No</td><td>Yes</td></tr>
+    <tr><td>Project quotas</td><td>Experimental / limited</td><td>First-class (used by K8s)</td></tr>
+    <tr><td>Metadata checksums</td><td>Optional (default on mkfs ≥ 1.43)</td><td>On by default</td></tr>
+    <tr><td>Shrink</td><td>Offline, supported</td><td><strong>Not supported</strong></td></tr>
+    <tr><td>Online grow</td><td>Yes (<code>resize2fs</code>)</td><td>Yes (<code>xfs_growfs</code>)</td></tr>
+    <tr><td>Small-file performance</td><td>Strong, especially with <code>inline_data</code></td><td>Good; large inode size helps</td></tr>
+    <tr><td>Large-file throughput</td><td>Good</td><td>Excellent — the original design target</td></tr>
+  </table>
+
+  <!-- ===== WHICH TO USE ===== -->
+  <h2>Choosing Between Them</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Pick ext4 when…</div>
+      <div class="comp-body">
+        <ul>
+          <li>It's a general-purpose volume &lt; 16 TiB.</li>
+          <li>You may need to <strong>shrink</strong> later.</li>
+          <li>Workload is small files and you want <code>inline_data</code>.</li>
+          <li>You want the absolute maximum ecosystem maturity on Debian/Ubuntu.</li>
+          <li>You need <code>data=journal</code> for a paranoid durability requirement.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Pick XFS when…</div>
+      <div class="comp-body">
+        <ul>
+          <li>The filesystem is &gt; 16 TiB, or will grow large.</li>
+          <li>Many concurrent writers (database storage, mail spools, object-store backends).</li>
+          <li>Workload is large files (video, backups, databases).</li>
+          <li>You need reflinks (container storage, dedup-aware backups).</li>
+          <li>You need project quotas (Kubernetes XFS PVs).</li>
+          <li>You're on RHEL-family and want the distro default.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Default heuristic:</strong> ext4 for the root filesystem and small data volumes, XFS for anything that will get large or concurrent. If you have no opinion, follow your distro's default.
+  </div>
+
+  <!-- ===== HONORABLE MENTIONS ===== -->
+  <h2>Honorable Mentions</h2>
+
+  <table>
+    <tr><th>FS</th><th>Status</th><th>Notes</th></tr>
+    <tr><td><code>f2fs</code></td><td>Mainline, production on Android</td><td>Flash-Friendly FS. Log-structured design tailored for NAND erase-block behavior. Solid choice for low-end SSDs, SD cards, embedded devices. Rarely used for general-purpose servers.</td></tr>
+    <tr><td><code>ReiserFS</code> / Reiser4</td><td>Deprecated</td><td>Innovative B+tree design in the early 2000s, later abandoned. Removed from mainline Linux in 6.13. Not a choice for new deployments.</td></tr>
+    <tr><td><code>bcachefs</code></td><td>Experimental (merged in 6.7, 2024)</td><td>CoW filesystem with built-in tiered caching, compression, snapshots, encryption. Ambitious — aims to be what btrfs was supposed to be. Not yet production-grade. Worth watching.</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>btrfs and ZFS</strong> are covered separately under Advanced Filesystems (storage-08). They're CoW filesystems with volume management, snapshots, and checksumming baked in — a fundamentally different architecture from ext4/XFS.
+  </div>
+
+  <!-- ===== TAKEAWAYS ===== -->
+  <h2>Takeaways</h2>
+  <ul>
+    <li>ext4 and XFS are the two production defaults on Linux. Both are journaled, extent-based, and battle-tested.</li>
+    <li>ext4 evolved from ext2/ext3 with backward compatibility; XFS was built scalable from day one.</li>
+    <li>ext4 pre-allocates inodes (risk of <code>ENOSPC</code> with free space); XFS allocates them dynamically.</li>
+    <li>XFS journals metadata only. No <code>data=journal</code> equivalent.</li>
+    <li><strong>XFS cannot shrink.</strong> Plan capacity conservatively or accept migration downtime.</li>
+    <li>Use reflinks (<code>cp --reflink</code>) on XFS for fast CoW copies — huge win for backups and container layers.</li>
+    <li>Default heuristic: ext4 for small/shrinkable volumes, XFS for large/concurrent/large-file workloads.</li>
+    <li>f2fs for flash-only embedded; bcachefs still baking; ReiserFS is history.</li>
+  </ul>
+
+<script src="../nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 01 — Disk Partitioning</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 01 — Disk Partitioning</h1>
+  <p class="subtitle">MBR, GPT, and how disk space gets divided</p>
+
+  <!-- ===== WHAT IS A PARTITION ===== -->
+  <h2>What a Partition Actually Is</h2>
+
+  <p>A block device is a flat array of LBAs — <code>0, 1, 2, …, N-1</code>. A <strong>partition</strong> is nothing more than a <em>named range</em> of those LBAs: <code>[start_lba, end_lba]</code> plus a type code and optional label. The range is described by an entry in a <strong>partition table</strong> — a small metadata structure at a fixed, well-known location on the disk so that firmware, bootloaders, and the OS can find it without prior knowledge of what's on the drive.</p>
+
+  <div class="panel">
+    <div class="panel-title">Why Partition at All?</div>
+    <ul>
+      <li><strong>Multiple filesystems</strong> on one device (e.g. ESP + root + swap)</li>
+      <li><strong>Multi-boot</strong> with different OSes</li>
+      <li><strong>Isolation</strong> — quota at the FS level, or separate encryption domains</li>
+      <li><strong>Firmware contract</strong> — UEFI looks for an ESP with a specific type GUID; without it the system won't boot</li>
+      <li><strong>Alignment</strong> — partitioning is where you pay (or forget to pay) the alignment cost</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    Partitions are a <strong>pre-filesystem</strong> concept. LVM and ZFS pools provide a more flexible alternative (growable, spanning multiple devices), but nearly every system still starts life with a partition table because firmware requires it.
+  </div>
+
+  <!-- ===== MBR ===== -->
+  <h2>MBR — Master Boot Record</h2>
+
+  <p>Introduced with the IBM PC in 1983. It is a <strong>512-byte sector at LBA 0</strong> that contains bootstrap code plus a tiny partition table.</p>
+
+  <h3>MBR Layout (LBA 0)</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field data" style="flex: 4.46;">
+      <span class="field-name">Bootstrap code</span>
+      <span class="field-size">446 bytes — first-stage bootloader</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 0.64;">
+      <span class="field-name">Part 1</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 0.64;">
+      <span class="field-name">Part 2</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 0.64;">
+      <span class="field-name">Part 3</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 0.64;">
+      <span class="field-name">Part 4</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 0.08;">
+      <span class="field-name">55AA</span>
+      <span class="field-size">2 B — boot signature</span>
+    </div>
+  </div>
+
+  <h3>Each 16-Byte Partition Entry</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field flag" style="flex: 1;">
+      <span class="field-name">Boot flag</span>
+      <span class="field-size">1 B — 0x80 = active</span>
+    </div>
+    <div class="pkt-field src" style="flex: 3;">
+      <span class="field-name">CHS first</span>
+      <span class="field-size">3 B — legacy Cylinder/Head/Sector</span>
+    </div>
+    <div class="pkt-field proto" style="flex: 1;">
+      <span class="field-name">Type</span>
+      <span class="field-size">1 B — 0x83 Linux, 0x05/0x0F ext, 0xEE GPT</span>
+    </div>
+    <div class="pkt-field dst" style="flex: 3;">
+      <span class="field-name">CHS last</span>
+      <span class="field-size">3 B — legacy end</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">Start LBA</span>
+      <span class="field-size">4 B (32-bit)</span>
+    </div>
+    <div class="pkt-field check" style="flex: 4;">
+      <span class="field-name">Num sectors</span>
+      <span class="field-size">4 B (32-bit)</span>
+    </div>
+  </div>
+
+  <h3>MBR Constraints</h3>
+
+  <table>
+    <tr><th>Limit</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Max primary partitions</td><td>4</td><td>Only 4 slots in the 64-byte table</td></tr>
+    <tr><td>Max disk size</td><td>~2 TiB</td><td>Start LBA + count fields are 32-bit; 2<sup>32</sup> × 512 B = 2 TiB</td></tr>
+    <tr><td>Max partition size</td><td>~2 TiB</td><td>Same 32-bit sector count</td></tr>
+    <tr><td>Integrity check</td><td>None</td><td>No CRC, no backup — a single stray write at LBA 0 wipes the table</td></tr>
+    <tr><td>Partition labels</td><td>None</td><td>Just a 1-byte type code</td></tr>
+  </table>
+
+  <h3>The Extended/Logical Workaround</h3>
+
+  <p>To break past 4 partitions, one of the primary slots is marked as an <strong>extended partition</strong> (type 0x05 or 0x0F). Inside it lives a chain of <strong>Extended Boot Records (EBRs)</strong>, each describing one <em>logical</em> partition and pointing to the next EBR. Linux numbers these <code>sda5</code>, <code>sda6</code>, … (primaries stay 1–4, logicals start at 5).</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="label">Primary 1</div>
+      <div class="desc">sda1</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step">
+      <div class="label">Primary 2</div>
+      <div class="desc">sda2</div>
+    </div>
+    <div class="arrow">|</div>
+    <div class="flow-step">
+      <div class="label">Extended</div>
+      <div class="desc">sda4 — container</div>
+    </div>
+    <div class="arrow">↳</div>
+    <div class="flow-step">
+      <div class="label">EBR → Logical</div>
+      <div class="desc">sda5</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="label">EBR → Logical</div>
+      <div class="desc">sda6 …</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Don't use MBR on anything new.</strong> Every constraint above is solved by GPT, and every modern partitioning tool defaults to GPT. MBR knowledge is needed only for legacy systems, embedded devices, and reading old disks.
+  </div>
+
+  <!-- ===== GPT ===== -->
+  <h2>GPT — GUID Partition Table</h2>
+
+  <p>Defined in the UEFI specification. Fixes every MBR limitation: 64-bit LBAs, up to 128 partitions by default (up to ~2<sup>18</sup> in theory), CRC-checked, with a full backup at the end of the disk.</p>
+
+  <h3>GPT Disk Layout</h3>
+
+  <div class="layer-diagram" style="max-width: 900px;">
+    <div class="layer l1">
+      <span class="layer-num" style="width: 80px;">LBA 0</span>
+      <span class="layer-name" style="width: 260px;">Protective MBR</span>
+      <span class="layer-pdu">512 B</span>
+      <span class="layer-protocols">One entry type 0xEE spanning the whole disk — hides GPT from legacy tools</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num" style="width: 80px;">LBA 1</span>
+      <span class="layer-name" style="width: 260px;">Primary GPT Header</span>
+      <span class="layer-pdu">512 B</span>
+      <span class="layer-protocols">Disk GUID, pointer to entries, CRC32 of self + entries</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num" style="width: 80px;">LBA 2–33</span>
+      <span class="layer-name" style="width: 260px;">Primary Partition Entries</span>
+      <span class="layer-pdu">16 KiB</span>
+      <span class="layer-protocols">128 entries × 128 B each (default). Type GUID, unique GUID, name</span>
+    </div>
+    <div class="layer l7">
+      <span class="layer-num" style="width: 80px;">LBA 34+</span>
+      <span class="layer-name" style="width: 260px;">Usable Area</span>
+      <span class="layer-pdu">…</span>
+      <span class="layer-protocols">Actual partition data lives here — first partition typically starts at LBA 2048 (1 MiB)</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num" style="width: 80px;">N-33…N-1</span>
+      <span class="layer-name" style="width: 260px;">Backup Partition Entries</span>
+      <span class="layer-pdu">16 KiB</span>
+      <span class="layer-protocols">Exact copy of primary entries</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num" style="width: 80px;">LBA N</span>
+      <span class="layer-name" style="width: 260px;">Backup GPT Header</span>
+      <span class="layer-pdu">512 B</span>
+      <span class="layer-protocols">Backup of primary; pointers are reversed. Used for recovery</span>
+    </div>
+  </div>
+
+  <h3>GPT Header Fields (highlights)</h3>
+
+  <table>
+    <tr><th>Offset</th><th>Field</th><th>Purpose</th></tr>
+    <tr><td>0</td><td>Signature <code>"EFI PART"</code></td><td>Magic bytes identifying a GPT header</td></tr>
+    <tr><td>8</td><td>Revision</td><td>Usually 00 00 01 00 (1.0)</td></tr>
+    <tr><td>16</td><td>Header CRC32</td><td>Validates the 92-byte header</td></tr>
+    <tr><td>24</td><td>Current LBA / Backup LBA</td><td>Self-location and pointer to the other copy</td></tr>
+    <tr><td>40</td><td>First/Last usable LBA</td><td>Range available for partition data</td></tr>
+    <tr><td>56</td><td>Disk GUID</td><td>Unique identifier for the entire disk</td></tr>
+    <tr><td>72</td><td>Partition entries LBA</td><td>Where the entry array lives</td></tr>
+    <tr><td>80</td><td>Number of entries / entry size</td><td>Default 128 × 128 B</td></tr>
+    <tr><td>88</td><td>Partition array CRC32</td><td>Validates the entry table</td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>Why a protective MBR?</strong> Legacy tools that don't understand GPT see a fully-allocated MBR covering the whole disk with an unknown type (0xEE). They refuse to touch it rather than helpfully "fixing" it by deleting what they can't parse.
+  </div>
+
+  <h3>Common Partition Type GUIDs</h3>
+
+  <table>
+    <tr><th>Type</th><th>GUID</th><th>Notes</th></tr>
+    <tr><td><strong>Linux filesystem</strong></td><td><code>0FC63DAF-8483-4772-8E79-3D69D8477DE4</code></td><td>Generic Linux data. ext4, xfs, btrfs all use this</td></tr>
+    <tr><td><strong>Linux swap</strong></td><td><code>0657FD6D-A4AB-43C4-84E5-0933C84B4F4F</code></td><td></td></tr>
+    <tr><td><strong>Linux LUKS</strong></td><td><code>CA7D7CCB-63ED-4C53-861C-1742536059CC</code></td><td>Encrypted container</td></tr>
+    <tr><td><strong>Linux LVM</strong></td><td><code>E6D6D379-F507-44C2-A23C-238F2A3DF928</code></td><td>Physical volume</td></tr>
+    <tr><td><strong>Linux RAID</strong></td><td><code>A19D880F-05FC-4D3B-A006-743F0F84911E</code></td><td>mdraid member</td></tr>
+    <tr><td><strong>EFI System Partition</strong></td><td><code>C12A7328-F81F-11D2-BA4B-00A0C93EC93B</code></td><td>Mandatory on UEFI boot disks</td></tr>
+    <tr><td><strong>BIOS boot partition</strong></td><td><code>21686148-6449-6E6F-744E-656564454649</code></td><td>Tiny (~1 MiB) slot for GRUB on BIOS+GPT</td></tr>
+    <tr><td><strong>Microsoft reserved (MSR)</strong></td><td><code>E3C9E316-0B5C-4DB8-817D-F92DF00215AE</code></td><td>Windows metadata</td></tr>
+    <tr><td><strong>Microsoft basic data</strong></td><td><code>EBD0A0A2-B9E5-4433-87C0-68B6B72699C7</code></td><td>NTFS, FAT, exFAT</td></tr>
+    <tr><td><strong>Linux root (x86-64)</strong></td><td><code>4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709</code></td><td><a href="https://uapi-group.org/specifications/specs/discoverable_partitions_specification/">Discoverable Partitions Spec</a> — systemd auto-mounts based on type</td></tr>
+    <tr><td><strong>Linux /home</strong></td><td><code>933AC7E1-2EB4-4F13-B844-0E14E2AEF915</code></td><td>Same DPS</td></tr>
+  </table>
+
+  <div class="note">
+    The <strong>Discoverable Partitions Specification</strong> (used by systemd) lets you boot without writing a <code>/etc/fstab</code>: if your root partition has the right type GUID for your architecture, systemd-gpt-auto-generator mounts it automatically.
+  </div>
+
+  <h3>Each Partition Entry (128 B)</h3>
+
+  <div class="packet-diagram">
+    <div class="pkt-field proto" style="flex: 16;">
+      <span class="field-name">Partition type GUID</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field src" style="flex: 16;">
+      <span class="field-name">Unique partition GUID</span>
+      <span class="field-size">16 B</span>
+    </div>
+    <div class="pkt-field check" style="flex: 8;">
+      <span class="field-name">First LBA</span>
+      <span class="field-size">8 B (64-bit)</span>
+    </div>
+    <div class="pkt-field check" style="flex: 8;">
+      <span class="field-name">Last LBA</span>
+      <span class="field-size">8 B (64-bit)</span>
+    </div>
+    <div class="pkt-field flag" style="flex: 8;">
+      <span class="field-name">Attributes</span>
+      <span class="field-size">8 B — bit 0 required, bit 2 legacy BIOS bootable, bit 60 read-only…</span>
+    </div>
+    <div class="pkt-field data" style="flex: 72;">
+      <span class="field-name">Name (UTF-16LE)</span>
+      <span class="field-size">72 B — 36 characters, human-readable label</span>
+    </div>
+  </div>
+
+  <!-- ===== MBR vs GPT ===== -->
+  <h2>MBR vs GPT Side by Side</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">MBR</div>
+      <div class="comp-body">
+        <ul>
+          <li>1983, BIOS era</li>
+          <li>Single 512 B sector at LBA 0</li>
+          <li>4 primary + extended/logical chain</li>
+          <li>32-bit LBAs → 2 TiB disk max</li>
+          <li>No integrity check</li>
+          <li>No backup</li>
+          <li>1-byte type code</li>
+          <li>No partition names</li>
+          <li>Works with legacy BIOS bootloaders</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">GPT</div>
+      <div class="comp-body">
+        <ul>
+          <li>2000, UEFI standard</li>
+          <li>Header + 128-entry table, with backup at disk end</li>
+          <li>128 partitions by default (expandable)</li>
+          <li>64-bit LBAs → 8 ZiB disk max</li>
+          <li>CRC32 on header and entries</li>
+          <li>Primary + backup at disk end</li>
+          <li>16-byte type GUID</li>
+          <li>36-char UTF-16 names</li>
+          <li>Required by UEFI; works with BIOS via BIOS boot partition</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ALIGNMENT ===== -->
+  <h2>1 MiB Alignment</h2>
+
+  <p>Modern tools default the first partition to <strong>LBA 2048</strong> — exactly 1 MiB into the disk (2048 × 512 B). Each subsequent partition boundary also lands on a 1 MiB multiple. This is not decoration; it is a correctness property.</p>
+
+  <h3>What 1 MiB Aligns To</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">Physical sector</div>
+      <p>4 KiB drives: 1 MiB = 256 physical sectors. No RMW penalty on the first partition.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">NAND page / erase block</div>
+      <p>NAND pages are 4–16 KiB; erase blocks up to 1 MiB. A partition that begins on a 1 MiB boundary cannot cause partial-erase-block writes at the device level.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">RAID stripe</div>
+      <p>Typical stripe widths (64, 128, 256, 512 KiB, 1 MiB) all divide 1 MiB. A 1 MiB-aligned partition won't straddle stripe boundaries for small I/O.</p>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Starting partitions below 1 MiB</strong> (e.g. LBA 34 — the first legal GPT LBA) works and wastes no space, but misaligns the partition against every modern NAND geometry and every RAID stripe you'll ever put underneath. Don't do it.
+  </div>
+
+  <!-- ===== TOOLS ===== -->
+  <h2>Partitioning Tools</h2>
+
+  <table>
+    <tr><th>Tool</th><th>Mode</th><th>Scope</th><th>Best for</th></tr>
+    <tr><td><code>fdisk</code></td><td>Interactive (util-linux)</td><td>MBR + GPT (since 2.26)</td><td>Quick edits on a single disk; familiar for MBR users</td></tr>
+    <tr><td><code>parted</code></td><td>Interactive + scriptable</td><td>MBR + GPT, many others</td><td>Scripts, resize operations, consistent CLI across label types</td></tr>
+    <tr><td><code>sgdisk</code></td><td>Non-interactive CLI</td><td>GPT only</td><td>Automation, cloud-init, Ansible. Every op in one command.</td></tr>
+    <tr><td><code>gdisk</code></td><td>Interactive</td><td>GPT only</td><td>GPT-focused interactive editing; fdisk-style menu</td></tr>
+    <tr><td><code>cfdisk</code></td><td>ncurses TUI</td><td>MBR + GPT</td><td>Visual editing on a serial console / rescue shell</td></tr>
+    <tr><td><code>blkdiscard</code></td><td>CLI</td><td>Device-wide</td><td>Not partitioning — erases all data; use before repartitioning SSDs</td></tr>
+    <tr><td><code>wipefs</code></td><td>CLI</td><td>Signature level</td><td>Removes filesystem / partition table signatures without writing a new one</td></tr>
+  </table>
+
+  <h3>fdisk — Quick Inspection</h3>
+
+  <div class="terminal">
+    <span class="prompt">#</span> fdisk -l /dev/nvme0n1<br>
+    <span class="output">Disk /dev/nvme0n1: 1.82 TiB, 2000398934016 bytes, 3907029168 sectors<br>
+    Disk model: Samsung SSD 980 PRO 2TB<br>
+    Units: sectors of 1 * 512 = 512 bytes<br>
+    Sector size (logical/physical): 512 bytes / 512 bytes<br>
+    I/O size (minimum/optimal): 512 bytes / 512 bytes<br>
+    Disklabel type: gpt<br>
+    Disk identifier: 1D3F2A01-BB55-4E2C-8F1E-9D27AEF5B3E1<br>
+    <br>
+    Device            Start        End    Sectors  Size Type<br>
+    /dev/nvme0n1p1     2048    1050623    1048576  512M EFI System<br>
+    /dev/nvme0n1p2  1050624    3147775    2097152    1G Linux filesystem<br>
+    /dev/nvme0n1p3  3147776 3907028991 3903881216  1.8T Linux LUKS</span>
+  </div>
+
+  <h3>parted — Scriptable and Resize-Capable</h3>
+
+  <div class="terminal">
+    <span class="prompt">#</span> parted /dev/nvme0n1 print<br>
+    <span class="output">Model: Samsung SSD 980 PRO 2TB (nvme)<br>
+    Disk /dev/nvme0n1: 2000GB<br>
+    Sector size (logical/physical): 512B/512B<br>
+    Partition Table: gpt<br>
+    <br>
+    Number  Start   End     Size    File system  Name  Flags<br>
+     1      1049kB  538MB   537MB   fat32        EFI   boot, esp<br>
+     2      538MB   1612MB  1074MB  ext4         boot<br>
+     3      1612MB  2000GB  1999GB                     </span><br>
+    <br>
+    <span class="prompt">#</span> parted -s /dev/sdb mklabel gpt \<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;mkpart ESP fat32 1MiB 513MiB set 1 esp on \<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;mkpart root ext4 513MiB 100%
+  </div>
+
+  <h3>sgdisk — Automation Friend</h3>
+
+  <div class="terminal">
+    <span class="prompt">#</span> sgdisk -p /dev/nvme0n1<br>
+    <span class="output">Disk /dev/nvme0n1: 3907029168 sectors, 1.8 TiB<br>
+    Sector size (logical/physical): 512/512 bytes<br>
+    Disk identifier (GUID): 1D3F2A01-BB55-4E2C-8F1E-9D27AEF5B3E1<br>
+    Partition table holds up to 128 entries<br>
+    First usable sector is 34, last usable sector is 3907029134<br>
+    Partitions will be aligned on 2048-sector boundaries<br>
+    Total free space is 0 sectors (0 bytes)<br>
+    <br>
+    Number  Start (sector)    End (sector)  Size       Code  Name<br>
+       1            2048         1050623   512.0 MiB   EF00  EFI System<br>
+       2         1050624         3147775   1024.0 MiB  8300  boot<br>
+       3         3147776      3907028991   1.8 TiB     8309  crypt</span>
+    <br><br>
+    <span class="cm"># One-liner to build a fresh layout:</span><br>
+    <span class="prompt">#</span> sgdisk --zap-all /dev/sdb<br>
+    <span class="prompt">#</span> sgdisk -n 1:0:+512M -t 1:ef00 -c 1:"EFI" \<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;-n 2:0:+1G   -t 2:8300 -c 2:"boot" \<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;-n 3:0:0     -t 3:8309 -c 3:"crypt" /dev/sdb
+  </div>
+
+  <div class="tip">
+    <strong>sgdisk code shortcuts:</strong> <code>ef00</code> = ESP, <code>8300</code> = Linux FS, <code>8309</code> = LUKS, <code>8e00</code> = LVM, <code>fd00</code> = RAID, <code>8200</code> = swap. These are sgdisk's 4-hex-digit aliases for the full type GUIDs.
+  </div>
+
+  <!-- ===== ESP ===== -->
+  <h2>The EFI System Partition (ESP)</h2>
+
+  <div class="panel">
+    <div class="panel-title">Why It Exists</div>
+    <p>UEFI firmware does not know how to read ext4, xfs, btrfs, or any other "real" filesystem. It speaks only <strong>FAT32</strong> (and sometimes FAT12/FAT16). The ESP is a dedicated FAT32 partition on which the firmware can find and execute UEFI applications — bootloaders, firmware updaters, memory testers.</p>
+  </div>
+
+  <table>
+    <tr><th>Property</th><th>Value</th></tr>
+    <tr><td>Filesystem</td><td>FAT32 (vfat)</td></tr>
+    <tr><td>Type GUID</td><td><code>C12A7328-F81F-11D2-BA4B-00A0C93EC93B</code></td></tr>
+    <tr><td>Typical size</td><td>256 MiB – 1 GiB (512 MiB is a safe default)</td></tr>
+    <tr><td>Typical mountpoint</td><td><code>/boot/efi</code> (Debian/Ubuntu), <code>/efi</code> (Fedora with systemd-boot), or <code>/boot</code> (unified kernel image setups)</td></tr>
+    <tr><td>Required entries</td><td><code>EFI/BOOT/BOOTX64.EFI</code> (removable media fallback) or vendor dirs like <code>EFI/ubuntu/</code>, <code>EFI/fedora/</code>, <code>EFI/systemd/</code></td></tr>
+  </table>
+
+  <h3>Typical ESP Contents</h3>
+
+  <div class="file-tree">
+<span class="dir">/boot/efi/</span>
+└── <span class="dir">EFI/</span>
+    ├── <span class="dir">BOOT/</span>
+    │   └── <span class="file">BOOTX64.EFI</span>       <span class="cm"># fallback path, tried by firmware if NVRAM is empty</span>
+    ├── <span class="dir">ubuntu/</span>
+    │   ├── <span class="file">shimx64.efi</span>       <span class="cm"># signed shim — speaks to Secure Boot</span>
+    │   ├── <span class="file">grubx64.efi</span>       <span class="cm"># GRUB EFI binary</span>
+    │   ├── <span class="file">mmx64.efi</span>         <span class="cm"># MokManager (signing key mgmt)</span>
+    │   └── <span class="file">grub.cfg</span>
+    └── <span class="dir">systemd/</span>
+        └── <span class="file">systemd-bootx64.efi</span> <span class="cm"># alternative: systemd-boot, simpler than GRUB</span>
+  </div>
+
+  <div class="warn">
+    <strong>On UEFI systems, forgetting the ESP means the system will not boot</strong> — not at install time, not after a wipe, not after a GPT restore. If you restore a GPT from backup onto a fresh disk with no data, you also need to repopulate the ESP and the firmware's NVRAM boot entries (<code>efibootmgr --create …</code>).
+  </div>
+
+  <!-- ===== LOOP DEVICES ===== -->
+  <h2>Loop Devices — Files as Block Devices</h2>
+
+  <p>A <strong>loop device</strong> binds a regular file to a <code>/dev/loopN</code> node so the kernel treats it as a block device. This is how disk images (<code>.img</code>, <code>.iso</code>, qcow2 when combined with <code>qemu-nbd</code>) are mounted, and how utilities like <code>losetup</code>, snap, or cloud-init handle image-based storage.</p>
+
+  <div class="terminal">
+    <span class="prompt">#</span> dd if=/dev/zero of=/tmp/disk.img bs=1M count=1024<br>
+    <span class="prompt">#</span> losetup -f --show /tmp/disk.img<br>
+    <span class="output">/dev/loop0</span><br>
+    <br>
+    <span class="prompt">#</span> sgdisk -n 1:0:+256M -t 1:ef00 -n 2:0:0 -t 2:8300 /dev/loop0<br>
+    <span class="prompt">#</span> partprobe /dev/loop0          <span class="cm"># or: losetup -P (partition scanning)</span><br>
+    <span class="prompt">#</span> ls /dev/loop0*<br>
+    <span class="output">/dev/loop0  /dev/loop0p1  /dev/loop0p2</span><br>
+    <br>
+    <span class="prompt">#</span> mkfs.ext4 /dev/loop0p2<br>
+    <span class="prompt">#</span> mount /dev/loop0p2 /mnt<br>
+    <span class="prompt">#</span> <span class="cm">... use it ...</span><br>
+    <span class="prompt">#</span> umount /mnt && losetup -d /dev/loop0
+  </div>
+
+  <div class="tip">
+    <strong><code>losetup -P</code></strong> tells the kernel to scan the loop device for a partition table and expose each partition as <code>/dev/loopNpM</code>. Without <code>-P</code> (or without a subsequent <code>partprobe</code>), only the whole-disk node exists and the partitions are invisible to userspace.
+  </div>
+
+  <!-- ===== REREAD ===== -->
+  <h2>Telling the Kernel to Re-read the Table</h2>
+
+  <p>When you change the partition table on a disk that is <em>in use</em>, the kernel keeps the old in-memory view because rewriting it would invalidate mounts. You need to explicitly ask it to re-scan:</p>
+
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>partprobe /dev/sdX</code></td><td>Ask the kernel to re-read the partition table. From <code>parted</code>. Simple and common.</td></tr>
+    <tr><td><code>partx -u /dev/sdX</code></td><td>Update (add/remove) partitions from an existing table without a full reload. Safer on mounted disks.</td></tr>
+    <tr><td><code>partx -a /dev/sdX</code></td><td>Add newly-defined partitions.</td></tr>
+    <tr><td><code>partx -d /dev/sdX</code></td><td>Delete partition device nodes.</td></tr>
+    <tr><td><code>blockdev --rereadpt /dev/sdX</code></td><td>Force BLKRRPART ioctl. Fails if any partition on the device is mounted.</td></tr>
+    <tr><td><code>kpartx -av image.img</code></td><td>Create <code>/dev/mapper/loopNpM</code> for a loop-backed image (uses device-mapper instead of loop partitions).</td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>Resize with mounted root:</strong> when you grow the root partition on a running system, <code>partprobe</code> often fails with EBUSY. Use <code>partx -u /dev/sdX</code> (updates entries in-place) or reboot. Afterwards, <code>resize2fs /dev/sdXN</code> or <code>xfs_growfs /</code> grows the live filesystem.
+  </div>
+
+  <!-- ===== BACKUP ===== -->
+  <h2>GPT Backup and Restore</h2>
+
+  <p>GPT has a native backup (the table at the end of disk), but if the whole disk is dying or you want off-device safety, <code>sgdisk</code> can export the entire table to a file.</p>
+
+  <div class="terminal">
+    <span class="cm"># Back up the table</span><br>
+    <span class="prompt">#</span> sgdisk --backup=/root/nvme0n1.gpt.bak /dev/nvme0n1<br>
+    <br>
+    <span class="cm"># Verify</span><br>
+    <span class="prompt">#</span> sgdisk --verify /dev/nvme0n1<br>
+    <br>
+    <span class="cm"># Restore (wipes existing table — both primary and backup!)</span><br>
+    <span class="prompt">#</span> sgdisk --load-backup=/root/nvme0n1.gpt.bak /dev/nvme0n1<br>
+    <br>
+    <span class="cm"># If only the primary header is corrupt, regenerate from backup:</span><br>
+    <span class="prompt">#</span> sgdisk --move-second-header /dev/nvme0n1<br>
+    <span class="prompt">#</span> gdisk /dev/nvme0n1         <span class="cm"># interactive 'r' recovery menu</span>
+  </div>
+
+  <div class="note">
+    <strong>What a backup file contains:</strong> disk GUID, all 128 partition entries (type GUID, unique GUID, first/last LBA, attributes, name), and header checksums. It does <strong>not</strong> contain partition contents — if your data is gone, so is your data. Backups are for re-deriving a valid partition layout after accidental deletion.
+  </div>
+
+  <!-- ===== WORKFLOW ===== -->
+  <h2>Example: Create a UEFI-Boot Linux Layout</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Wipe any existing signatures</strong> so the kernel doesn't confuse leftover filesystems with the new layout.
+        <pre><span class="prompt"># </span>wipefs -a /dev/sdb
+<span class="prompt"># </span>sgdisk --zap-all /dev/sdb</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Create ESP + boot + root</strong>, all 1 MiB-aligned.
+        <pre><span class="prompt"># </span>sgdisk \
+    -n 1:0:+512M -t 1:ef00 -c 1:<span class="str">"EFI"</span> \
+    -n 2:0:+1G   -t 2:8300 -c 2:<span class="str">"boot"</span> \
+    -n 3:0:0     -t 3:8309 -c 3:<span class="str">"crypt"</span> \
+    /dev/sdb</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Ask the kernel to see the new partitions.</strong>
+        <pre><span class="prompt"># </span>partprobe /dev/sdb</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Make filesystems / crypto layers.</strong>
+        <pre><span class="prompt"># </span>mkfs.vfat -F32 -n EFI /dev/sdb1
+<span class="prompt"># </span>mkfs.ext4 -L boot  /dev/sdb2
+<span class="prompt"># </span>cryptsetup luksFormat /dev/sdb3
+<span class="prompt"># </span>cryptsetup open /dev/sdb3 cryptroot
+<span class="prompt"># </span>mkfs.ext4 -L root /dev/mapper/cryptroot</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Mount and populate</strong>, then install a bootloader (GRUB or systemd-boot) to <code>/boot/efi</code> and register it with <code>efibootmgr</code>. This is OS installer territory.
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PITFALLS ===== -->
+  <h2>Common Pitfalls</h2>
+
+  <div class="warn">
+    <strong>Mixing MBR and GPT tools.</strong> Old <code>fdisk</code> versions (&lt; 2.26) cannot read GPT and will offer to write an MBR over the top, destroying the GPT header. If the backup GPT header at disk end is intact you may recover with <code>gdisk</code>, but it's avoidable — use modern tools.
+  </div>
+
+  <div class="warn">
+    <strong>Starting partitions at LBA 34.</strong> This is the first <em>legal</em> GPT sector, but not the first <em>sensible</em> one. Start at 2048 (1 MiB) to align with NAND and RAID geometries.
+  </div>
+
+  <div class="warn">
+    <strong>Forgetting the ESP on UEFI.</strong> Without a FAT32 partition flagged <code>esp/boot</code>, UEFI firmware cannot find a bootloader and the system drops to the firmware shell.
+  </div>
+
+  <div class="warn">
+    <strong>Forgetting the BIOS boot partition on BIOS+GPT.</strong> If you use GPT on a BIOS-booted machine, GRUB needs a small (~1 MiB) unformatted partition with type GUID <code>2168…EFI</code> to embed its core image. Without it, <code>grub-install</code> fails.
+  </div>
+
+  <div class="warn">
+    <strong>Resizing a partition that's actively mounted read-write.</strong> Growing works on recent kernels (with <code>partx -u</code>), but shrinking requires the filesystem to be unmounted first (or at least frozen). Always back up before resize operations.
+  </div>
+
+  <div class="warn">
+    <strong>Cloning a disk with <code>dd</code> and not regenerating GUIDs.</strong> Two disks with the same partition GUIDs confuse udev's <code>/dev/disk/by-partuuid/</code> and can cause the wrong disk to be mounted. Use <code>sgdisk -G /dev/sdb</code> to randomize GUIDs after a clone.
+  </div>
+
+  <div class="warn">
+    <strong>Writing LUKS or LVM directly on <code>/dev/sdb</code></strong> instead of on a partition is valid, and avoids alignment concerns, but leaves no room for an ESP or swap partition on that device. On a boot disk this means you can't boot from it; fine for a dedicated data disk.
+  </div>
+
+  <script src="../nav.js"></script>
+</body>
+</html>

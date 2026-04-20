@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 07 — Secure Boot &amp; LUKS Auto-Unlock</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 07 — Secure Boot &amp; LUKS Auto-Unlock</h1>
+  <p class="subtitle">Tying UEFI, TPM, and LUKS together</p>
+
+  <!-- ===== UEFI SECURE BOOT ===== -->
+  <h2>UEFI Secure Boot Recap</h2>
+
+  <p><strong>Secure Boot</strong> is a UEFI feature that enforces signature checks on every boot-time EFI binary. Before executing <em>anything</em>, the firmware verifies the binary's PE/COFF Authenticode signature against a database of trusted keys and hashes stored in NVRAM. Unsigned or unknown binaries simply won't run.</p>
+
+  <h3>The Key Hierarchy in NVRAM</h3>
+
+  <div class="layer-diagram" style="max-width:820px;">
+    <div class="layer l7">
+      <span class="layer-num">PK</span>
+      <span class="layer-name">Platform Key</span>
+      <span class="layer-pdu">root of trust</span>
+      <span class="layer-protocols">Owned by the platform owner (usually the OEM). Signs updates to KEK.</span>
+    </div>
+    <div class="layer l5">
+      <span class="layer-num">KEK</span>
+      <span class="layer-name">Key Exchange Keys</span>
+      <span class="layer-pdu">1..N certs</span>
+      <span class="layer-protocols">Typically holds Microsoft's KEK. Authorises updates to db / dbx.</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num">db</span>
+      <span class="layer-name">Signature Database</span>
+      <span class="layer-pdu">allow list</span>
+      <span class="layer-protocols">Certs and hashes of binaries allowed to execute (Microsoft UEFI CA, shim, etc.)</span>
+    </div>
+    <div class="layer l1">
+      <span class="layer-num">dbx</span>
+      <span class="layer-name">Forbidden Database</span>
+      <span class="layer-pdu">deny list</span>
+      <span class="layer-protocols">Revocations — hashes/certs that <em>must not</em> run (e.g. BootHole GRUB hashes)</span>
+    </div>
+  </div>
+
+  <p>On every stage-transition (firmware &rarr; bootloader, bootloader &rarr; kernel when using a shim-linked chain), the previous stage checks the next binary's signature against <code>db</code> and ensures it is not in <code>dbx</code>. Failure aborts the boot.</p>
+
+  <!-- ===== THE LINUX SIGNED BOOT CHAIN ===== -->
+  <h2>The Linux Signed Boot Chain</h2>
+
+  <p>Microsoft's UEFI CA is present in almost every OEM's <code>db</code>. Linux distros exploit this via a tiny first-stage bootloader called <strong>shim</strong> that Microsoft has signed. Shim then gets to decide what <em>it</em> will load — effectively delegating trust from Microsoft to each distro.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">UEFI</div>
+      <div class="desc">Verifies <code>shimx64.efi</code> against <code>db</code> (signed by MS UEFI CA)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">shim</div>
+      <div class="desc">Embeds distro CA; verifies GRUB against it + user-enrolled MOK list</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">GRUB</div>
+      <div class="desc">(Signed) verifies kernel &amp; initramfs signatures before handoff</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Kernel</div>
+      <div class="desc">Enforces signed modules (<code>module.sig_enforce=1</code>)</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">initramfs</div>
+      <div class="desc">Unlocks root (TPM unseal or passphrase) &rarr; <code>switch_root</code> &rarr; init</div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>shim</strong> ships with every major distro (Ubuntu, Debian, Fedora, RHEL, SUSE). It embeds a distro-specific certificate used to verify the next stage.</li>
+    <li><strong>MOK (Machine Owner Key):</strong> a user-enrolled certificate held in a UEFI variable. Useful for self-compiled kernels or third-party drivers (NVIDIA, ZFS DKMS). Enrolled via the <code>MokManager</code> UI on the next reboot.</li>
+    <li><strong>GRUB:</strong> the signed build of GRUB ships with a configuration that requires <code>--pubkey</code> to verify further artifacts. Distros configure it to verify kernel and initrd.</li>
+    <li><strong>Kernel lockdown</strong> (<code>lockdown=integrity</code> or <code>confidentiality</code>) is typically auto-enabled when booted with Secure Boot — blocks kexec of unsigned kernels, restricts <code>/dev/mem</code>, etc.</li>
+  </ul>
+
+  <!-- ===== MEASURED VS SECURE ===== -->
+  <h2>Measured Boot vs Secure Boot — Orthogonal</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Secure Boot — enforcement</div>
+      <div class="comp-body">
+        <p>"Don't run unsigned code."</p>
+        <ul>
+          <li>Firmware refuses to execute binaries missing a trusted signature.</li>
+          <li>Stops the attack at the door.</li>
+          <li>Provides <strong>no evidence</strong> afterwards of what ran.</li>
+          <li>Can be turned off at the keyboard (physical access).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Measured Boot — recording</div>
+      <div class="comp-body">
+        <p>"Record what ran, whether trusted or not."</p>
+        <ul>
+          <li>Every stage extends a hash of the next into PCRs.</li>
+          <li>Lets a third party (TPM, remote verifier) gate secrets on the result.</li>
+          <li>Provides <strong>evidence</strong> but does not prevent anything.</li>
+          <li>Cannot be turned off without physically replacing the TPM.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Both together</strong> is the strong configuration: Secure Boot keeps random unsigned binaries out, and measured boot produces a PCR fingerprint of exactly which signed binaries ran — so a TPM-sealed disk key only unlocks on a known, enforced, recorded chain.
+  </div>
+
+  <!-- ===== SEALING A LUKS KEY ===== -->
+  <h2>Sealing a LUKS Key to PCRs</h2>
+
+  <p>This is the mechanism that replaces typed passphrases on boot. Storage 06 showed that a LUKS2 volume has up to 32 <strong>key slots</strong>, each holding an encrypted copy of the master volume key (MK). Any slot's unwrap-key can open the volume. Adding a TPM slot means: one key slot is unlocked by a TPM-sealed secret instead of a user passphrase.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Generate a random 256-bit key <code>K</code>. Add it to a new LUKS2 key slot with <code>cryptsetup luksAddKey</code>.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>Seal <code>K</code> with a TPM policy bound to the current values of chosen PCRs (e.g. PCR 7 only).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>Store the sealed blob in the LUKS header token area (<code>systemd-cryptenroll</code> does this automatically — the blob lives in the LUKS2 JSON metadata).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>On next boot, the initramfs asks the TPM to unseal the blob. If the current PCR values match the sealed policy, <code>K</code> is released, the slot opens, the volume unlocks, root mounts &mdash; no passphrase typed.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>If anything in the measured chain differs (malicious bootloader, altered kernel, different firmware), PCRs differ, the TPM refuses to release <code>K</code>, and the initramfs falls back to prompting for a passphrase.</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Evil-maid defence:</strong> an attacker with brief physical access cannot just swap in a tampered GRUB — it would change PCR 4/7, the TPM would refuse to unseal, and the attack visibly degrades to "please type your passphrase", which the user will notice. This is the whole point of binding to PCRs.
+  </div>
+
+  <!-- ===== SYSTEMD-CRYPTENROLL ===== -->
+  <h2><code>systemd-cryptenroll --tpm2-device</code></h2>
+
+  <p><code>systemd-cryptenroll</code> is the distro-native tool for managing LUKS2 key slots backed by TPM, FIDO2, or PKCS#11 tokens. It handles all the sealing mechanics, stores the blob as a LUKS2 token, and integrates with <code>systemd-cryptsetup</code> at boot.</p>
+
+  <h3>Basic Enrollment</h3>
+
+  <div class="terminal">
+<span class="prompt">#</span> systemd-cryptenroll --tpm2-device=auto \
+      --tpm2-pcrs=7 \
+      /dev/nvme0n1p3
+<span class="output">Please enter current passphrase for /dev/nvme0n1p3:
+New TPM2 token enrolled as key slot 1.</span>
+  </div>
+
+  <h3>Options</h3>
+
+  <table>
+    <thead>
+      <tr><th>Option</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--tpm2-device=auto</code></td><td>Discovers <code>/dev/tpmrm0</code> automatically. Use an explicit path to pick a specific TPM.</td></tr>
+      <tr><td><code>--tpm2-pcrs=LIST</code></td><td>PCR selection, e.g. <code>0+2+7</code> or <code>7+11+14</code>. Default varies by distro (often <code>7</code>).</td></tr>
+      <tr><td><code>--tpm2-with-pin=yes</code></td><td>Adds a user-typed PIN to the unseal policy. Two-factor: PIN + TPM presence.</td></tr>
+      <tr><td><code>--tpm2-public-key=FILE</code></td><td>Seal against a <em>signed</em> PCR policy — policy authority, not current values. Survives updates signed by the same authority.</td></tr>
+      <tr><td><code>--tpm2-signature=FILE</code></td><td>Signature blob produced for a given set of future PCR values (used with <code>--tpm2-public-key</code>).</td></tr>
+      <tr><td><code>--recovery-key</code></td><td>Generate and print a one-time recovery key simultaneously (store it in a password manager).</td></tr>
+      <tr><td><code>--wipe-slot=TYPE</code></td><td>Remove existing slots of a type (<code>tpm2</code>, <code>recovery</code>, <code>password</code>) before enrolling. Use to re-enroll after an update.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Inspecting and Removing</h3>
+
+  <div class="terminal">
+<span class="prompt">#</span> systemd-cryptenroll /dev/nvme0n1p3
+<span class="output">SLOT TYPE
+   0 password
+   1 tpm2
+   2 recovery</span>
+
+<span class="prompt">#</span> systemd-cryptenroll --wipe-slot=tpm2 /dev/nvme0n1p3
+<span class="output">Wiped slot 1.</span>
+  </div>
+
+  <h3><code>/etc/crypttab</code> Entry</h3>
+
+  <pre><code><span class="cm"># &lt;name&gt;    &lt;device&gt;                               &lt;keyfile&gt; &lt;options&gt;</span>
+root-crypt  UUID=a1b2c3d4-...                      none      tpm2-device=auto,discard
+  </code></pre>
+
+  <p>The <code>tpm2-device=auto</code> option tells <code>systemd-cryptsetup</code> to try the TPM token first. Failure falls through to interactive passphrase entry.</p>
+
+  <!-- ===== PCR SELECTION TRADE-OFF ===== -->
+  <h2>PCR Selection — The Critical Trade-off</h2>
+
+  <p>Which PCRs you bind to determines two things: <em>what kinds of tampering will block unseal</em>, and <em>what routine events will accidentally block unseal</em>. There is no single right answer — the choice depends on the platform's update cadence and the threat model.</p>
+
+  <table>
+    <thead>
+      <tr><th>Selection</th><th>Binds to</th><th>Breaks on</th><th>Typical use</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>7</strong> only</td>
+        <td>Secure Boot policy: PK/KEK/db/dbx + MOK list</td>
+        <td>Secure Boot toggled, dbx update, new MOK enrolled</td>
+        <td><strong>Default.</strong> Loose but stable across kernel/bootloader updates (as long as they stay signed by trusted keys)</td>
+      </tr>
+      <tr>
+        <td><strong>0+2+7</strong></td>
+        <td>+ firmware code + option ROMs</td>
+        <td>Any BIOS/UEFI update, GPU firmware update</td>
+        <td>Tighter; acceptable if firmware rarely changes</td>
+      </tr>
+      <tr>
+        <td><strong>4+7</strong> or <strong>7+12</strong></td>
+        <td>+ bootloader image</td>
+        <td>Every <code>grub-install</code> / <code>update-grub</code></td>
+        <td>Only if you control bootloader updates</td>
+      </tr>
+      <tr>
+        <td><strong>7+8+9</strong></td>
+        <td>+ kernel cmdline + kernel + initrd</td>
+        <td>Every <code>update-initramfs</code>, kernel upgrade, cmdline edit</td>
+        <td>Tight; requires automated re-seal on every update</td>
+      </tr>
+      <tr>
+        <td><strong>0..9</strong> (full)</td>
+        <td>Entire legacy boot chain</td>
+        <td>Basically any system update</td>
+        <td>Locked appliances only</td>
+      </tr>
+      <tr>
+        <td><strong>7+11</strong> (UKI)</td>
+        <td>SB policy + Unified Kernel Image measurement</td>
+        <td>UKI change — but UKI is a single signed artifact</td>
+        <td><strong>Modern best practice</strong> for systemd-boot setups</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Default reasoning:</strong> PCR 7 alone is the common default because it binds to <em>policy</em>, not artifacts. As long as signed kernels/bootloaders continue to be signed by a key in <code>db</code>, they all match. An attacker who disables Secure Boot, enrolls their own MOK, or rolls back dbx will fail to unseal. This gives "policy integrity" without update pain.
+  </div>
+
+  <!-- ===== UPDATES ===== -->
+  <h2>Handling Updates</h2>
+
+  <p>If the PCR selection includes anything that changes with system updates (firmware, bootloader, kernel, initramfs), the sealed policy will not match current PCRs after the update, and the TPM will refuse to unseal. The machine reboots to a passphrase prompt. You must <strong>re-enroll</strong>.</p>
+
+  <div class="terminal">
+<span class="prompt">#</span> <span class="output"># After a kernel update that invalidated PCR 9 binding:</span>
+<span class="prompt">#</span> systemd-cryptenroll --wipe-slot=tpm2 \
+      --tpm2-device=auto --tpm2-pcrs=7+9 \
+      /dev/nvme0n1p3
+  </div>
+
+  <h3>Automating Re-seal</h3>
+
+  <ul>
+    <li><strong>Distro hooks:</strong> Ubuntu's full-disk encryption, Fedora Silverblue, and systemd-boot UKI setups precompute expected PCR values for the new kernel/initrd and re-seal automatically as part of the update transaction. <code>dracut-install-kernel</code>-style hooks trigger this.</li>
+    <li><strong>Signed PCR policies</strong> (<code>--tpm2-public-key</code>): instead of sealing to a concrete PCR value, seal to "any PCR value signed by this public key". The vendor ships a signature alongside each update that authorises the new expected PCRs. No re-enroll needed on the machine. This is how modern "stable auto-unlock across updates" is built.</li>
+  </ul>
+
+  <!-- ===== UKI ===== -->
+  <h2>Unified Kernel Images (UKI)</h2>
+
+  <p>A <strong>UKI</strong> is a single PE executable containing the kernel, initramfs, cmdline, microcode, and os-release — all signed as one artifact. UEFI loads it directly (often via <code>systemd-boot</code>); no GRUB, no initramfs generation on the target host.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color:#34d399;">Why it helps TPM sealing</div>
+      <ul>
+        <li>The kernel+initrd are a single signed file measured as a unit.</li>
+        <li><code>systemd-stub</code> records the UKI hash into PCR 11 before entry.</li>
+        <li>Sealing to <code>7+11</code> covers Secure Boot policy and the exact UKI, without the fragility of PCR 8/9 across initramfs regenerations.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#a78bfa;">Where you see it</div>
+      <ul>
+        <li>Fedora CoreOS, RHEL 10 roadmap, Ubuntu Core, NixOS images.</li>
+        <li>Any systemd-boot-based server deployment pushing toward reproducible images.</li>
+        <li>Proxmox guests can use UKIs the same way; they simplify the PCR story inside the VM.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== CLEVIS + TANG ===== -->
+  <h2>Clevis + Tang (Network-Bound Disk Encryption)</h2>
+
+  <p>TPM sealing binds unlock to <em>local state</em>. <strong>NBDE</strong> binds unlock to <em>network presence</em>: the disk only decrypts when the server can reach a particular internal service. Stolen hardware off-site = cannot unlock.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header" style="background:#7c3aed33; color:#a78bfa;">Tang (server)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Stateless HTTP server. No database.</li>
+          <li>Advertises ECDH public keys.</li>
+          <li>Performs a blinded ECDH exchange on request.</li>
+          <li>Does <em>not</em> see the secret — cannot, by design, unseal for anyone.</li>
+          <li>Survives restarts; can be replicated; trivial to run (systemd unit, ~50 LoC).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header" style="background:#06b6d433; color:#22d3ee;">Clevis (client)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Binds a LUKS slot to one or more Tang servers ("pins").</li>
+          <li>At boot, performs the matching ECDH step to recover the unwrap key.</li>
+          <li>Pin types: <code>tang</code>, <code>tpm2</code>, <code>sss</code> (Shamir Secret Sharing).</li>
+          <li>Configured via <code>clevis luks bind</code>; auto-unlocks via <code>clevis-luks-askpass</code> in initramfs.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal">
+<span class="prompt">#</span> clevis luks bind -d /dev/nvme0n1p3 tang \
+      '{"url":"http://tang.internal.example"}'
+<span class="prompt">#</span> <span class="output"># M-of-N with Shamir: need 2 of (TPM, tang1, tang2)</span>
+<span class="prompt">#</span> clevis luks bind -d /dev/nvme0n1p3 sss '{
+      "t": 2,
+      "pins": {
+        "tpm2": {"pcr_ids":"7"},
+        "tang": [
+          {"url":"http://tang1.internal"},
+          {"url":"http://tang2.internal"}
+        ]
+      }
+    }'
+  </div>
+
+  <div class="tip">
+    <strong>Defence in depth:</strong> Combine TPM + Tang via SSS. Stolen from the rack &rarr; no Tang network &rarr; cannot unlock. Stolen and the TPM cloned &rarr; still needs Tang. Tang compromised &rarr; still needs the TPM. This is a common pattern for on-prem server fleets.
+  </div>
+
+  <!-- ===== RECOVERY PLANNING ===== -->
+  <h2>Recovery Planning</h2>
+
+  <div class="warn">
+    <strong>Read this before enrolling anything.</strong> Every TPM-sealed disk needs a working recovery path. TPM hardware fails, motherboards get replaced, firmware updates invalidate policies, admins lock themselves out.
+  </div>
+
+  <div class="panel">
+    <div class="panel-title" style="color:#fbbf24;">Recovery Checklist</div>
+    <ul>
+      <li><strong>Always keep a passphrase slot.</strong> Before enrolling TPM, <code>cryptsetup luksAddKey</code> a strong passphrase. Never let TPM be the only unlock path.</li>
+      <li><strong>Back up the LUKS header</strong> (<code>cryptsetup luksHeaderBackup --header-backup-file</code>) to offline storage. A corrupted header bricks the whole volume regardless of slot contents.</li>
+      <li><strong>Generate a recovery key</strong> at enrollment (<code>--recovery-key</code>) and store it in a password manager or a paper safe. This is a long random string, not a user-chosen passphrase — resistant to brute-force.</li>
+      <li><strong>Document the PCR policy.</strong> Record which PCRs each host is bound to and why. After firmware/kernel changes you want to know what broke without guessing.</li>
+      <li><strong>TPM hardware replacement = total loss of sealed secrets.</strong> A new motherboard, a new CPU (for fTPM), or a BIOS "Clear TPM" gives you a new EK, new SRK, new everything rooted in the TPM. Nothing previously sealed is recoverable. The passphrase slot is your only way in.</li>
+      <li><strong>Major firmware updates</strong>: expect to re-enroll. Schedule a maintenance window where you can type the passphrase.</li>
+      <li><strong>Test recovery periodically.</strong> Boot with the TPM slot wiped and verify the passphrase works. Do this at least once after setup.</li>
+    </ul>
+  </div>
+
+  <!-- ===== FULL RECIPE ===== -->
+  <h2>Putting It All Together — Secure Server Recipe</h2>
+
+  <p>The full configuration a modern DevOps/SRE would deploy on a Proxmox host, bare-metal node, or VM with a virtual TPM:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div><strong>UEFI:</strong> Secure Boot enabled with the default distro keys. Optionally enroll a site MOK for signing custom kernel modules (ZFS, OpenVSwitch DKMS).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div><strong>Boot chain:</strong> shim &rarr; GRUB (or systemd-boot + UKI) &rarr; signed kernel. Kernel lockdown at <code>integrity</code> mode via Secure Boot auto-detection.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div><strong>LUKS2 root</strong> with three slots:<br>
+        &middot; slot 0: strong passphrase (emergency / updates)<br>
+        &middot; slot 1: TPM-sealed under PCR 7 (<code>7+11</code> if UKI)<br>
+        &middot; slot 2: recovery key printed at install, stored in a password manager
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div><strong>Measured boot</strong> records the actual boot path into PCRs. <code>tpm2_eventlog</code> available for incident response.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div><strong>Boot behaviour:</strong> clean boot &rarr; TPM unseals silently &rarr; root mounts, no console interaction. Tampered chain or post-update PCR change &rarr; initramfs falls back to passphrase prompt &rarr; admin investigates or re-enrolls.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div><strong>Optional:</strong> Clevis + Tang with SSS threshold "TPM AND tang" for on-prem racks &mdash; disks only unlock while plugged into the internal network.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div><strong>Operational hygiene:</strong> document which hosts are enrolled against which PCR selections; automate re-seal in the post-update hook; test the passphrase fallback after every major kernel or firmware bump.</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>End state:</strong> a server that boots unattended with full-disk encryption, refuses to give up its root disk if its firmware or bootloader is tampered with, and still has a documented path back to recovery if hardware fails or updates invalidate the TPM seal. That is the capstone — LUKS from Storage 06, plus everything on this page, composing into a single operational posture.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

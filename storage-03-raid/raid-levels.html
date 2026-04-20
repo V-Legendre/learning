@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 03 — RAID Levels</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    /* --- RAID-specific visual helpers --- */
+    .raid-array {
+      display: grid;
+      gap: 6px;
+      margin: 15px 0;
+    }
+    .raid-stripe {
+      display: grid;
+      gap: 6px;
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
+    }
+    .raid-cell {
+      padding: 10px 6px;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      text-align: center;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .raid-cell.data    { background: #3b82f625; color: #60a5fa; border-color: #3b82f660; }
+    .raid-cell.mirror  { background: #34d39925; color: #34d399; border-color: #34d39960; }
+    .raid-cell.parity  { background: #f59e0b25; color: #fbbf24; border-color: #f59e0b60; }
+    .raid-cell.parity2 { background: #a78bfa25; color: #a78bfa; border-color: #a78bfa60; }
+    .raid-cell.empty   { background: #1a1a2e; color: #444; border-style: dashed; }
+    .raid-disk-header {
+      display: grid;
+      gap: 6px;
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
+      margin-bottom: 4px;
+    }
+    .raid-disk {
+      text-align: center;
+      font-size: 12px;
+      color: #a78bfa;
+      font-weight: bold;
+      padding: 4px;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #888;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-box {
+      width: 14px; height: 14px; border-radius: 3px;
+      border: 1px solid;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Storage 03 — RAID Levels</h1>
+  <p class="subtitle">Combining disks for performance, redundancy, or both</p>
+
+  <!-- ===== WHAT IS RAID ===== -->
+  <h2>What RAID Is</h2>
+
+  <p>RAID — <strong>Redundant Array of Independent Disks</strong> (originally "Inexpensive" in the 1988 Berkeley paper by Patterson, Gibson, and Katz) — combines multiple physical block devices into a single logical device. The goal is one or more of:</p>
+
+  <ul>
+    <li><strong>Performance</strong> — parallelise I/O across spindles (striping)</li>
+    <li><strong>Fault tolerance</strong> — survive disk failures via redundant copies or parity</li>
+    <li><strong>Capacity aggregation</strong> — present multiple disks as one large volume</li>
+  </ul>
+
+  <div class="panel">
+    <div class="panel-title">The Core Abstraction</div>
+    <p>RAID sits <strong>between the raw block devices and whatever consumes them</strong> (filesystem, LVM, database). The consumer sees a single device (<code>/dev/md0</code>, a hardware controller's logical drive, a ZFS vdev). The RAID layer transparently splits reads/writes across members and reconstructs data on failure.</p>
+  </div>
+
+  <div class="note">
+    <strong>RAID is not backup.</strong> It protects against <em>disk</em> failure, not against filesystem corruption, ransomware, <code>rm -rf /</code>, fire, theft, or simultaneous multi-disk failure. Backups are an independent concern.
+  </div>
+
+  <!-- ===== RAID 0 ===== -->
+  <h2>RAID 0 — Striping</h2>
+
+  <p>Block-level striping across N disks. A chunk of a logical block is written to disk 1, the next to disk 2, and so on, wrapping around. No redundancy, no parity.</p>
+
+  <div class="panel">
+    <div class="panel-title">Layout (4 disks)</div>
+    <div class="raid-array">
+      <div class="raid-disk-header">
+        <div class="raid-disk">Disk 0</div>
+        <div class="raid-disk">Disk 1</div>
+        <div class="raid-disk">Disk 2</div>
+        <div class="raid-disk">Disk 3</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A0</div>
+        <div class="raid-cell data">A1</div>
+        <div class="raid-cell data">A2</div>
+        <div class="raid-cell data">A3</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A4</div>
+        <div class="raid-cell data">A5</div>
+        <div class="raid-cell data">A6</div>
+        <div class="raid-cell data">A7</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A8</div>
+        <div class="raid-cell data">A9</div>
+        <div class="raid-cell data">A10</div>
+        <div class="raid-cell data">A11</div>
+      </div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Capacity:</strong> N × smallest_disk</li>
+    <li><strong>Throughput:</strong> up to N× sequential read/write (IOPS also scale)</li>
+    <li><strong>Fault tolerance:</strong> <strong>zero</strong>. Any single disk failure destroys the entire array (each stripe is split across all disks).</li>
+    <li><strong>Minimum disks:</strong> 2</li>
+  </ul>
+
+  <div class="warn">
+    <strong>Failure math:</strong> Annual failure rate of N disks is roughly N × per-disk AFR. A 4-disk RAID 0 is ~4× more likely to lose all data than a single disk. Use only for scratch space, caches, or throwaway compute.
+  </div>
+
+  <!-- ===== RAID 1 ===== -->
+  <h2>RAID 1 — Mirroring</h2>
+
+  <p>Every write goes to every member disk. All disks hold an identical copy. Reads can be served from any member.</p>
+
+  <div class="panel">
+    <div class="panel-title">Layout (2 disks)</div>
+    <div class="raid-array">
+      <div class="raid-disk-header">
+        <div class="raid-disk">Disk 0</div>
+        <div class="raid-disk">Disk 1</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A0</div>
+        <div class="raid-cell mirror">A0</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A1</div>
+        <div class="raid-cell mirror">A1</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A2</div>
+        <div class="raid-cell mirror">A2</div>
+      </div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Capacity:</strong> 1 × smallest_disk (i.e. 1/N of raw)</li>
+    <li><strong>Read:</strong> scales with N (reads can be dispatched to any member)</li>
+    <li><strong>Write:</strong> bottlenecked by the slowest member — every write hits every disk</li>
+    <li><strong>Fault tolerance:</strong> survives N−1 failures (any single disk is a complete copy)</li>
+    <li><strong>Minimum disks:</strong> 2</li>
+  </ul>
+
+  <div class="tip">
+    <strong>Classic use:</strong> boot drives, OS volumes, small critical datasets. Simple to reason about — rebuild is a straight block-for-block copy, no parity math.
+  </div>
+
+  <!-- ===== RAID 5 ===== -->
+  <h2>RAID 5 — Distributed Parity</h2>
+
+  <p>Striping plus one parity block per stripe, rotating the parity position across disks so no single disk is a parity bottleneck. Parity is XOR of the data blocks in the stripe.</p>
+
+  <div class="panel">
+    <div class="panel-title">Layout (4 disks) — P rotates across stripes</div>
+    <div class="raid-array">
+      <div class="raid-disk-header">
+        <div class="raid-disk">Disk 0</div>
+        <div class="raid-disk">Disk 1</div>
+        <div class="raid-disk">Disk 2</div>
+        <div class="raid-disk">Disk 3</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D1</div>
+        <div class="raid-cell data">D2</div>
+        <div class="raid-cell data">D3</div>
+        <div class="raid-cell parity">P</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D4</div>
+        <div class="raid-cell data">D5</div>
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell data">D6</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D7</div>
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell data">D8</div>
+        <div class="raid-cell data">D9</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell data">D10</div>
+        <div class="raid-cell data">D11</div>
+        <div class="raid-cell data">D12</div>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-box" style="background:#3b82f625;border-color:#3b82f660"></span> Data block</div>
+      <div class="legend-item"><span class="legend-box" style="background:#f59e0b25;border-color:#f59e0b60"></span> Parity (XOR of data blocks in stripe)</div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Capacity:</strong> (N−1) × smallest_disk</li>
+    <li><strong>Fault tolerance:</strong> survives 1 disk failure. Reconstruct missing block as XOR of the survivors.</li>
+    <li><strong>Read:</strong> scales ~N−1×</li>
+    <li><strong>Write penalty:</strong> a small write requires <strong>read-modify-write (RMW)</strong> — read the old data + old parity, compute new parity (<code>new_parity = old_parity XOR old_data XOR new_data</code>), write new data + new parity. <em>4 I/Os per logical small write.</em></li>
+    <li><strong>Minimum disks:</strong> 3</li>
+  </ul>
+
+  <h3>The Read-Modify-Write penalty</h3>
+
+  <div class="panel">
+    <div class="panel-title">Small-write workflow on RAID 5/6</div>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="label">Read old data</div>
+        <div class="desc">from the target disk</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="label">Read old parity</div>
+        <div class="desc">from the parity disk</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="label">XOR compute</div>
+        <div class="desc">new parity</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="label">Write data</div>
+        <div class="desc">+ write parity</div>
+      </div>
+    </div>
+  </div>
+
+  <p>Full-stripe writes avoid RMW: if the filesystem or cache can coalesce writes to a full stripe, parity is computed from the new data directly without reading anything first. This is why large stripe-aligned workloads (streaming backup, video) do well on RAID 5 while small random writes (databases, VMs) do not.</p>
+
+  <!-- ===== RAID 6 ===== -->
+  <h2>RAID 6 — Double Parity (P + Q)</h2>
+
+  <p>Same pattern as RAID 5, but with <strong>two</strong> parity blocks per stripe. P is ordinary XOR parity; Q is a second, linearly-independent syndrome computed using <strong>Reed-Solomon</strong> coding over GF(2⁸). Both rotate across disks.</p>
+
+  <div class="panel">
+    <div class="panel-title">Layout (5 disks) — P and Q rotate</div>
+    <div class="raid-array">
+      <div class="raid-disk-header">
+        <div class="raid-disk">Disk 0</div>
+        <div class="raid-disk">Disk 1</div>
+        <div class="raid-disk">Disk 2</div>
+        <div class="raid-disk">Disk 3</div>
+        <div class="raid-disk">Disk 4</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D1</div>
+        <div class="raid-cell data">D2</div>
+        <div class="raid-cell data">D3</div>
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell parity2">Q</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D4</div>
+        <div class="raid-cell data">D5</div>
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell parity2">Q</div>
+        <div class="raid-cell data">D6</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">D7</div>
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell parity2">Q</div>
+        <div class="raid-cell data">D8</div>
+        <div class="raid-cell data">D9</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell parity">P</div>
+        <div class="raid-cell parity2">Q</div>
+        <div class="raid-cell data">D10</div>
+        <div class="raid-cell data">D11</div>
+        <div class="raid-cell data">D12</div>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-box" style="background:#3b82f625;border-color:#3b82f660"></span> Data</div>
+      <div class="legend-item"><span class="legend-box" style="background:#f59e0b25;border-color:#f59e0b60"></span> P parity (XOR)</div>
+      <div class="legend-item"><span class="legend-box" style="background:#a78bfa25;border-color:#a78bfa60"></span> Q parity (Reed-Solomon)</div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Capacity:</strong> (N−2) × smallest_disk</li>
+    <li><strong>Fault tolerance:</strong> survives 2 simultaneous disk failures</li>
+    <li><strong>Write penalty:</strong> heavier than RAID 5 — small writes become 6 I/Os (read old data, old P, old Q; write new data, new P, new Q). Q computation is CPU-heavier than XOR.</li>
+    <li><strong>Minimum disks:</strong> 4</li>
+  </ul>
+
+  <div class="tip">
+    <strong>Why bother with RAID 6?</strong> On large modern arrays, rebuild time after a single failure can run for days. RAID 6 lets the array tolerate a <em>second</em> failure during that rebuild window. Combined with the URE issue (see below), RAID 6 is the pragmatic default for big arrays.
+  </div>
+
+  <!-- ===== RAID 10 ===== -->
+  <h2>RAID 10 — Striped Mirrors (1+0)</h2>
+
+  <p>Mirror pairs first, then stripe across the mirrors. A "nested" level. Do not confuse with RAID 01 (stripe then mirror), which is rare and has worse failure characteristics.</p>
+
+  <div class="panel">
+    <div class="panel-title">Layout (4 disks) — 2 mirrored pairs, striped</div>
+    <div class="raid-array">
+      <div class="raid-disk-header">
+        <div class="raid-disk">Mirror A · D0</div>
+        <div class="raid-disk">Mirror A · D1</div>
+        <div class="raid-disk">Mirror B · D2</div>
+        <div class="raid-disk">Mirror B · D3</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A0</div>
+        <div class="raid-cell mirror">A0</div>
+        <div class="raid-cell data">A1</div>
+        <div class="raid-cell mirror">A1</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A2</div>
+        <div class="raid-cell mirror">A2</div>
+        <div class="raid-cell data">A3</div>
+        <div class="raid-cell mirror">A3</div>
+      </div>
+      <div class="raid-stripe">
+        <div class="raid-cell data">A4</div>
+        <div class="raid-cell mirror">A4</div>
+        <div class="raid-cell data">A5</div>
+        <div class="raid-cell mirror">A5</div>
+      </div>
+    </div>
+  </div>
+
+  <ul>
+    <li><strong>Capacity:</strong> 50% of raw</li>
+    <li><strong>Fault tolerance:</strong> survives multiple disk failures as long as <em>not both halves of the same mirror</em> die. A 4-disk RAID 10 can survive 2 failures <em>if they're in different mirrors</em>, but loses everything if a single mirror pair fails together.</li>
+    <li><strong>Read:</strong> scales with N (any member of any mirror can serve a read)</li>
+    <li><strong>Write:</strong> full-bandwidth stripe writes, no RMW, no parity math</li>
+    <li><strong>Rebuild:</strong> straight block copy from the surviving mirror member — fast, and only stresses one other disk</li>
+    <li><strong>Minimum disks:</strong> 4 (always even)</li>
+  </ul>
+
+  <div class="tip">
+    <strong>The database default.</strong> RAID 10 sacrifices capacity for predictable latency and graceful rebuilds. For random-write OLTP workloads it's usually the right answer.
+  </div>
+
+  <!-- ===== RAID 50 / 60 ===== -->
+  <h2>RAID 50 & RAID 60 — Striped Parity Groups</h2>
+
+  <p>Take multiple RAID 5 sets (or RAID 6 sets) and stripe across them (RAID 0 on top). Each parity group is independent: a failure in one group doesn't touch the rebuild of another.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">RAID 50</div>
+      <p>Stripe across N RAID 5 sets. Tolerates 1 failure per set (up to N total, never 2 in the same set).</p>
+      <p>Rebuild is scoped to one RAID 5 group, so the rebuild window only stresses that group's disks.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">RAID 60</div>
+      <p>Stripe across N RAID 6 sets. Tolerates 2 failures per set. Preferred for very large arrays (20+ disks) where rebuild time makes RAID 6 alone risky.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>When to reach for 50/60:</strong> 16+ disk JBODs. Breaking one giant RAID 6 into, say, three RAID 6 groups of 8 disks each keeps rebuild windows bounded and reduces the blast radius of any single event.
+  </div>
+
+  <!-- ===== COMPARISON TABLE ===== -->
+  <h2>Comparison Across Levels</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Level</th>
+        <th>Min disks</th>
+        <th>Usable capacity</th>
+        <th>Fault tolerance</th>
+        <th>Read perf</th>
+        <th>Write perf</th>
+        <th>Typical use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>RAID 0</strong></td>
+        <td>2</td>
+        <td>N</td>
+        <td>None</td>
+        <td>N×</td>
+        <td>N×</td>
+        <td>Scratch, caches</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 1</strong></td>
+        <td>2</td>
+        <td>1</td>
+        <td>N−1 disks</td>
+        <td>N×</td>
+        <td>1× (slowest member)</td>
+        <td>Boot, OS, small critical data</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 5</strong></td>
+        <td>3</td>
+        <td>N−1</td>
+        <td>1 disk</td>
+        <td>(N−1)×</td>
+        <td>Penalty on small writes (RMW)</td>
+        <td>Read-heavy, archive (small arrays only)</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 6</strong></td>
+        <td>4</td>
+        <td>N−2</td>
+        <td>2 disks</td>
+        <td>(N−2)×</td>
+        <td>Heavier RMW than RAID 5</td>
+        <td>Large bulk storage, backup targets</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 10</strong></td>
+        <td>4</td>
+        <td>N/2</td>
+        <td>1 per mirror pair</td>
+        <td>N×</td>
+        <td>(N/2)×, no RMW</td>
+        <td>Databases, VMs, latency-sensitive</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 50</strong></td>
+        <td>6</td>
+        <td>N − (groups)</td>
+        <td>1 per group</td>
+        <td>High</td>
+        <td>Better than RAID 5 alone</td>
+        <td>Large arrays, balanced perf/capacity</td>
+      </tr>
+      <tr>
+        <td><strong>RAID 60</strong></td>
+        <td>8</td>
+        <td>N − 2×(groups)</td>
+        <td>2 per group</td>
+        <td>High</td>
+        <td>Heaviest write cost</td>
+        <td>Very large arrays with bounded rebuild windows</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== THE WRITE HOLE ===== -->
+  <h2>The Write Hole</h2>
+
+  <p>A fundamental vulnerability of parity RAID (5, 6, 50, 60). Consider a stripe update:</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>Controller issues writes for <strong>data</strong> and <strong>parity</strong> to different disks.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>Power fails after the data write completes but <em>before</em> the parity write completes (or vice versa).</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>On reboot, data and parity are inconsistent — but neither disk reports an error; each one just has "its" block.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>If a <em>different</em> disk in the stripe now fails, the rebuild reconstructs the missing block using the stale parity. The resulting data is <strong>silently wrong</strong>.</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Write hole = silent corruption on rebuild.</strong> This is not a theoretical problem; it's the single biggest reason parity RAID has a bad reputation with careful operators.
+  </div>
+
+  <h3>Mitigations</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Approach</th>
+        <th>Mechanism</th>
+        <th>Caveat</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>BBWC / FBWC</strong></td>
+        <td>Controller cache backed by battery or flash/supercap — outstanding writes survive power loss and complete on next boot</td>
+        <td>Battery health must be monitored; dead battery = cache disabled = massive perf drop</td>
+      </tr>
+      <tr>
+        <td><strong>UPS</strong></td>
+        <td>Prevent the power event in the first place</td>
+        <td>Doesn't help against kernel panic or controller failure</td>
+      </tr>
+      <tr>
+        <td><strong>Write-intent bitmap + journal</strong> (mdadm)</td>
+        <td>Bitmap tracks dirty stripes; journal device (SSD) persists stripe updates before committing</td>
+        <td>Journal device becomes a SPOF unless mirrored</td>
+      </tr>
+      <tr>
+        <td><strong>Avoid parity RAID</strong></td>
+        <td>RAID 10 has no write hole (no parity to go stale)</td>
+        <td>50% capacity cost</td>
+      </tr>
+      <tr>
+        <td><strong>Copy-on-write RAID</strong></td>
+        <td>ZFS raidz / btrfs raid5/6 write new stripes to free space; never overwrite live data</td>
+        <td>Different paradigm — replaces mdadm entirely</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ===== URE ===== -->
+  <h2>UREs and Why Large RAID 5 Arrays Are Dangerous</h2>
+
+  <p>Every consumer/enterprise HDD has a published <strong>Unrecoverable Read Error rate</strong>. Typical specs:</p>
+
+  <ul>
+    <li>Consumer SATA: ~1 URE per 10<sup>14</sup> bits read (≈ 12.5 TB)</li>
+    <li>Enterprise SATA/SAS: ~1 URE per 10<sup>15</sup> bits read (≈ 125 TB)</li>
+    <li>Best enterprise SAS: 1 per 10<sup>16</sup> bits</li>
+  </ul>
+
+  <p>A URE is a sector the drive cannot read back — even after its internal retry logic. The drive returns a read error rather than bad data.</p>
+
+  <div class="panel">
+    <div class="panel-title">RAID 5 rebuild math — worked example</div>
+    <p>Suppose an 8-disk RAID 5 of 18 TB consumer drives. One disk fails. To rebuild, every byte of the 7 surviving disks must be read: 7 × 18 TB = 126 TB = 1.008 × 10<sup>15</sup> bits.</p>
+    <p>With URE rate 1 per 10<sup>14</sup> bits, the expected number of UREs during rebuild is roughly <strong>10</strong>. Even with enterprise drives at 10<sup>15</sup>, you're in the neighbourhood of <strong>1 URE per rebuild</strong>.</p>
+    <p>A URE during a RAID 5 rebuild = second data-source failure = rebuild aborts = array lost.</p>
+  </div>
+
+  <div class="warn">
+    <strong>RAID 5 on large modern disks is considered unsafe</strong> for exactly this reason. For any array above ~10 TB total, use RAID 6, RAID 10, or a ZFS-style raidz2. A single-parity scheme with 18 TB consumer drives is playing the lottery.
+  </div>
+
+  <!-- ===== BIT ROT ===== -->
+  <h2>Bit Rot (Silent Data Corruption)</h2>
+
+  <p>A disk occasionally returns <strong>wrong data without indicating any error</strong>. Causes: cosmic-ray bit flips in the drive's buffer, firmware bugs in the write path, mis-directed writes (data written to the wrong sector), cable/controller ECC misses, failing NAND cells returning plausible-but-wrong data.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Traditional RAID (mdadm, HW RAID)</div>
+      <div class="comp-body">
+        <p>RAID trusts the disk. If a read succeeds, the data is assumed correct. Parity is only consulted when a disk <em>reports</em> failure.</p>
+        <p>If one mirror member silently returns corrupt data, RAID 1 has no way to decide which copy is correct. Scrubbing can detect mismatches but not fix them.</p>
+        <p><strong>Result:</strong> silent corruption propagates to the filesystem and to backups.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">ZFS / btrfs (checksummed)</div>
+      <div class="comp-body">
+        <p>Every block carries an end-to-end checksum stored in the parent block's metadata. On read, the checksum is verified.</p>
+        <p>Mismatch → fetch from parity/mirror → verify → repair the bad copy in place ("self-healing"). Every read path validates.</p>
+        <p><strong>Result:</strong> bit rot is detected and corrected transparently.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Hardware RAID does not protect against bit rot.</strong> Neither does mdadm by itself. If bit rot matters to you (it should for long-lived data), use a filesystem with per-block checksums — ZFS, btrfs, or bcachefs — either on top of mdadm or replacing it.
+  </div>
+
+  <!-- ===== HARDWARE VS SOFTWARE RAID ===== -->
+  <h2>Hardware vs Software RAID</h2>
+
+  <h3>Hardware RAID</h3>
+
+  <p>A dedicated PCIe controller card (LSI/Broadcom MegaRAID, Dell PERC, HPE Smart Array, Adaptec). The OS sees only logical drives exposed by the controller; the raw member disks are hidden (unless the controller is configured for HBA/passthrough mode).</p>
+
+  <ul>
+    <li><strong>On-card cache</strong> (typically 512 MB – 8 GB DRAM) backed by battery (BBWC) or flash/supercap (FBWC). Absorbs RMW penalty and hides write latency.</li>
+    <li><strong>ASIC/IOC</strong> offloads XOR and Reed-Solomon calculations from the host CPU.</li>
+    <li><strong>Closed firmware</strong> with proprietary on-disk format. Configuration is done via <code>storcli</code>, <code>perccli</code>, <code>megacli</code>, or the controller's UEFI/BIOS menu.</li>
+  </ul>
+
+  <h3>Software RAID (Linux mdadm)</h3>
+
+  <p>The kernel MD (Multiple Device) subsystem implements RAID in software. The host CPU handles parity math; the host RAM handles caching (via the page cache).</p>
+
+  <ul>
+    <li><strong>Portable</strong> — pull the disks out, plug them into any Linux machine, <code>mdadm --assemble --scan</code>, array comes up.</li>
+    <li><strong>Open format</strong> — superblock layout is documented; the same member disks can be read by any mdadm version that supports the superblock version.</li>
+    <li><strong>CPU cost is trivial on modern hardware</strong> — XOR runs at many GB/s via SSE2/AVX2 on a single core; Reed-Solomon uses dedicated instructions (PCLMULQDQ). Parity calculation is not a bottleneck.</li>
+    <li><strong>No on-card battery cache</strong> — but modern NVMe with power-loss protection plus a properly-sized UPS + write-intent bitmap gives equivalent safety.</li>
+  </ul>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header bad">Hardware RAID — trade-offs</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Controller = SPOF.</strong> Card dies → array is stuck until a replacement card with <em>compatible firmware</em> arrives. Cross-vendor rescue is generally impossible.</li>
+          <li><strong>Cost:</strong> $500–$2000+ per card; BBU replacements on a schedule.</li>
+          <li><strong>Opaque:</strong> SMART counters, individual disk errors, and failure reasons are hidden behind the controller's own view of reality.</li>
+          <li><strong>Firmware bugs</strong> have historically eaten arrays. Your fault-tolerance is only as good as a vendor's closed binary.</li>
+          <li><strong>Advantages remain</strong>: lower CPU overhead for embedded or low-spec hosts; on-card cache hides write latency on spinning rust; BMC integration in servers.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">Software RAID (mdadm) — trade-offs</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Portable:</strong> any Linux host can import the array. No vendor lock-in.</li>
+          <li><strong>Free</strong>, fully open source, fully visible (<code>/proc/mdstat</code>, <code>mdadm --detail</code>).</li>
+          <li><strong>CPU cost is negligible</strong> on modern hardware.</li>
+          <li><strong>No dedicated write cache</strong> — needs UPS + bitmap (+ optional SSD journal) to match HW RAID's write-hole protection.</li>
+          <li><strong>Scales with the host</strong>: NVMe + mdadm on a modern CPU outperforms most HW RAID cards.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Trade-offs at a glance</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th>Hardware RAID</th>
+        <th>Software RAID (mdadm)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Cost</td>
+        <td>$500–$2000+ per card + BBU</td>
+        <td>$0</td>
+      </tr>
+      <tr>
+        <td>Portability</td>
+        <td>Tied to controller model/firmware</td>
+        <td>Any Linux host</td>
+      </tr>
+      <tr>
+        <td>CPU overhead</td>
+        <td>None (ASIC offload)</td>
+        <td>Negligible on modern CPUs</td>
+      </tr>
+      <tr>
+        <td>Write cache</td>
+        <td>BBWC/FBWC on card</td>
+        <td>Page cache + optional SSD journal</td>
+      </tr>
+      <tr>
+        <td>Visibility</td>
+        <td>Vendor CLI, opaque</td>
+        <td><code>/proc/mdstat</code>, fully open</td>
+      </tr>
+      <tr>
+        <td>Recoverability</td>
+        <td>Needs same/compatible controller</td>
+        <td>Assemble anywhere</td>
+      </tr>
+      <tr>
+        <td>Bit-rot protection</td>
+        <td>None</td>
+        <td>None (use ZFS/btrfs on top)</td>
+      </tr>
+      <tr>
+        <td>Monitoring</td>
+        <td><code>storcli</code>, SNMP via controller</td>
+        <td>mdmonitor + SMART on each disk</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Industry drift:</strong> over the last decade, the default choice for new deployments has shifted from HW RAID to software — mdadm for general-purpose Linux, ZFS/raidz for anything requiring end-to-end integrity, and distributed storage (Ceph, Longhorn) above a single node. HW RAID persists in legacy environments and in vendor-sealed appliances.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

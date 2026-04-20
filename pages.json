@@ -125,5 +125,20 @@
   {"path":"virt-09-kubernetes-storage/csi.html","title":"Container Storage Interface (CSI)","section":"Virtualization","topic":"Virt 09 — K8s Storage"},
   {"path":"virt-10-proxmox-kvm/proxmox-architecture.html","title":"Proxmox Architecture","section":"Virtualization","topic":"Virt 10 — Proxmox KVM"},
   {"path":"virt-10-proxmox-kvm/vm-lifecycle-networking.html","title":"VM Lifecycle & Networking","section":"Virtualization","topic":"Virt 10 — Proxmox KVM"},
-  {"path":"virt-10-proxmox-kvm/storage-ha.html","title":"Storage & High Availability","section":"Virtualization","topic":"Virt 10 — Proxmox KVM"}
+  {"path":"virt-10-proxmox-kvm/storage-ha.html","title":"Storage & High Availability","section":"Virtualization","topic":"Virt 10 — Proxmox KVM"},
+  {"path":"storage-01-block-devices/disks-ssds-nvme.html","title":"Disks, SSDs & NVMe","section":"Linux Storage","topic":"Storage 01 — Block Devices"},
+  {"path":"storage-01-block-devices/partitions.html","title":"Partitions (MBR & GPT)","section":"Linux Storage","topic":"Storage 01 — Block Devices"},
+  {"path":"storage-02-filesystems/filesystem-fundamentals.html","title":"Filesystem Fundamentals","section":"Linux Storage","topic":"Storage 02 — Filesystems"},
+  {"path":"storage-02-filesystems/ext4-xfs.html","title":"ext4 & XFS","section":"Linux Storage","topic":"Storage 02 — Filesystems"},
+  {"path":"storage-03-raid/raid-levels.html","title":"RAID Levels","section":"Linux Storage","topic":"Storage 03 — RAID"},
+  {"path":"storage-03-raid/mdadm.html","title":"Linux Software RAID (mdadm)","section":"Linux Storage","topic":"Storage 03 — RAID"},
+  {"path":"storage-04-device-mapper/device-mapper.html","title":"Device Mapper","section":"Linux Storage","topic":"Storage 04 — Device Mapper"},
+  {"path":"storage-05-lvm/lvm-fundamentals.html","title":"LVM Fundamentals","section":"Linux Storage","topic":"Storage 05 — LVM"},
+  {"path":"storage-05-lvm/thin-provisioning-snapshots.html","title":"Thin Provisioning & Snapshots","section":"Linux Storage","topic":"Storage 05 — LVM"},
+  {"path":"storage-06-encryption/dm-crypt-luks.html","title":"dm-crypt & LUKS","section":"Linux Storage","topic":"Storage 06 — Encryption"},
+  {"path":"storage-06-encryption/luks-auto-unlock.html","title":"LUKS Keys, crypttab & Auto-Unlock","section":"Linux Storage","topic":"Storage 06 — Encryption"},
+  {"path":"storage-07-tpm-secure-boot/tpm-basics.html","title":"TPM Fundamentals","section":"Linux Storage","topic":"Storage 07 — TPM & Secure Boot"},
+  {"path":"storage-07-tpm-secure-boot/secure-boot-auto-unlock.html","title":"Secure Boot & LUKS Auto-Unlock","section":"Linux Storage","topic":"Storage 07 — TPM & Secure Boot"},
+  {"path":"storage-08-advanced-filesystems/zfs.html","title":"ZFS","section":"Linux Storage","topic":"Storage 08 — Advanced Filesystems"},
+  {"path":"storage-08-advanced-filesystems/btrfs.html","title":"btrfs","section":"Linux Storage","topic":"Storage 08 — Advanced Filesystems"}
 ]

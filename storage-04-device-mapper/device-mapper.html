@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 04 — Device Mapper</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 04 — Device Mapper</h1>
+  <p class="subtitle">The kernel framework behind LVM, LUKS, and thin pools</p>
+
+  <!-- ============================================
+       THE BIG IDEA
+       ============================================ -->
+  <h2>The Big Idea</h2>
+
+  <div class="panel">
+    <div class="panel-title">What device-mapper Is</div>
+    <p><strong>device-mapper</strong> (dm) is an in-kernel framework for building <strong>virtual block devices</strong>. Each virtual device is defined by a <em>table</em> that maps ranges of the logical device (identified by sector offsets) to one or more underlying devices, optionally transforming the I/O as it passes through (encryption, striping, snapshotting, etc.).</p>
+    <p>You don't normally <em>use</em> device-mapper directly — you use <strong>LVM</strong>, <strong>cryptsetup/LUKS</strong>, <strong>multipath</strong>, <strong>thin pools</strong>, <strong>dm-verity</strong>, or <strong>lvm-cache</strong>. All of those are <strong>consumers of dm</strong>. They translate high-level intent ("create a logical volume", "encrypt this partition") into dm tables, and let the kernel do the actual I/O plumbing.</p>
+  </div>
+
+  <div class="tip">
+    <strong>The "aha" moment:</strong> LVM, LUKS, thin provisioning, software RAID (via <code>dm-raid</code>), SSD caching, multipath, and read-only integrity verification are <strong>not separate subsystems</strong>. They are all the <em>same subsystem</em> — device-mapper — with different target modules loaded. Once you internalize dm, the rest of the Linux storage stack collapses into a single mental model.
+  </div>
+
+  <!-- ============================================
+       WHY DM EXISTS
+       ============================================ -->
+  <h2>Why It Exists</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Before device-mapper</div>
+      <ul>
+        <li>LVM1 had its own in-kernel code for mapping logical-to-physical extents</li>
+        <li>cryptoloop / loop-AES had their own in-kernel encryption path</li>
+        <li>Software RAID (md) lived in its own subsystem</li>
+        <li>Each feature reimplemented block-device plumbing: request queues, suspend/resume, hotplug, ioctls</li>
+        <li>No composability: you couldn't naturally stack encryption under RAID under LVM without friction</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">After device-mapper (2.6+)</div>
+      <ul>
+        <li>A <strong>single</strong> framework in <code>drivers/md/dm*.c</code> handles all virtual block devices</li>
+        <li>Each transformation is a pluggable <strong>target</strong> (kernel module): <code>dm-crypt</code>, <code>dm-linear</code>, <code>dm-raid</code>, <code>dm-thin</code>, <code>dm-cache</code>, <code>dm-verity</code>&hellip;</li>
+        <li>Targets compose naturally by <strong>stacking</strong> dm devices on top of each other</li>
+        <li>Uniform userspace interface: <code>ioctl</code> + <code>dmsetup</code>; uniform sysfs at <code>/sys/block/dm-N/</code></li>
+        <li>LVM2, cryptsetup, multipathd, thin_*, lvm-cache all became <em>userspace controllers</em> that build dm tables</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================
+       ARCHITECTURE
+       ============================================ -->
+  <h2>Architecture — Tables, Targets, and Mappings</h2>
+
+  <div class="panel">
+    <div class="panel-title">The Core Model</div>
+    <p>A dm device is <strong>just a table</strong>. Each row ("target instance") maps a contiguous range of the logical (virtual) device to a specific target type with its own arguments:</p>
+    <pre><code><span class="cm"># Table row syntax:</span>
+<span class="attr">&lt;logical_start_sector&gt;</span> <span class="attr">&lt;length_in_sectors&gt;</span> <span class="type">&lt;target_type&gt;</span> <span class="str">&lt;target_specific_args&gt;</span></code></pre>
+    <p>Sectors are always <strong>512 bytes</strong> in dm accounting, regardless of the underlying device's physical sector size. Multiple rows stack <strong>vertically</strong> to cover the logical device: they must be <strong>contiguous</strong> (no gaps) and <strong>non-overlapping</strong>, and together span <code>[0 &hellip; total_length)</code>.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Example: a logical device assembled from two physical regions</div>
+    <pre><code><span class="cm"># 20 GiB virtual device "vg00-data"</span>
+<span class="cm"># sectors 0–10485759 (5 GiB) → /dev/sda3 starting at sector 2048</span>
+<span class="cm"># sectors 10485760–41943039 (15 GiB) → /dev/sdb1 starting at sector 0</span>
+
+<span class="num">0</span>         <span class="num">10485760</span>  <span class="type">linear</span>  /dev/sda3 <span class="num">2048</span>
+<span class="num">10485760</span>  <span class="num">31457280</span>  <span class="type">linear</span>  /dev/sdb1 <span class="num">0</span></code></pre>
+    <p>This is literally how LVM builds a linear logical volume spanning two PVs. The userspace <code>lvcreate</code> decides the layout; the kernel only sees the table.</p>
+  </div>
+
+  <div class="note">
+    <strong>Key insight:</strong> LVM's online <code>pvmove</code> works by <strong>atomically swapping a dm table</strong>. The kernel suspends the device, updates the mapping to point at new extents, resumes, and in-flight I/O is reissued transparently. No filesystem ever notices.
+  </div>
+
+  <!-- ============================================
+       I/O FLOW THROUGH DM
+       ============================================ -->
+  <h2>How a Write Travels Through a dm Stack</h2>
+
+  <p>Consider a typical laptop: <code>ext4</code> on top of an LVM logical volume, LVM on top of a LUKS-encrypted partition, LUKS on top of an NVMe partition.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Filesystem — <code>ext4</code> (journaled write, 4 KiB block)</div>
+    <div class="encap-layer tcp"><code>dm-linear</code> — LV "root" — translates LV sector → VG extent sector</div>
+    <div class="encap-layer ip"><code>dm-crypt</code> — AES-XTS encrypts each sector with a per-sector tweak</div>
+    <div class="encap-layer eth">Partition — <code>/dev/nvme0n1p3</code> (offset + length on disk)</div>
+    <div class="encap-layer phys">Block device — NVMe controller + NAND</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What actually happens on a single write</div>
+    <ol style="padding-left: 24px;">
+      <li><strong>ext4</strong> issues a <code>bio</code> (block I/O request) for logical sector <em>S<sub>fs</sub></em> on <code>/dev/mapper/vg0-root</code>.</li>
+      <li>Kernel sees the target device is a dm device; the request enters <code>dm.c</code>.</li>
+      <li><strong>dm-linear</strong> looks up <em>S<sub>fs</sub></em> in its table, picks the matching row, rewrites the <code>bio</code> to target <code>/dev/mapper/cryptroot</code> at sector <em>S<sub>lv</sub></em>, forwards it.</li>
+      <li><strong>dm-crypt</strong> receives the <code>bio</code>, allocates a bounce page, encrypts each 512-byte sector with AES-XTS using <em>S<sub>lv</sub></em> as the tweak, retargets the <code>bio</code> to <code>/dev/nvme0n1p3</code> at <em>S<sub>lv</sub> + offset</em>, submits it to a workqueue (encryption is async).</li>
+      <li>The partition layer adds the partition start offset, hands off to the NVMe driver.</li>
+      <li>On completion, each dm target's <code>endio</code> fires in reverse, bubbling the result up to ext4.</li>
+    </ol>
+  </div>
+
+  <!-- ============================================
+       TARGETS CATALOG
+       ============================================ -->
+  <h2>The Target Catalog</h2>
+
+  <p>Each target is a small kernel module (<code>drivers/md/dm-*.c</code>) that implements <code>.ctr</code> (construct from table args), <code>.dtr</code> (destruct), <code>.map</code> (remap a bio), <code>.end_io</code>, and <code>.status</code>. This is the entire contract.</p>
+
+  <table>
+    <thead>
+      <tr><th>Target</th><th>What it does</th><th>Used by</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>linear</code></td>
+        <td>1:1 map of a range to <code>(device, offset)</code>. The workhorse.</td>
+        <td>LVM linear LVs, partition emulation, pvmove intermediate</td>
+      </tr>
+      <tr>
+        <td><code>stripe</code></td>
+        <td>RAID-0 block interleaving across N devices with configurable chunk size.</td>
+        <td>LVM striped LVs</td>
+      </tr>
+      <tr>
+        <td><code>mirror</code></td>
+        <td>RAID-1 with a userspace log daemon. Legacy.</td>
+        <td>Old LVM mirrored LVs (largely replaced by <code>dm-raid</code>)</td>
+      </tr>
+      <tr>
+        <td><code>raid</code></td>
+        <td>Wraps the kernel MD code to provide RAID 0/1/4/5/6/10 with bitmap, rebuild, and integrity.</td>
+        <td>LVM RAID (<code>lvcreate --type raid5</code>); shares the MD engine with <code>mdadm</code></td>
+      </tr>
+      <tr>
+        <td><code>crypt</code></td>
+        <td>Transparent block-level encryption (AES-XTS, -CBC-ESSIV, Adiantum). Keys held in the kernel keyring.</td>
+        <td>LUKS1/LUKS2, plain dm-crypt, TrueCrypt/VeraCrypt compat <span class="cm">(→ storage-06)</span></td>
+      </tr>
+      <tr>
+        <td><code>thin-pool</code> + <code>thin</code></td>
+        <td>Thin provisioning: a pool with metadata + data devices, and thin volumes that allocate blocks on first write. Shared CoW snapshots.</td>
+        <td>LVM thin, Docker <code>devicemapper</code> graph driver (legacy) <span class="cm">(→ storage-05)</span></td>
+      </tr>
+      <tr>
+        <td><code>snapshot</code> + <code>snapshot-origin</code></td>
+        <td>Traditional CoW snapshots: origin + separate COW store. Writes to origin copy old blocks into the store first.</td>
+        <td>Classic LVM snapshots (<code>lvcreate -s</code>, pre-thin)</td>
+      </tr>
+      <tr>
+        <td><code>cache</code></td>
+        <td>SSD-backed caching of a slow origin device. Policy-driven (smq/mq/cleaner) writeback or writethrough.</td>
+        <td>LVM cache (<code>lvconvert --cache</code>), standalone dm-cache</td>
+      </tr>
+      <tr>
+        <td><code>integrity</code></td>
+        <td>Per-block checksum (CRC32C, SHA256, or HMAC) with an internal journal. Detects bit rot; with HMAC it authenticates.</td>
+        <td><code>integritysetup</code>, LUKS2 <code>--integrity</code> for authenticated encryption</td>
+      </tr>
+      <tr>
+        <td><code>verity</code></td>
+        <td>Read-only Merkle-tree integrity: every block's hash is in a hash tree; root hash is signed externally. I/O returns EIO on mismatch.</td>
+        <td>Android verified boot (AVB), ChromeOS rootfs, confidential containers, OSTree-based immutables</td>
+      </tr>
+      <tr>
+        <td><code>multipath</code></td>
+        <td>Aggregate multiple physical paths to the same SAN LUN for failover and load balancing. Groups with priorities.</td>
+        <td><code>multipathd</code>; Fibre Channel / iSCSI enterprise storage</td>
+      </tr>
+      <tr>
+        <td><code>zero</code></td>
+        <td>Reads return zeroes; writes are discarded. O(1) in size.</td>
+        <td>Creating huge sparse test devices; the "lower" of test stacks</td>
+      </tr>
+      <tr>
+        <td><code>error</code></td>
+        <td>All I/O returns <code>-EIO</code>.</td>
+        <td>Fencing bad ranges; simulating broken devices in tests; "reject the tail of a resized LV"</td>
+      </tr>
+      <tr>
+        <td><code>delay</code></td>
+        <td>Injects configurable read/write latency before forwarding.</td>
+        <td>Testing I/O behaviour under slow storage; reproducing timeout bugs</td>
+      </tr>
+      <tr>
+        <td><code>flakey</code></td>
+        <td>Cycles between working and broken states on a timer.</td>
+        <td>Testing filesystem resilience to transient failures</td>
+      </tr>
+      <tr>
+        <td><code>writecache</code></td>
+        <td>Write-only persistent cache on a fast device (pmem/SSD) in front of a slow origin.</td>
+        <td>LVM writecache (<code>lvconvert --type writecache</code>)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>They're all the same thing.</strong> LVM linear LV = <code>dm-linear</code>. LVM mirror = <code>dm-raid</code>. LUKS = <code>dm-crypt</code>. LVM thin = <code>dm-thin-pool</code> + <code>dm-thin</code>. LVM cache = <code>dm-cache</code>. multipathd = <code>dm-multipath</code>. <code>veritysetup</code> = <code>dm-verity</code>. The userspace tool's job is to decide the policy and write the table; the kernel does the I/O.
+  </div>
+
+  <!-- ============================================
+       LVM vs LUKS vs THIN — SAME SUBSTRATE
+       ============================================ -->
+  <h2>Three "Different" Features, One Substrate</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header l3">LVM — <code>lvcreate -L 10G vg0</code></div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Resulting dm table (abbreviated):</span>
+<span class="num">0</span> <span class="num">20971520</span> <span class="type">linear</span> /dev/sda3 <span class="num">2048</span></code></pre>
+        <p>LVM's userspace <code>lvm</code> binary updates PV metadata, then calls <code>DM_TABLE_LOAD</code> + <code>DM_DEV_SUSPEND</code>/<code>RESUME</code> ioctls to install this table under <code>/dev/mapper/vg0-mylv</code>.</p>
+      </div>
+    </div>
+
+    <div class="comp-side">
+      <div class="comp-header l4">LUKS — <code>cryptsetup open /dev/sda3 cryptroot</code></div>
+      <div class="comp-body">
+        <pre><code><span class="cm"># Resulting dm table:</span>
+<span class="num">0</span> <span class="num">20971520</span> <span class="type">crypt</span> <span class="str">aes-xts-plain64</span> \
+  <span class="str">:0:logon:cryptsetup:XXX</span> <span class="num">0</span> \
+  /dev/sda3 <span class="num">32768</span></code></pre>
+        <p><code>cryptsetup</code> reads the LUKS header (slot keys, KDF, cipher), unlocks the master key, plants it in the kernel keyring, then installs a <code>crypt</code> table. The data offset (32768 sectors) skips past the LUKS header on disk.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="comp-side" style="margin-top: 15px;">
+    <div class="comp-header new">Thin provisioning — <code>lvcreate --thin vg0/pool0 -V 100G -n mythin</code></div>
+    <div class="comp-body">
+      <pre><code><span class="cm"># Two dm devices are created:</span>
+<span class="cm">#   (1) the pool itself</span>
+<span class="num">0</span> <span class="num">2097152</span> <span class="type">thin-pool</span> /dev/mapper/vg0-pool0_tmeta /dev/mapper/vg0-pool0_tdata <span class="num">128</span> <span class="num">0</span> <span class="num">1</span> <span class="str">skip_block_zeroing</span>
+<span class="cm">#   (2) a thin volume carved out of it (id = 1, virtual size 100 GiB)</span>
+<span class="num">0</span> <span class="num">209715200</span> <span class="type">thin</span> /dev/mapper/vg0-pool0-tpool <span class="num">1</span></code></pre>
+      <p>The thin volume is empty-allocated — blocks come from the pool only when written. Same kernel mechanism as LVM and LUKS, different target modules.</p>
+    </div>
+  </div>
+
+  <!-- ============================================
+       TOOLS
+       ============================================ -->
+  <h2>Tools &amp; Interfaces</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><code>dmsetup</code> — the low-level CLI</div>
+      <ul>
+        <li><code>dmsetup ls</code> — list all dm devices</li>
+        <li><code>dmsetup ls --tree</code> — show the full stack (PV → LUKS → LV)</li>
+        <li><code>dmsetup info &lt;name&gt;</code> — state, open count, UUID, major/minor</li>
+        <li><code>dmsetup table &lt;name&gt;</code> — dump the live table</li>
+        <li><code>dmsetup status &lt;name&gt;</code> — target-specific runtime status</li>
+        <li><code>dmsetup create &lt;name&gt; --table &lt;spec&gt;</code> — build a device manually</li>
+        <li><code>dmsetup suspend</code> / <code>resume</code> — freeze I/O to rewrite the table</li>
+        <li><code>dmsetup reload &lt;name&gt;</code> — load a new table (use before <code>resume</code>)</li>
+        <li><code>dmsetup remove</code> / <code>remove_all</code></li>
+        <li><code>dmsetup message</code> — send target-specific commands (e.g. thin snapshot deletion)</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">sysfs &amp; devtmpfs</div>
+      <ul>
+        <li><code>/dev/dm-N</code> — raw block device node (unstable across boots)</li>
+        <li><code>/dev/mapper/&lt;name&gt;</code> — friendly named symlink created by udev</li>
+        <li><code>/sys/block/dm-N/dm/name</code> — the mapper name</li>
+        <li><code>/sys/block/dm-N/dm/uuid</code> — stable UUID (e.g. <code>LVM-xxx</code>, <code>CRYPT-LUKS2-xxx</code>)</li>
+        <li><code>/sys/block/dm-N/dm/suspended</code> — <code>0</code> or <code>1</code></li>
+        <li><code>/sys/block/dm-N/holders/</code> — dm devices stacked <em>on top of</em> this one</li>
+        <li><code>/sys/block/dm-N/slaves/</code> — devices this one sits <em>on</em></li>
+      </ul>
+      <p><strong><code>dmstats</code></strong> (part of <code>device-mapper</code> package): per-region I/O accounting — reads, writes, merges, latencies, histograms. Useful when <code>iostat</code>'s per-device view is too coarse.</p>
+    </div>
+  </div>
+
+  <!-- ============================================
+       HANDS-ON EXAMPLE
+       ============================================ -->
+  <h2>Hands-on — Building a Linear dm Device Manually</h2>
+
+  <p>Suppose you have two loop devices you want to concatenate into one 200 MiB virtual block device. No LVM, no filesystem — just dm.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Set up two backing files:</strong>
+        <pre><code><span class="prompt">#</span> fallocate -l 100M /tmp/part1.img
+<span class="prompt">#</span> fallocate -l 100M /tmp/part2.img
+<span class="prompt">#</span> losetup -f --show /tmp/part1.img
+<span class="output">/dev/loop0</span>
+<span class="prompt">#</span> losetup -f --show /tmp/part2.img
+<span class="output">/dev/loop1</span></code></pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Create the dm device with a two-row linear table.</strong> 100 MiB = 204800 sectors. The heredoc is fed as stdin to <code>dmsetup create</code>:
+        <pre><code><span class="prompt">#</span> dmsetup create mymap &lt;&lt;EOF
+<span class="num">0</span>      <span class="num">204800</span> <span class="type">linear</span> /dev/loop0 <span class="num">0</span>
+<span class="num">204800</span> <span class="num">204800</span> <span class="type">linear</span> /dev/loop1 <span class="num">0</span>
+EOF</code></pre>
+        <p>This creates <code>/dev/mapper/mymap</code> and the underlying <code>/dev/dm-N</code>.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Inspect the result:</strong>
+        <pre><code><span class="prompt">#</span> dmsetup ls
+<span class="output">mymap	(253:0)</span>
+
+<span class="prompt">#</span> dmsetup info mymap
+<span class="output">Name:              mymap
+State:             ACTIVE
+Read Ahead:        256
+Tables present:    LIVE
+Open count:        0
+Event number:      0
+Major, minor:      253, 0
+Number of targets: 2</span>
+
+<span class="prompt">#</span> dmsetup table mymap
+<span class="output">0 204800 linear 7:0 0
+204800 204800 linear 7:1 0</span>
+
+<span class="prompt">#</span> dmsetup status mymap
+<span class="output">0 204800 linear
+204800 204800 linear</span>
+
+<span class="prompt">#</span> lsblk /dev/mapper/mymap
+<span class="output">NAME   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+mymap  253:0    0  200M  0 dm
+├─loop0  7:0    0  100M  0 loop
+└─loop1  7:1    0  100M  0 loop</span></code></pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Put a filesystem on it and verify it spans both backing files:</strong>
+        <pre><code><span class="prompt">#</span> mkfs.ext4 /dev/mapper/mymap
+<span class="prompt">#</span> mount /dev/mapper/mymap /mnt
+<span class="prompt">#</span> df -h /mnt
+<span class="output">Filesystem         Size  Used Avail Use% Mounted on
+/dev/mapper/mymap  189M   24K  175M   1% /mnt</span></code></pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Tear down:</strong>
+        <pre><code><span class="prompt">#</span> umount /mnt
+<span class="prompt">#</span> dmsetup remove mymap
+<span class="prompt">#</span> losetup -d /dev/loop0 /dev/loop1</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Pedagogical value:</strong> This is <em>exactly</em> what LVM does when you create a linear LV spanning two PVs — except LVM also writes VG metadata onto the PVs and tracks extent allocation. The kernel-side plumbing is identical.
+  </div>
+
+  <!-- ============================================
+       DM IN ACTION — REAL SYSTEM
+       ============================================ -->
+  <h2>dm in Action on a Real System</h2>
+
+  <p>Here's what a typical encrypted-LVM laptop looks like. NVMe partition holds a LUKS container, LUKS-decrypted device is a PV, PV holds a VG with root/swap/home LVs:</p>
+
+  <div class="terminal">
+<span class="prompt">#</span> dmsetup ls --tree
+<span class="output">vg0-home     (253:4)
+ └─cryptroot (253:0)
+    └─ (259:3)
+vg0-swap     (253:3)
+ └─cryptroot (253:0)
+    └─ (259:3)
+vg0-root     (253:2)
+ └─cryptroot (253:0)
+    └─ (259:3)
+vg0-pool0_tdata (253:6)
+ └─cryptroot (253:0)
+    └─ (259:3)
+vg0-pool0_tmeta (253:5)
+ └─cryptroot (253:0)
+    └─ (259:3)
+cryptroot    (253:0)
+ └─ (259:3)</span>
+
+<span class="prompt">#</span> lsblk
+<span class="output">NAME              MAJ:MIN  SIZE  TYPE  MOUNTPOINTS
+nvme0n1           259:0    1T    disk
+├─nvme0n1p1       259:1    1G    part  /boot/efi
+├─nvme0n1p2       259:2    2G    part  /boot
+└─nvme0n1p3       259:3    997G  part
+  └─cryptroot     253:0    997G  crypt
+    ├─vg0-root    253:2    50G   lvm   /
+    ├─vg0-swap    253:3    16G   lvm   [SWAP]
+    └─vg0-home    253:4    931G  lvm   /home</span>
+
+<span class="prompt">#</span> ls -l /dev/mapper/
+<span class="output">crw------- 1 root root 10, 236 control
+lrwxrwxrwx 1 root root       7 cryptroot -&gt; ../dm-0
+lrwxrwxrwx 1 root root       7 vg0-root  -&gt; ../dm-2
+lrwxrwxrwx 1 root root       7 vg0-swap  -&gt; ../dm-3
+lrwxrwxrwx 1 root root       7 vg0-home  -&gt; ../dm-4</span>
+
+<span class="prompt">#</span> dmsetup table cryptroot
+<span class="output">0 2090860544 crypt aes-xts-plain64 :64:logon:cryptsetup:... 0 259:3 32768 1 allow_discards</span>
+
+<span class="prompt">#</span> dmsetup table vg0-root
+<span class="output">0 104857600 linear 253:0 2048</span>
+  </div>
+
+  <div class="note">
+    <strong>Read this carefully.</strong> <code>vg0-root</code> is a <em>linear</em> map onto <code>253:0</code> (which is <code>cryptroot</code>). A write to <code>/</code> hits ext4 → <code>dm-linear</code> (<code>vg0-root</code>) → <code>dm-crypt</code> (<code>cryptroot</code>) → partition → NVMe. Every layer is a dm target. Every major-minor <code>253:X</code> is just another row in someone's table.
+  </div>
+
+  <!-- ============================================
+       SUSPEND / RESUME
+       ============================================ -->
+  <h2>Suspend / Resume — The Atomic Table Swap</h2>
+
+  <div class="panel">
+    <div class="panel-title">Why it matters</div>
+    <p>dm devices can be <strong>suspended</strong>: the kernel stops dispatching new I/O to the target and queues incoming bios. While suspended, userspace can <strong>load a new table</strong>, and on <strong>resume</strong> the new mapping takes effect <em>atomically</em>. Queued bios are reissued under the new table.</p>
+    <p>This is the mechanism behind every online reconfiguration in the Linux block stack:</p>
+    <ul>
+      <li><strong>LVM <code>pvmove</code></strong> — migrate extents off a PV without unmounting</li>
+      <li><strong>LVM <code>lvresize</code></strong> — online grow/shrink of a logical volume</li>
+      <li><strong>Thin pool resize</strong> — extend metadata or data devices under load</li>
+      <li><strong>LUKS online re-encryption</strong> (<code>cryptsetup reencrypt</code>) — swap cipher/key while mounted</li>
+      <li><strong>lvm-cache attach/detach</strong> — change caching policy or target without downtime</li>
+      <li><strong>Multipath failover</strong> — swap active paths on SAN-side failure</li>
+    </ul>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Manual flow</div>
+      <pre><code><span class="prompt">#</span> dmsetup suspend mymap
+<span class="prompt">#</span> dmsetup reload mymap &lt;&lt;EOF
+<span class="num">0</span> <span class="num">409600</span> <span class="type">linear</span> /dev/loop2 <span class="num">0</span>
+EOF
+<span class="prompt">#</span> dmsetup resume mymap</code></pre>
+      <p>Between <code>suspend</code> and <code>resume</code>, filesystems mounted on the device will block on any new I/O. Keep the window short — or use <code>--noflush</code> if the upper layer can tolerate it.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Filesystem freeze coordination</div>
+      <p>dm issues a <strong>filesystem freeze</strong> (<code>FREEZE_SUPER</code>) on suspend so in-flight transactions are flushed and journaled — then it's safe to swap the table. On resume, the filesystem is thawed. This is why <code>lvcreate -s</code> (snapshot) doesn't corrupt ext4/XFS.</p>
+    </div>
+  </div>
+
+  <!-- ============================================
+       UDEV INTEGRATION
+       ============================================ -->
+  <h2>udev &amp; Event Propagation</h2>
+
+  <div class="panel">
+    <div class="panel-title">From kernel event to /dev/mapper/&lt;name&gt;</div>
+    <ol style="padding-left: 24px;">
+      <li>Kernel creates a new dm device. It's <code>/dev/dm-N</code> — the name is an internal counter.</li>
+      <li>Kernel emits a uevent (<code>add</code>) via netlink.</li>
+      <li><code>systemd-udevd</code> receives it, matches against rules in <code>/usr/lib/udev/rules.d/10-dm.rules</code> and <code>13-dm-disk.rules</code>.</li>
+      <li>udev reads <code>DM_NAME</code>, <code>DM_UUID</code>, <code>DM_SUSPENDED</code> from <code>/sys/block/dm-N/dm/</code>.</li>
+      <li>udev creates <code>/dev/mapper/&lt;DM_NAME&gt;</code> as a symlink to <code>/dev/dm-N</code>.</li>
+      <li>udev runs <code>blkid</code> to detect any filesystem/LUKS/LVM signatures; these populate <code>by-uuid</code>, <code>by-label</code>, <code>by-partuuid</code>.</li>
+      <li>If the device is a PV, <code>lvm2-pvscan@.service</code> is triggered to activate dependent VGs.</li>
+      <li>If it's a LUKS header, <code>systemd-cryptsetup@.service</code> may kick off decryption.</li>
+    </ol>
+  </div>
+
+  <div class="warn">
+    <strong>Beware:</strong> when troubleshooting, <code>udevadm settle</code> is your friend — many dm operations return <em>before</em> udev has finished creating symlinks. Scripts that call <code>lvcreate</code> then <code>mkfs /dev/mapper/...</code> immediately can race.
+  </div>
+
+  <!-- ============================================
+       DM-INTEGRITY
+       ============================================ -->
+  <h2>dm-integrity — Per-Block Checksumming</h2>
+
+  <div class="panel">
+    <div class="panel-title">What it solves</div>
+    <p>A normal block device will happily return silently-corrupted data if the disk flips a bit (NAND wear, bad cable, buggy SATA link, firmware bug, cosmic ray). Filesystems like ext4 don't checksum data blocks. <strong>dm-integrity</strong> interposes a per-sector checksum and a journal so every read is verified.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Layout on disk</div>
+      <ul>
+        <li>The underlying device is carved into: <strong>superblock</strong> → <strong>journal</strong> → <strong>data + tag interleave</strong></li>
+        <li>Each data sector gets a <strong>tag</strong> — typically a CRC32C (4 bytes) or SHA256 (32 bytes) or HMAC-SHA256 (32 bytes)</li>
+        <li>Journal absorbs writes atomically: the tag and data land together, or not at all</li>
+        <li>Exposes a smaller "data" device to the upper layer (raw capacity minus metadata overhead)</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Two modes</div>
+      <ul>
+        <li><strong>Standalone</strong> (<code>integritysetup format</code>): CRC32C catches <em>random</em> corruption. Not authenticated — an attacker who can write arbitrary blocks can forge a matching CRC.</li>
+        <li><strong>Under dm-crypt (LUKS2 <code>--integrity</code>)</strong>: HMAC-SHA256 tag, key derived from LUKS master key. Provides <strong>authenticated encryption</strong> (AEAD semantics) at the block layer. An attacker flipping ciphertext bits causes tag mismatch → EIO.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Layering for authenticated encryption</div>
+    <div class="encap-diagram">
+      <div class="encap-layer app">Filesystem (ext4 / xfs / btrfs)</div>
+      <div class="encap-layer tcp"><code>dm-crypt</code> — encrypts plaintext → ciphertext, derives integrity key</div>
+      <div class="encap-layer ip"><code>dm-integrity</code> — HMACs ciphertext, stores tag + journal</div>
+      <div class="encap-layer eth">Partition</div>
+      <div class="encap-layer phys">Disk</div>
+    </div>
+    <p>A bit-flip on disk → integrity tag mismatch on read → EIO surfaces to dm-crypt → surfaces to the filesystem. Silent corruption becomes loud corruption, which is always preferable.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Cost:</strong> journaling means every write hits the disk twice (journal + final location). Enable <code>--integrity-no-journal</code> for bitmap mode if you only need corruption <em>detection</em> and can tolerate a potentially inconsistent tag on crash. For write-heavy workloads, the performance hit is 30–50%.
+  </div>
+
+  <!-- ============================================
+       DM-VERITY
+       ============================================ -->
+  <h2>dm-verity — Merkle-Tree Verified Read-Only</h2>
+
+  <div class="panel">
+    <div class="panel-title">The idea</div>
+    <p><code>dm-verity</code> is the <em>read-only</em> counterpart to <code>dm-integrity</code>. It hashes every data block, builds a <strong>Merkle tree</strong> over those hashes, and requires a <strong>signed root hash</strong> to activate the device. Any block whose hash doesn't chain up to the root hash returns EIO on read.</p>
+    <p>This proves, at boot time, that the root filesystem is <strong>exactly</strong> what the vendor signed — no on-disk tampering possible without either breaking the hash function or forging the signing key.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Structure</div>
+    <ul>
+      <li><strong>Data device</strong> — the read-only filesystem image (ext4, squashfs, erofs).</li>
+      <li><strong>Hash device</strong> — either a separate device or a region at the end of the data device. Stores the hash tree: leaves = hashes of 4 KiB data blocks, inner nodes = hashes of child hashes.</li>
+      <li><strong>Root hash</strong> — 32 bytes (SHA256). Passed to <code>dm-verity</code> at activation.</li>
+      <li><strong>Salt</strong> — per-image random salt to prevent rainbow-table attacks.</li>
+      <li><strong>Signature</strong> — the root hash is normally signed by a bootloader-verified key (UEFI Secure Boot / Android AVB / ChromeOS verified boot).</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Verify path (read)</div>
+    <div class="flow">
+      <div class="flow-step"><div class="num">1</div><div class="label">Read data block</div><div class="desc">from data device</div></div>
+      <div class="arrow">→</div>
+      <div class="flow-step"><div class="num">2</div><div class="label">Hash it</div><div class="desc">SHA256(salt ‖ block)</div></div>
+      <div class="arrow">→</div>
+      <div class="flow-step"><div class="num">3</div><div class="label">Compare to leaf</div><div class="desc">in hash tree</div></div>
+      <div class="arrow">→</div>
+      <div class="flow-step"><div class="num">4</div><div class="label">Walk up tree</div><div class="desc">to root</div></div>
+      <div class="arrow">→</div>
+      <div class="flow-step"><div class="num">5</div><div class="label">Match root hash?</div><div class="desc">yes → return data; no → EIO</div></div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Real-world users:</strong> Android (every <code>system</code> and <code>vendor</code> partition since Android 10), ChromeOS (root FS), confidential-computing container images, Fedora Silverblue / Bootc, Azure confidential VMs. Anywhere "I need to prove the OS hasn't been tampered with" matters.
+  </div>
+
+  <!-- ============================================
+       MDADM vs DM-RAID
+       ============================================ -->
+  <h2>mdadm vs dm-raid — One Engine, Two Front-Ends</h2>
+
+  <p>A common source of confusion: Linux has <em>two</em> ways to run software RAID, and people aren't sure which to use. They share a kernel engine.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">mdadm / md</div>
+      <div class="comp-body">
+        <ul>
+          <li>Standalone RAID layer — the oldest Linux RAID</li>
+          <li>User tool: <code>mdadm</code></li>
+          <li>Devices: <code>/dev/md0</code>, <code>/dev/md1</code>&hellip;</li>
+          <li>Metadata formats: <code>0.9</code>, <code>1.0</code>, <code>1.1</code>, <code>1.2</code> (<code>1.2</code> is default)</li>
+          <li>Typical use: build a RAID array, put LVM <em>on top</em> of it</li>
+          <li>Kernel code: <code>drivers/md/md.c</code> + <code>raid*.c</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="comp-side">
+      <div class="comp-header k8s">dm-raid (via LVM)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Wraps the same kernel MD code into a dm target</li>
+          <li>User tool: <code>lvcreate --type raid5</code> etc.</li>
+          <li>Devices: <code>/dev/mapper/vg0-myraidlv</code></li>
+          <li>Metadata: stored in LVM's VG metadata — no separate RAID superblock</li>
+          <li>Typical use: integrated RAID + LVM management with one tool</li>
+          <li>Kernel code: <code>drivers/md/dm-raid.c</code> (thin wrapper) + the same <code>raid*.c</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Rule of thumb:</strong> if you already use LVM, <code>lvcreate --type raid*</code> keeps everything in one place. If you run bare RAID (ZFS/btrfs-style arrays without LVM) or need features LVM doesn't expose (e.g. RAID-0 with specific chunk sizes, write-mostly members), use <code>mdadm</code>. Either way, the rebuild/resync code running is the same. <span class="cm">(Covered in depth in storage-03.)</span>
+  </div>
+
+  <!-- ============================================
+       MENTAL MODEL
+       ============================================ -->
+  <h2>Mental Model — The Collapse</h2>
+
+  <div class="mental-model">
+    <div class="mm-box mm-figma">
+      <div class="mm-title">Before</div>
+      <div class="mm-detail">LVM is a volume manager. LUKS is an encryption layer. Thin provisioning is a storage-allocation feature. Multipath is a SAN thing. Verity is an Android thing. They feel unrelated.</div>
+    </div>
+    <div class="mm-arrow">⇒</div>
+    <div class="mm-box mm-code">
+      <div class="mm-title">After</div>
+      <div class="mm-detail">All of them are <strong>userspace controllers</strong> that build <strong>dm tables</strong> and install them in the kernel. The differences are policy and metadata — the I/O plumbing is one framework.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Checklist of things you now understand for free</div>
+    <ul>
+      <li>Why <code>lsblk</code> shows <code>crypt</code>, <code>lvm</code>, <code>raid5</code> all as TYPE <code>dm</code> underneath — they're all dm targets</li>
+      <li>Why <code>/dev/mapper/</code> contains entries from <em>several</em> distinct tools</li>
+      <li>Why <code>pvmove</code> is online — it's a table swap under suspend</li>
+      <li>Why LUKS2 can do authenticated encryption — <code>dm-crypt</code> stacks on <code>dm-integrity</code></li>
+      <li>Why Android's verified boot looks like "magic" — it's <code>dm-verity</code> with a signed root hash</li>
+      <li>Why Docker's old <code>devicemapper</code> storage driver existed — <code>dm-thin</code> CoW snapshots per container</li>
+      <li>Why LVM and <code>mdadm</code> can both do RAID — they share the MD kernel engine</li>
+      <li>Why a single <code>dmsetup ls --tree</code> command visualizes your entire stack</li>
+    </ul>
+  </div>
+
+  <div class="tip">
+    <strong>Next:</strong> storage-05 covers <em>LVM</em> (the userspace controller that drives <code>dm-linear</code>, <code>dm-stripe</code>, <code>dm-raid</code>, and <code>dm-thin-pool</code>). storage-06 covers <em>LUKS &amp; dm-crypt</em> in depth. Both build on the dm mental model established here.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

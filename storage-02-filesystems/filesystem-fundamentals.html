@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 02 — Filesystem Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 02 — Filesystem Fundamentals</h1>
+  <p class="subtitle">Inodes, journaling, VFS, and how files are actually stored</p>
+
+  <!-- ===== WHAT IS A FILESYSTEM ===== -->
+  <h2>What a Filesystem Actually Is</h2>
+
+  <p>A <strong>filesystem</strong> is a data structure laid out on top of a block device. The block device exposes a flat array of fixed-size sectors (typically 512 B or 4 KiB); the filesystem adds <em>meaning</em> on top of that — a mapping from <strong>human-readable names</strong> to <strong>ranges of blocks</strong>, plus metadata describing ownership, timestamps, permissions, and integrity.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Core Idea</div>
+    <p>A filesystem turns a block device into a namespace. Without it, a disk is just 2<sup>40</sup>+ numbered sectors. With it, you get <code>/etc/passwd</code>, directory trees, permissions, and the ability to ask "is this file bigger than that one?" without walking every sector.</p>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="icon">📛</div>
+      <div class="label">Path</div>
+      <div class="desc">/var/log/syslog</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">📇</div>
+      <div class="label">Dentry</div>
+      <div class="desc">name → inode #</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">📋</div>
+      <div class="label">Inode</div>
+      <div class="desc">metadata + block ptrs</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="icon">🧱</div>
+      <div class="label">Data blocks</div>
+      <div class="desc">actual bytes on disk</div>
+    </div>
+  </div>
+
+  <!-- ===== CORE STRUCTURES ===== -->
+  <h2>The Core On-Disk Structures</h2>
+
+  <h3>Superblock</h3>
+  <p>A single structure (with backup copies) describing the filesystem as a whole. Located at a well-known offset so the kernel can find it during <code>mount()</code>.</p>
+  <ul>
+    <li><strong>Magic number</strong> — identifies the filesystem type (e.g. <code>0xEF53</code> for ext2/3/4). Without it, the kernel doesn't know which driver to invoke.</li>
+    <li><strong>Total size, block size, block count</strong> — geometry of the filesystem.</li>
+    <li><strong>Free block / free inode counters</strong> — quick stats.</li>
+    <li><strong>Mount count, last mount time, last fsck time, state flag</strong> — used to decide when to force an fsck.</li>
+    <li><strong>UUID and label</strong> — stable identifiers independent of device path.</li>
+  </ul>
+
+  <h3>Inode (Index Node)</h3>
+  <p>One inode per file. It holds <strong>everything about the file except its name</strong>. Names live in directory entries, not in the inode itself — this is why hard links are cheap (multiple dentries pointing to the same inode).</p>
+
+  <div class="panel">
+    <div class="panel-title">What's Inside an Inode</div>
+    <table>
+      <tr><th>Field</th><th>Purpose</th></tr>
+      <tr><td><code>i_mode</code></td><td>File type (regular, dir, symlink, block dev…) + permissions</td></tr>
+      <tr><td><code>i_uid</code>, <code>i_gid</code></td><td>Owner user/group</td></tr>
+      <tr><td><code>i_size</code></td><td>File size in bytes</td></tr>
+      <tr><td><code>i_atime</code>, <code>i_mtime</code>, <code>i_ctime</code></td><td>Access / modify / change (inode-change) timestamps</td></tr>
+      <tr><td><code>i_links_count</code></td><td>Hard link count — file is freed when this hits zero</td></tr>
+      <tr><td><code>i_blocks</code></td><td>Number of 512 B sectors actually allocated</td></tr>
+      <tr><td><code>i_block[]</code> / extent tree</td><td>Pointers to the data blocks</td></tr>
+      <tr><td><code>i_flags</code></td><td>Immutable, append-only, no-dump, encrypted, etc.</td></tr>
+    </table>
+  </div>
+
+  <p><strong>Crucially, the filename is not in the inode.</strong> An inode doesn't know what it's called. If you <code>ls -li</code>, the leftmost column is the inode number — and two directory entries can point at the same inode (hard link).</p>
+
+  <h3>Directory Entry (dentry)</h3>
+  <p>A directory is just a special file whose "contents" are a list of <strong>(name, inode number)</strong> pairs. The Linux kernel also caches these in memory as the <strong>dentry cache</strong> to accelerate path lookups — walking <code>/a/b/c/d</code> would otherwise require four disk reads per lookup.</p>
+
+  <h3>Block Groups / Allocation Groups</h3>
+  <p>Rather than keeping all metadata in one corner of the disk (disastrous if that region fails, and terrible for locality), modern filesystems split the device into independent regions:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header code">ext2/3/4 — Block Groups</div>
+      <div class="comp-body">
+        <p>Fixed-size regions (typically 128 MiB). Each contains: a superblock copy (optional), group descriptor, block bitmap, inode bitmap, inode table, data blocks.</p>
+        <p>Goal: keep an inode and its data blocks in the same group to minimize seeks.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">XFS — Allocation Groups (AGs)</div>
+      <div class="comp-body">
+        <p>Larger, fewer, independent regions. Each AG maintains its own free-space B+trees and inode B+tree. Allocations in different AGs proceed in <strong>parallel</strong> — core to XFS's concurrency story.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== INODES IN DEPTH ===== -->
+  <h2>Inodes in Depth</h2>
+
+  <h3>Extent Trees vs Indirect Block Pointers</h3>
+  <p>How does an inode point to a potentially huge file's data?</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">Indirect blocks (ext2/3)</div>
+      <div class="comp-body">
+        <p>The inode holds 12 direct pointers, 1 single-indirect, 1 double-indirect, 1 triple-indirect. Large files require traversing up to three levels of pointer blocks. Wastes space for big sequential files.</p>
+        <pre><span class="cm"># 1 TB file = millions of pointer entries</span>
+<span class="cm"># each indirect lookup = extra read</span></pre>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">Extents (ext4, XFS, btrfs)</div>
+      <div class="comp-body">
+        <p>An <strong>extent</strong> describes a contiguous range: <em>(logical offset, physical block, length)</em>. One extent can cover up to 128 MiB in ext4. Massively reduces metadata overhead for large, contiguous files.</p>
+        <pre><span class="cm"># 1 TB file, unfragmented:</span>
+<span class="cm"># ~8 extent records total</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <h3>Inode Exhaustion</h3>
+  <p>On ext filesystems, inodes are <strong>pre-allocated at mkfs time</strong>. The default is roughly one inode per 16 KiB of filesystem capacity. On a workload full of tiny files (Maildir, node_modules, container image layers), you can <strong>run out of inodes while still having free blocks</strong>.</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> df -i /var
+<span class="output">Filesystem       Inodes  IUsed    IFree IUse% Mounted on
+/dev/sda1      6553600 6553600       0  100% /var</span>
+<span class="prompt">$</span> <span class="cm"># ENOSPC despite "df" showing free space</span>
+  </div>
+
+  <div class="warn">
+    <strong>Gotcha:</strong> <code>df</code> shows free <em>blocks</em>; <code>df -i</code> shows free <em>inodes</em>. Running out of either produces <code>ENOSPC</code>. XFS dynamically allocates inodes, so this class of bug effectively doesn't exist there.
+  </div>
+
+  <!-- ===== DATA BLOCKS & FRAGMENTATION ===== -->
+  <h2>Data Blocks, Allocation & Fragmentation</h2>
+
+  <p>When a write extends a file, the allocator must pick new blocks. Strategies:</p>
+  <ul>
+    <li><strong>Block bitmaps</strong> (ext) — a bit per block, scanned linearly with locality hints.</li>
+    <li><strong>Free-space B+trees</strong> (XFS, btrfs) — scale to petabytes; O(log n) lookups.</li>
+    <li><strong>Delayed allocation</strong> (ext4, XFS) — don't pick blocks until <code>fsync</code> or writeback; lets the allocator see the full write size and place it contiguously.</li>
+  </ul>
+
+  <p><strong>Fragmentation</strong> is when a file's blocks are scattered rather than contiguous. On spinning rust, this hurts sequential read throughput badly. On flash it matters far less — SSDs have no seek penalty — but extent maps still grow and consume cache.</p>
+
+  <!-- ===== JOURNALING ===== -->
+  <h2>Journaling: Crash Consistency</h2>
+
+  <p>A write typically touches multiple structures: inode, block bitmap, data blocks, directory entry. If the machine crashes mid-write, the filesystem can end up <strong>inconsistent</strong> — e.g. a block marked allocated in the bitmap but not referenced by any inode.</p>
+
+  <p>A <strong>journal</strong> (also called a <strong>log</strong>) solves this by writing intended changes to a dedicated region <em>first</em>, then applying them to the main filesystem. On crash recovery, unfinished transactions are either replayed or discarded.</p>
+
+  <div class="flow">
+    <div class="flow-step"><div class="num">1</div><div class="label">Begin transaction</div></div>
+    <div class="arrow">→</div>
+    <div class="flow-step"><div class="num">2</div><div class="label">Write changes to journal</div></div>
+    <div class="arrow">→</div>
+    <div class="flow-step"><div class="num">3</div><div class="label">Commit record (barrier)</div></div>
+    <div class="arrow">→</div>
+    <div class="flow-step"><div class="num">4</div><div class="label">Checkpoint to main FS</div></div>
+    <div class="arrow">→</div>
+    <div class="flow-step"><div class="num">5</div><div class="label">Free journal space</div></div>
+  </div>
+
+  <h3>ext4 Journal Modes</h3>
+
+  <table>
+    <tr><th>Mode</th><th>What's journaled</th><th>Trade-off</th></tr>
+    <tr>
+      <td><code>data=journal</code></td>
+      <td>Both metadata <strong>and</strong> file data</td>
+      <td>Strongest consistency. Every block written twice — slow. Used for database-like workloads that demand full durability.</td>
+    </tr>
+    <tr>
+      <td><code>data=ordered</code> <em>(default)</em></td>
+      <td>Metadata only; data is forced to disk <strong>before</strong> the metadata commit that references it</td>
+      <td>No "old metadata sees new data" windows. Balanced performance. The sane default.</td>
+    </tr>
+    <tr>
+      <td><code>data=writeback</code></td>
+      <td>Metadata only; data can be written <strong>after</strong> the metadata commit</td>
+      <td>Fastest. Post-crash, a file's metadata may point at blocks that haven't been written yet — returning stale or garbage contents. Rarely worth the risk.</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <strong>Note:</strong> A journal protects filesystem <em>structure</em>, not necessarily your application data. If you need an atomic rename or a durable write, use <code>rename()</code> + <code>fsync()</code> — the filesystem will not do it for you implicitly.
+  </div>
+
+  <!-- ===== VFS ===== -->
+  <h2>VFS — The Virtual Filesystem</h2>
+
+  <p>Linux supports dozens of filesystem types. User-space code doesn't care: <code>open()</code>, <code>read()</code>, <code>write()</code>, <code>stat()</code> all behave the same whether the backing store is ext4, XFS, NFS, FUSE, tmpfs, or procfs. This is the <strong>VFS layer</strong> — a kernel abstraction that presents a uniform object-oriented interface over every concrete filesystem.</p>
+
+  <div class="layer-diagram">
+    <div class="layer l7">
+      <span class="layer-num"></span>
+      <span class="layer-name">User-space</span>
+      <span class="layer-protocols">open() read() write() stat() unlink() — libc → syscalls</span>
+    </div>
+    <div class="layer l5">
+      <span class="layer-num"></span>
+      <span class="layer-name">VFS</span>
+      <span class="layer-protocols">struct inode / struct file / struct dentry / struct super_block</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num"></span>
+      <span class="layer-name">Concrete FS</span>
+      <span class="layer-protocols">ext4 / xfs / btrfs / nfs / fuse / tmpfs / overlayfs</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num"></span>
+      <span class="layer-name">Page cache + block layer</span>
+      <span class="layer-protocols">bio submission, I/O scheduler, device-mapper</span>
+    </div>
+    <div class="layer l1">
+      <span class="layer-num"></span>
+      <span class="layer-name">Block device</span>
+      <span class="layer-protocols">NVMe / SATA / virtio-blk / iSCSI LUN</span>
+    </div>
+  </div>
+
+  <p>Each concrete filesystem registers a <code>struct file_operations</code> (and inode/super/address-space op tables). When you call <code>read(fd, …)</code>, the kernel resolves <code>fd</code> to a <code>struct file</code>, finds its <code>f_op-&gt;read_iter</code>, and dispatches into the filesystem driver. It's vtables, all the way down.</p>
+
+  <!-- ===== MOUNTING ===== -->
+  <h2>Mounting</h2>
+
+  <p>Mounting attaches a filesystem to a point in the VFS namespace. The <code>mount(2)</code> syscall takes a source (device or spec string), a target directory, a filesystem type, flags, and type-specific options.</p>
+
+  <div class="terminal">
+<span class="prompt">#</span> mount -t ext4 -o noatime,discard /dev/sda1 /mnt/data
+<span class="prompt">#</span> mount -t xfs   -o noatime,logbsize=256k /dev/sdb1 /srv
+<span class="prompt">#</span> mount -t tmpfs -o size=2G tmpfs /run/cache
+  </div>
+
+  <h3>Bind Mounts</h3>
+  <p>A bind mount exposes an existing directory subtree at another location, without copying. Essential for chroot/container setups.</p>
+
+  <div class="terminal">
+<span class="prompt">#</span> mount --bind  /var/log  /mnt/chroot/var/log   <span class="cm"># flat bind</span>
+<span class="prompt">#</span> mount --rbind /dev      /mnt/chroot/dev        <span class="cm"># recursive: includes /dev/pts, /dev/shm...</span>
+  </div>
+
+  <h3>Mount Propagation Types</h3>
+  <p>Mounts live inside <strong>mount namespaces</strong>. When a namespace is cloned, each mount carries a propagation flag controlling whether subsequent mount/umount events cross the namespace boundary.</p>
+
+  <table>
+    <tr><th>Type</th><th>Behavior</th></tr>
+    <tr><td><code>shared</code></td><td>Mount events propagate in both directions between peers. Default for systemd's root.</td></tr>
+    <tr><td><code>slave</code></td><td>Receives events from the master, doesn't send them back. Used for container runtimes that want to see host mounts but not leak their own.</td></tr>
+    <tr><td><code>private</code></td><td>No propagation in either direction. Isolated.</td></tr>
+    <tr><td><code>unbindable</code></td><td>Private + cannot be bind-mounted elsewhere. Rare.</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>Why this matters:</strong> Docker's default <code>rshared</code> on <code>/</code> is why a mount inside a privileged container can leak onto the host. runc/containerd carefully set propagation to avoid this for unprivileged containers.
+  </div>
+
+  <!-- ===== FSTAB ===== -->
+  <h2>/etc/fstab</h2>
+
+  <p>The mount manifest, read at boot by systemd (via <code>systemd-fstab-generator</code>). Six whitespace-separated fields per line:</p>
+
+  <div class="terminal">
+<span class="output"># &lt;source&gt;                               &lt;mountpoint&gt;  &lt;type&gt;  &lt;options&gt;                       &lt;dump&gt; &lt;pass&gt;
+UUID=3f9a1b6e-...-01                   /             ext4    defaults,errors=remount-ro      0      1
+UUID=6eba52a0-...-02                   /home         xfs     defaults,noatime                0      2
+LABEL=swap                             none          swap    sw                              0      0
+/dev/vg_data/lv_backup                 /backup       xfs     noauto,x-systemd.automount      0      0
+tmpfs                                  /tmp          tmpfs   size=4G,noexec,nosuid,nodev     0      0
+192.0.2.10:/export/share               /mnt/nfs      nfs     rw,_netdev,nofail,x-systemd.after=network-online.target  0 0</span>
+  </div>
+
+  <h3>Source Identifier — Pick Wisely</h3>
+
+  <table>
+    <tr><th>Form</th><th>Stability</th><th>When to use</th></tr>
+    <tr><td><code>/dev/sda1</code></td><td>Low — kernel enumeration order changes when you add/remove disks</td><td>Never, for production</td></tr>
+    <tr><td><code>PARTUUID=</code></td><td>High — GPT partition GUID; stable across FS re-creation</td><td>Boot partitions; when you may <code>mkfs</code> again</td></tr>
+    <tr><td><code>UUID=</code> <em>(preferred)</em></td><td>High — filesystem-level UUID; stable until reformat</td><td>The default for most fstab entries</td></tr>
+    <tr><td><code>LABEL=</code></td><td>Medium — human-set, collision-prone</td><td>Rescue USBs, disposable volumes</td></tr>
+  </table>
+
+  <h3>Important Option Flags</h3>
+  <ul>
+    <li><code>nofail</code> — don't block boot if the source is missing. Essential for non-critical mounts.</li>
+    <li><code>noauto</code> — don't mount at boot; mount explicitly later.</li>
+    <li><code>x-systemd.automount</code> — lazy-mount on first access (fuse-style behavior via systemd).</li>
+    <li><code>x-systemd.after=</code>, <code>_netdev</code> — ordering hints, especially for networked filesystems.</li>
+    <li><code>noatime</code>, <code>relatime</code>, <code>strictatime</code> — control atime updates. Most modern distros use <code>relatime</code> by default.</li>
+    <li><code>dump</code> field — historical, used by the <code>dump(8)</code> backup tool. Almost always <code>0</code>.</li>
+    <li><code>pass</code> field — fsck order at boot. <code>1</code> for root, <code>2</code> for other disks, <code>0</code> to skip.</li>
+  </ul>
+
+  <!-- ===== DURABILITY ===== -->
+  <h2>Durability: fsync, fdatasync, O_DIRECT, Barriers</h2>
+
+  <p>A successful <code>write(2)</code> means the kernel accepted your bytes into the page cache — <strong>not</strong> that they hit stable storage. Between you and the platter sit: page cache, filesystem journal, block layer queues, device write caches. Databases and message brokers care intensely about the details.</p>
+
+  <table>
+    <tr><th>Call</th><th>Guarantee</th></tr>
+    <tr><td><code>write()</code></td><td>Data in page cache. Visible to other readers. Could evaporate on crash.</td></tr>
+    <tr><td><code>fsync(fd)</code></td><td>File data <strong>and</strong> metadata flushed to stable storage. Slow but durable.</td></tr>
+    <tr><td><code>fdatasync(fd)</code></td><td>Data + metadata needed for retrieval (size, but not mtime). Avoids one metadata round-trip. Preferred for databases appending to a log.</td></tr>
+    <tr><td><code>sync</code></td><td>Flushes everything system-wide. Returns after dirty pages are queued (not necessarily stable).</td></tr>
+    <tr><td><code>O_DIRECT</code></td><td>Bypass the page cache entirely. You own alignment. Used by Oracle, PostgreSQL with <code>direct_io</code>, and big DBs to avoid double-buffering.</td></tr>
+    <tr><td><code>O_SYNC</code></td><td>Every write is effectively followed by <code>fsync</code>. Very slow.</td></tr>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Write Barriers</div>
+    <p>A barrier instructs the storage stack: "don't reorder any write after this point ahead of writes before it." Modern kernels implement this with <code>FLUSH</code> and <code>FUA</code> (Force Unit Access) SCSI/NVMe commands. Barriers are on by default on journaled filesystems. Turning them off (<code>nobarrier</code>) buys throughput at the cost of possibly corrupting your journal on power loss — <strong>only safe on battery-backed RAID controllers</strong>.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Cheap SSDs and consumer disks</strong> frequently lie about FLUSH — they acknowledge the command before data is actually on non-volatile storage. This is the root cause of many "my database corrupted after an unclean shutdown" post-mortems. Enterprise drives with power-loss protection don't lie.
+  </div>
+
+  <!-- ===== FSCK ===== -->
+  <h2>fsck: The Filesystem Checker</h2>
+
+  <p><code>fsck</code> walks the filesystem structures, detects inconsistencies, and repairs them. It's both a safety net and a footgun.</p>
+
+  <ul>
+    <li>Runs at boot via the <code>pass</code> column of fstab.</li>
+    <li>Triggered every N mounts or T days on ext filesystems — tune with <code>tune2fs -c &lt;count&gt; -i &lt;interval&gt;</code>.</li>
+    <li>Force a check: <code>fsck -f /dev/sdaX</code>.</li>
+    <li>For XFS, the userspace tool is <code>xfs_repair</code>, and XFS also does metadata-only log replay at mount.</li>
+  </ul>
+
+  <div class="warn">
+    <strong>Never run fsck on a mounted filesystem.</strong> It reads and writes metadata structures out from under the live kernel driver — guaranteed corruption. Unmount or boot into single-user/rescue mode first. Read-only mounts still risk correct diagnosis because in-flight metadata may not match disk.
+  </div>
+
+  <!-- ===== PSEUDO FILESYSTEMS ===== -->
+  <h2>Pseudo-Filesystems</h2>
+
+  <p>Not every filesystem is backed by a block device. Several kernel filesystems exist purely to present kernel state or RAM through the familiar file API.</p>
+
+  <table>
+    <tr><th>FS</th><th>Backed by</th><th>Purpose</th></tr>
+    <tr><td><code>tmpfs</code></td><td>RAM (swappable)</td><td>Fast scratch space. <code>/run</code>, <code>/tmp</code> on many distros, Kubernetes emptyDir <code>medium: Memory</code>.</td></tr>
+    <tr><td><code>proc</code></td><td>Kernel accessor functions</td><td>Process-level info: <code>/proc/&lt;pid&gt;/maps</code>, <code>/proc/cpuinfo</code>, <code>/proc/mounts</code>.</td></tr>
+    <tr><td><code>sys</code></td><td>Kernel object model (kobjects)</td><td>Device / driver / subsystem attributes. Tuning lives here: <code>/sys/block/sda/queue/scheduler</code>.</td></tr>
+    <tr><td><code>devtmpfs</code></td><td>Kernel-managed RAM</td><td>Device nodes under <code>/dev</code>. Created automatically as hardware appears. Replaces the old static <code>/dev</code>.</td></tr>
+    <tr><td><code>cgroup</code> / <code>cgroup2</code></td><td>Kernel cgroup subsystem</td><td>Resource control tree. cgroup v2 is the unified hierarchy — <code>/sys/fs/cgroup/</code> on modern systems.</td></tr>
+    <tr><td><code>overlay</code></td><td>Two or more underlying directories</td><td>Stacked read-only lower + read-write upper. The backbone of container images (Docker, containerd).</td></tr>
+    <tr><td><code>fusefs</code></td><td>User-space daemon</td><td>Implement filesystems without kernel code. sshfs, rclone-mount, encfs.</td></tr>
+    <tr><td><code>nfs</code>, <code>cifs</code>, <code>9p</code></td><td>Network</td><td>Remote filesystems exposed via the VFS. Same <code>read()</code>/<code>write()</code>, different backend.</td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>Why this design is elegant:</strong> the VFS lets "everything is a file" scale from <code>/etc/hostname</code> on ext4 to <code>/sys/fs/cgroup/cpu.max</code> in kernel memory to <code>/mnt/s3/object</code> served by a FUSE daemon — all reachable with the same syscalls.
+  </div>
+
+  <!-- ===== TAKEAWAYS ===== -->
+  <h2>Takeaways</h2>
+  <ul>
+    <li>Filesystems impose structure on a flat block device: superblock → block groups → inodes → dentries → data.</li>
+    <li>An inode is metadata + pointers; the filename is stored in the parent directory's dentry list.</li>
+    <li>Extents replaced indirect blocks — big win for large contiguous files.</li>
+    <li>ext pre-allocates inodes; XFS allocates them dynamically. Plan accordingly on small-file workloads.</li>
+    <li>Journaling protects filesystem <em>structure</em>. For application durability, use <code>fsync</code>/<code>fdatasync</code>.</li>
+    <li>VFS is the kernel abstraction that makes ext4, NFS, and procfs look identical to user space.</li>
+    <li>Mount namespaces + propagation types are what make container runtimes possible.</li>
+    <li>Prefer <code>UUID=</code> in fstab. Add <code>nofail</code> to optional mounts.</li>
+    <li>Never run <code>fsck</code> on a mounted filesystem.</li>
+  </ul>
+
+<script src="../nav.js"></script>
+</body>
+</html>

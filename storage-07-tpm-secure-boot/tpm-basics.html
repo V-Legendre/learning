@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 07 — TPM Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 07 — TPM Fundamentals</h1>
+  <p class="subtitle">Trusted Platform Module — sealing secrets to hardware state</p>
+
+  <!-- ===== WHAT A TPM IS ===== -->
+  <h2>What a TPM Actually Is</h2>
+
+  <p>A <strong>Trusted Platform Module</strong> is a dedicated secure crypto-processor specified by the <strong>Trusted Computing Group (TCG)</strong>. Its purpose is narrow but fundamental: perform cryptographic operations and store keys and integrity measurements <em>inside tamper-resistant hardware</em>, so that even a fully compromised operating system cannot extract or forge them.</p>
+
+  <div class="panel">
+    <div class="panel-title">The Threat Model</div>
+    <p>The TPM treats the host CPU, kernel, and firmware as <strong>potentially untrusted</strong>. Its entire design is built around the idea that software on the main CPU may lie — so any secret worth protecting must never live there in usable form, and any measurement worth trusting must be captured by a separate observer.</p>
+  </div>
+
+  <h3>What the Chip Does</h3>
+  <ul>
+    <li><strong>Generate keys</strong> that physically never leave the chip — the private key is created inside the TPM and can only be used through TPM commands.</li>
+    <li><strong>Sign, encrypt, decrypt, hash</strong> using those keys on behalf of the host.</li>
+    <li><strong>Store integrity measurements</strong> (hashes) in special registers (PCRs).</li>
+    <li><strong>Attest</strong> to platform state — produce a signed statement of what has been measured.</li>
+    <li><strong>Enforce policies</strong> on when a key can be used (e.g. only if PCRs match a sealed value, or only if a PIN is provided).</li>
+  </ul>
+
+  <div class="note">
+    <strong>Not a crypto accelerator:</strong> TPMs are slow — often SPI-connected at megahertz speeds with tiny RAM. They are called occasionally, not in data paths. Use the CPU's AES-NI for bulk crypto and the TPM only for key protection, sealing, and attestation.
+  </div>
+
+  <!-- ===== TPM 1.2 vs 2.0 ===== -->
+  <h2>TPM 1.2 vs TPM 2.0</h2>
+
+  <p>TPM 2.0 is a redesign, not an increment. It replaces a fixed, rigid spec with a flexible <em>algorithm-agile</em> architecture. If you are enrolling a disk today, you are almost certainly on TPM 2.0 — TPM 1.2 is deprecated.</p>
+
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>TPM 1.2</th><th>TPM 2.0</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Hash algorithms</td><td>SHA-1 only</td><td>SHA-1, SHA-256, SHA-384, SHA-512 (per-bank)</td></tr>
+      <tr><td>Asymmetric keys</td><td>RSA only (2048)</td><td>RSA + ECC (NIST P-256, P-384)</td></tr>
+      <tr><td>Hierarchies</td><td>Single owner</td><td>Platform, Storage, Endorsement, Null</td></tr>
+      <tr><td>Algorithm agility</td><td>None — fixed spec</td><td>Profiles; new algorithms can be added</td></tr>
+      <tr><td>PCR banks</td><td>One (SHA-1)</td><td>One bank per hash algorithm</td></tr>
+      <tr><td>Status</td><td>Deprecated</td><td>Recommended; required by Windows 11</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>SHA-1 deprecation:</strong> Many TPM 2.0 chips still expose a SHA-1 PCR bank for compatibility. Do not seal to it — use the SHA-256 bank exclusively.
+  </div>
+
+  <!-- ===== PHYSICAL TYPES ===== -->
+  <h2>Physical Types</h2>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title" style="color:#34d399;">Discrete TPM (dTPM)</div>
+      <p>A dedicated chip soldered to the motherboard, connected via LPC or SPI. Vendors: Infineon SLB 9670, STMicro ST33, Nuvoton NPCT. Physically isolated silicon, its own RAM and ROM.</p>
+      <p><strong>Strength:</strong> strongest tamper resistance; probing requires physical attack on the chip itself. Certified against FIPS 140-2 / Common Criteria.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#fbbf24;">Firmware TPM (fTPM)</div>
+      <p>Runs as firmware inside the CPU's secure enclave. Intel calls this <strong>PTT</strong> (Platform Trust Technology, inside the ME); AMD calls it <strong>fTPM</strong> (inside the PSP). No separate chip.</p>
+      <p><strong>Trade-off:</strong> shares the CPU die, so side-channel attacks against the CPU (e.g. voltage glitching) can reach it. Good enough for most commodity servers and laptops.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#a78bfa;">Software TPM (swtpm)</div>
+      <p>Pure-software emulation, used inside VMs. QEMU + <code>swtpm</code> provide a virtual TPM 2.0 to the guest over a socket. Proxmox exposes this as "Add TPM State" on a VM.</p>
+      <p><strong>Trust boundary:</strong> only as strong as the hypervisor. The TPM's keys live on the host disk — this is isolation, not hardware rooting.</p>
+    </div>
+  </div>
+
+  <!-- ===== HIERARCHIES ===== -->
+  <h2>Hierarchies (TPM 2.0)</h2>
+
+  <p>TPM 2.0 partitions the chip into four <strong>hierarchies</strong>. Each is an independent tree of keys with its own primary seed, its own owner password, and its own enable/disable flag. This separation ensures the platform firmware, the OS, and the manufacturer do not step on each other.</p>
+
+  <div class="layer-diagram" style="max-width:820px;">
+    <div class="layer l7">
+      <span class="layer-num">P</span>
+      <span class="layer-name">Platform</span>
+      <span class="layer-pdu">firmware-owned</span>
+      <span class="layer-protocols">Used by UEFI/BIOS for platform config; locked out of OS after boot via <code>TPM2_HierarchyControl</code></span>
+    </div>
+    <div class="layer l5">
+      <span class="layer-num">S</span>
+      <span class="layer-name">Storage (Owner)</span>
+      <span class="layer-pdu">user/OS-owned</span>
+      <span class="layer-protocols">General-purpose key storage. This is where LUKS-sealed keys live; SRK is derived here.</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num">E</span>
+      <span class="layer-name">Endorsement</span>
+      <span class="layer-pdu">manufacturer</span>
+      <span class="layer-protocols">Holds the Endorsement Key (EK) and its certificate; used for device identity / attestation</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num">N</span>
+      <span class="layer-name">Null</span>
+      <span class="layer-pdu">ephemeral</span>
+      <span class="layer-protocols">Cleared on every reboot; useful for throw-away session keys</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Ownership matters:</strong> Each hierarchy has its own <em>owner hierarchy password</em> (the "authValue"). Setting or clearing it via <code>tpm2_changeauth</code> or a BIOS "Clear TPM" operation wipes keys rooted in that hierarchy. A BIOS "Clear TPM" typically clears Storage and Endorsement — any LUKS slot sealed under them becomes unrecoverable.
+  </div>
+
+  <!-- ===== PCRs ===== -->
+  <h2>PCRs — The Core Concept</h2>
+
+  <p><strong>Platform Configuration Registers</strong> are fixed-size registers (one hash-width each) that record integrity measurements of what has booted. They are the mechanism that makes "sealing to platform state" possible.</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">Extend-only, never written</div>
+      <p>You cannot write an arbitrary value into a PCR. The only operation is <strong>extend</strong>:</p>
+      <pre><code>PCR[n] &larr; H( PCR[n] &Vert; new_data )</code></pre>
+      <p>This is an append-only hash chain. Given the sequence of extensions you can reproduce the final PCR value, but you cannot produce a target PCR value without replaying the exact same sequence.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Reset only at power-on</div>
+      <p>PCRs 0-22 are reset <em>only</em> when the chip is powered off. No software command can roll them back. A malicious kernel cannot "undo" a measurement of itself. PCR 23 is the exception — an application-scoped debug register that <em>can</em> be reset at runtime.</p>
+    </div>
+  </div>
+
+  <p>TPM 2.0 maintains a separate <strong>bank of 24 PCRs per hash algorithm</strong>. The SHA-256 bank is what everything modern uses. Every extend operation propagates to every enabled bank simultaneously (same input, different hash).</p>
+
+  <h3>Standard PCR Assignments</h3>
+  <p>From the TCG <em>PC Client Platform Firmware Profile</em>:</p>
+
+  <table>
+    <thead>
+      <tr><th>PCR</th><th>What it measures</th><th>Who extends it</th><th>Changes on...</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>0</strong></td><td>Firmware executable code (UEFI CRTM + core)</td><td>Firmware</td><td>BIOS/UEFI update</td></tr>
+      <tr><td><strong>1</strong></td><td>Firmware configuration / data (NVRAM)</td><td>Firmware</td><td>BIOS setting changes</td></tr>
+      <tr><td><strong>2</strong></td><td>Option ROM executable code</td><td>Firmware</td><td>GPU / HBA / NIC firmware changes</td></tr>
+      <tr><td><strong>3</strong></td><td>Option ROM configuration / data</td><td>Firmware</td><td>Add-in card config</td></tr>
+      <tr><td><strong>4</strong></td><td>Boot Manager / bootloader code (shim, GRUB)</td><td>Firmware</td><td>Bootloader update</td></tr>
+      <tr><td><strong>5</strong></td><td>Boot manager config (boot entries, EFI vars)</td><td>Firmware</td><td>Boot order / entry edits</td></tr>
+      <tr><td><strong>6</strong></td><td>Platform-specific (host platform events)</td><td>Firmware (often unused)</td><td>Rare</td></tr>
+      <tr><td><strong>7</strong></td><td>Secure Boot policy: PK, KEK, db, dbx, MOK list</td><td>Firmware</td><td>SB on/off, new MOK, dbx update</td></tr>
+      <tr><td><strong>8</strong></td><td>Bootloader-measured: kernel command line (GRUB)</td><td>Bootloader</td><td>Kernel cmdline change</td></tr>
+      <tr><td><strong>9</strong></td><td>Bootloader-measured: kernel + initrd</td><td>Bootloader</td><td>Kernel / initramfs update</td></tr>
+      <tr><td><strong>10</strong></td><td>IMA (Integrity Measurement Architecture)</td><td>Kernel</td><td>Every IMA-tracked file access</td></tr>
+      <tr><td><strong>11</strong></td><td>Unified Kernel Image (UKI) measurement</td><td>systemd-stub</td><td>UKI update</td></tr>
+      <tr><td><strong>14</strong></td><td>shim's MOK (Machine Owner Key) list</td><td>shim</td><td>MOK enrollment</td></tr>
+      <tr><td><strong>23</strong></td><td>Debug / application (resettable)</td><td>Userspace</td><td>At will</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== MEASURED BOOT ===== -->
+  <h2>Measured Boot</h2>
+
+  <p>Measured boot is the chain of extensions that fills PCRs 0-9. Each stage of the boot process hashes the next stage <strong>before transferring control to it</strong>, and extends that hash into the appropriate PCR. The TPM accumulates an unforgeable fingerprint of exactly what ran.</p>
+
+  <div class="panel">
+    <div class="panel-title">Core Root of Trust for Measurement (CRTM)</div>
+    <p>The very first measurement must come from something that cannot be compromised before it measures itself — the <strong>CRTM</strong>, a small piece of immutable firmware (typically ROM) that boots first. It measures itself and the rest of the firmware into PCR 0, then hands off.</p>
+  </div>
+
+  <h3>The Measurement Chain</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">CRTM / UEFI</div>
+      <div class="desc">Measures firmware code & config<br>&rarr; PCR 0, 1, 2, 3</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">UEFI</div>
+      <div class="desc">Hashes shim, logs SB policy<br>&rarr; PCR 4, 7</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">shim</div>
+      <div class="desc">Hashes GRUB + MOK list<br>&rarr; PCR 4, 14</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">GRUB</div>
+      <div class="desc">Hashes kernel cmdline<br>&rarr; PCR 8</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">GRUB</div>
+      <div class="desc">Hashes kernel + initrd<br>&rarr; PCR 9</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">6</div>
+      <div class="label">Kernel</div>
+      <div class="desc">(Optional) IMA extends PCR 10</div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Key property:</strong> because each PCR is a hash chain that can only be reset at power-on, the final vector of PCR values is a <em>unique fingerprint</em> of the entire boot path. Any substitution anywhere in the chain produces a different final PCR — which is exactly what sealing exploits.
+  </div>
+
+  <!-- ===== SEALING ===== -->
+  <h2>Sealing &amp; Unsealing</h2>
+
+  <p><strong>Sealing</strong> is encrypting a blob of data under a TPM-internal key <em>with a policy</em> that restricts when the TPM will release the plaintext. The most common policy is <code>PolicyPCR</code>: "only unseal if the current PCR values match these specific values".</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header" style="background:#e9456033; color:#e94560;">SEAL (at enrollment)</div>
+      <div class="comp-body">
+        <ol>
+          <li>Generate secret <code>K</code> on host (or inside TPM).</li>
+          <li>Read current PCR values for chosen selection.</li>
+          <li>Build a <strong>policy digest</strong> binding to those PCRs.</li>
+          <li>TPM encrypts <code>K</code> under the Storage Root Key with the policy attached.</li>
+          <li>Store the resulting ciphertext ("sealed blob") on plain disk — it is useless without the TPM.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header" style="background:#34d39933; color:#34d399;">UNSEAL (at boot)</div>
+      <div class="comp-body">
+        <ol>
+          <li>Host hands the sealed blob + policy to the TPM.</li>
+          <li>TPM computes current PCR digest.</li>
+          <li>Compares against the sealed policy digest.</li>
+          <li>Match &rarr; decrypts <code>K</code>, returns it.</li>
+          <li>Mismatch &rarr; returns <code>TPM_RC_POLICY_FAIL</code>, never touches the plaintext.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <p>The secret <code>K</code> never appears outside the TPM unless the policy is satisfied. If a malicious bootloader is substituted, PCR 4 changes, the digest differs, and unseal fails. The attacker has the ciphertext but cannot decrypt it — and <em>cannot</em> lie to the TPM about PCR values, because the TPM checks them itself.</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> tpm2_createprimary -C o -c primary.ctx
+<span class="prompt">$</span> tpm2_create -C primary.ctx -u seal.pub -r seal.priv \
+      -i secret.bin \
+      -L policy.digest
+<span class="prompt">$</span> <span class="output"># later, at boot:</span>
+<span class="prompt">$</span> tpm2_load -C primary.ctx -u seal.pub -r seal.priv -c seal.ctx
+<span class="prompt">$</span> tpm2_unseal -c seal.ctx -p "policypcr:sha256:7=abcd..."
+<span class="output">&lt;secret bytes&gt;</span>
+  </div>
+
+  <!-- ===== REMOTE ATTESTATION ===== -->
+  <h2>Remote Attestation</h2>
+
+  <p>Sealing is <strong>local</strong> — the TPM gates access to a secret based on its own PCRs. <strong>Remote attestation</strong> is the network version: the TPM produces a signed statement of its PCR values that a remote verifier can check.</p>
+
+  <div class="seq-diagram" style="max-width:700px;">
+    <div class="seq-header">
+      <div class="seq-entity">Verifier</div>
+      <div class="seq-entity">Host TPM</div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right" style="position:relative;">
+        <div class="seq-line"><span class="seq-label">1. nonce + PCR selection</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-left" style="position:relative;">
+        <div class="seq-line"><span class="seq-label">2. Quote signed by AIK + event log</span></div>
+      </div>
+    </div>
+    <div class="seq-row">
+      <div class="seq-arrow-right" style="position:relative;">
+        <div class="seq-line"><span class="seq-label">3. Verify AIK cert chain &amp; PCRs vs. golden values</span></div>
+      </div>
+    </div>
+  </div>
+
+  <ul>
+    <li>A <strong>Quote</strong> is signed by an <strong>Attestation Identity Key (AIK)</strong>, which is itself certified as belonging to a TPM by a chain rooted at the <strong>Endorsement Key (EK)</strong>.</li>
+    <li>The verifier checks the signature (proving the quote came from a genuine TPM) and compares the reported PCR values against known-good "golden" values.</li>
+    <li>A fresh <strong>nonce</strong> in the request prevents replay.</li>
+    <li><strong>Use case:</strong> zero-trust bootstrapping — a newly-booted server proves its firmware/kernel state to a KMS before receiving workload secrets.</li>
+  </ul>
+
+  <div class="note">
+    <strong>Operational reality:</strong> attestation is dramatically more complex to deploy than local sealing. You need an EK cert store, an AIK enrollment service, a policy engine, and golden value management across fleet updates. It shows up mostly in confidential computing and high-assurance environments.
+  </div>
+
+  <!-- ===== TOOLS ===== -->
+  <h2>The tpm2-tools Suite</h2>
+
+  <table>
+    <thead>
+      <tr><th>Command</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>tpm2_pcrread</code></td><td>Dump all PCRs in a bank (e.g. <code>tpm2_pcrread sha256</code>)</td></tr>
+      <tr><td><code>tpm2_pcrextend</code></td><td>Test-extend a PCR (useful on PCR 23 for experimenting)</td></tr>
+      <tr><td><code>tpm2_createprimary</code></td><td>Create a primary (SRK-like) object in a hierarchy</td></tr>
+      <tr><td><code>tpm2_create</code></td><td>Create a child key / sealed object under a primary</td></tr>
+      <tr><td><code>tpm2_seal</code> / <code>tpm2_unseal</code></td><td>Seal and unseal data under a policy</td></tr>
+      <tr><td><code>tpm2_policypcr</code></td><td>Build a PCR policy digest for sealing</td></tr>
+      <tr><td><code>tpm2_eventlog</code></td><td>Parse the UEFI event log into human-readable form</td></tr>
+      <tr><td><code>tpm2_getcap</code></td><td>Query capabilities: algorithms, PCR banks, handles</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Reading PCRs</h3>
+
+  <div class="terminal">
+<span class="prompt">$</span> tpm2_pcrread sha256
+<span class="output">  sha256:
+    0 : 0x5B8D8A2E9E11C5A4A2D3F10B... (firmware)
+    1 : 0x9F4C67E1B2E9A17D4F0C8B25... (firmware config)
+    2 : 0x3D4B5C6D7E8F9A0B1C2D3E4F... (option ROMs)
+    3 : 0x0000000000000000000000...  (unextended)
+    4 : 0xA1B2C3D4E5F67890A1B2C3D4... (shim + grub)
+    5 : 0x11223344556677889900AABB... (boot mgr cfg)
+    7 : 0x7F8E6D5C4B3A29180A1B2C3D... (SB policy)
+    8 : 0xDEADBEEF0000000000000000... (cmdline)
+    9 : 0xCAFEBABE0000000000000000... (kernel+initrd)
+   10 : 0x0000000000000000000000...  (IMA disabled)
+   23 : 0x0000000000000000000000...  (resettable)</span>
+  </div>
+
+  <h3>The Event Log</h3>
+
+  <p>The firmware publishes a log of <em>what it extended and why</em> to <code>/sys/kernel/security/tpm0/binary_bios_measurements</code>. The PCRs are the authoritative hash; the event log is the (untrusted but useful) narrative. Replaying the log should reproduce the PCR values — if it doesn't, the log has been tampered with (or the TPM was extended by something that didn't log).</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
+<span class="output">---
+events:
+  - EventNum: 0
+    PCRIndex: 0
+    EventType: EV_S_CRTM_VERSION
+    Digest:   "5b8d8a2e9e11c5a4..."
+    Event:    "UEFI v2.70 (EDK II, 2023-11-01)"
+  - EventNum: 3
+    PCRIndex: 4
+    EventType: EV_EFI_BOOT_SERVICES_APPLICATION
+    Digest:   "a1b2c3d4e5f67890..."
+    Event:    "\EFI\ubuntu\shimx64.efi"
+  - EventNum: 7
+    PCRIndex: 7
+    EventType: EV_EFI_VARIABLE_DRIVER_CONFIG
+    Digest:   "7f8e6d5c4b3a2918..."
+    Event:    "SecureBoot = 1"
+  ...</span>
+  </div>
+
+  <!-- ===== DEVICE NODES & RESOURCE MANAGER ===== -->
+  <h2>Device Nodes &amp; the Resource Manager</h2>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title" style="color:#f87171;">/dev/tpm0 — raw</div>
+      <ul>
+        <li>Direct access to the TPM command interface.</li>
+        <li><strong>Single-open</strong>: only one process at a time — concurrent users block each other.</li>
+        <li>Requires root.</li>
+        <li>Caller must manage transient object slots manually; no arbitration.</li>
+        <li>Generally <em>do not use</em> unless you are writing a resource manager.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="color:#34d399;">/dev/tpmrm0 — Resource Manager</div>
+      <ul>
+        <li>Introduced in Linux 4.12; provided by the kernel itself.</li>
+        <li>Multiplexes multiple userspace clients transparently.</li>
+        <li>Swaps transient TPM objects in and out of the chip's limited slots.</li>
+        <li>What <code>tpm2-tools</code> use by default (<code>--tcti=device:/dev/tpmrm0</code>).</li>
+        <li>Supersedes the older userspace <code>tpm2-abrmd</code> daemon on modern distros.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Detecting a TPM</h3>
+
+  <div class="terminal">
+<span class="prompt">$</span> ls /dev/tpm*
+<span class="output">/dev/tpm0  /dev/tpmrm0</span>
+<span class="prompt">$</span> cat /sys/class/tpm/tpm0/tpm_version_major
+<span class="output">2</span>
+<span class="prompt">$</span> cat /sys/class/tpm/tpm0/device/description 2&gt;/dev/null
+<span class="output">STMicroelectronics ST33</span>
+<span class="prompt">$</span> systemd-cryptenroll --tpm2-device=list
+<span class="output">PATH        DEVICE         DRIVER
+/dev/tpmrm0 STMicro ST33   tpm_crb</span>
+  </div>
+
+  <div class="tip">
+    <strong>Proxmox note:</strong> On a VM, <code>Hardware &rarr; Add &rarr; TPM State</code> attaches a <code>swtpm</code>-backed device. The guest sees <code>/dev/tpmrm0</code> identically to a physical machine, but the TPM's keys live in a file under <code>/var/lib/vz/images/&lt;vmid&gt;/</code>. Back that file up alongside the VM disks — and encrypt it, because anyone with it owns the "TPM".
+  </div>
+
+  <!-- ===== LINK FORWARD ===== -->
+  <h2>Where This Leads</h2>
+
+  <p>The next page builds directly on these primitives: UEFI Secure Boot provides the <em>enforcement</em> half (won't run unsigned code), measured boot into PCRs provides the <em>recording</em> half, and <code>systemd-cryptenroll</code> seals a LUKS key slot under a PCR policy so that a disk auto-unlocks only when the expected boot chain ran. Storage 06 covered LUKS2 and its key slots; everything in this capstone is adding a TPM-sealed slot to that picture.</p>
+
+<script src="../nav.js"></script>
+</body>
+</html>

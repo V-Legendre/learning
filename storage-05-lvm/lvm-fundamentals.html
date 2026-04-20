@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 05 — LVM Fundamentals</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 05 &mdash; LVM Fundamentals</h1>
+  <p class="subtitle">Physical Volumes, Volume Groups, and Logical Volumes</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- What LVM Is                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>What LVM Is</h2>
+
+  <p><strong>LVM</strong> (Logical Volume Manager) is an abstraction layer that sits between
+     raw block devices and the filesystems running on top of them. Instead of binding a filesystem
+     directly to a partition, LVM pools one or more block devices together and carves out
+     virtual block devices of arbitrary size from that pool.</p>
+
+  <div class="panel">
+    <div class="panel-title">Why It Exists</div>
+    <p>Partitions are static. Resizing them is fragile and usually offline.
+       LVM makes the mapping from physical capacity to exposed volumes a runtime concern:</p>
+    <ul>
+      <li><strong>Resize volumes online</strong> &mdash; grow (and sometimes shrink) while in use</li>
+      <li><strong>Add / remove disks</strong> without re-partitioning the filesystem</li>
+      <li><strong>Move data between disks</strong> while applications keep writing (<code>pvmove</code>)</li>
+      <li><strong>Snapshot</strong> at the block layer for backups and rollback</li>
+      <li><strong>Thin-provision</strong> &mdash; allocate on demand, over-commit capacity (see <a href="./thin-provisioning-snapshots.html">Thin Provisioning &amp; Snapshots</a>)</li>
+      <li><strong>RAID</strong> via dm-raid with the same kernel code as mdadm</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Under the hood:</strong> LVM is built entirely on <strong>device-mapper</strong>.
+    Every LV is a <code>dm</code> device with a specific target (linear, striped, raid, thin, mirror, cache&hellip;).
+    See <a href="../storage-04-device-mapper/device-mapper.html">Device Mapper</a> for the primitives
+    &mdash; this page focuses on how LVM composes them into a usable system.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- The Three-Level Model                    -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>The Three-Level Model</h2>
+
+  <p>LVM has exactly three logical layers. Master the boundaries between them
+     and the rest of the command surface follows.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Filesystem&nbsp;&nbsp;(ext4 / xfs / btrfs)</div>
+    <div class="encap-layer tcp">Logical Volume (LV) &mdash; <code>/dev/vg/lv</code> &mdash; virtual block device</div>
+    <div class="encap-layer ip">Volume Group (VG) &mdash; allocation pool of Physical Extents</div>
+    <div class="encap-layer eth">Physical Volume (PV) &mdash; initialized block device</div>
+    <div class="encap-layer phys">Block device (disk, partition, md, LUKS mapping&hellip;)</div>
+  </div>
+
+  <h3>Physical Volume (PV)</h3>
+  <p>A PV is any block device that has been initialized for LVM use. It can be
+     a whole disk, a partition, an mdadm RAID array, a LUKS mapping, an iSCSI LUN,
+     anything that exposes a stable block interface. <code>pvcreate</code> writes a
+     small metadata header (the LVM label) at the start of the device and divides the rest
+     into fixed-size <strong>Physical Extents (PEs)</strong>.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> pvcreate /dev/sdb1
+<span class="output">  Physical volume "/dev/sdb1" successfully created.</span>
+
+<span class="prompt">root@host:~#</span> pvs
+<span class="output">  PV         VG    Fmt  Attr PSize    PFree
+  /dev/sdb1  data  lvm2 a--  &lt;1.82t   0
+  /dev/sdc1  data  lvm2 a--  &lt;1.82t   120.00g
+  /dev/sdd1        lvm2 ---   931.51g 931.51g</span></pre>
+
+  <h3>Volume Group (VG)</h3>
+  <p>A VG is a pool built from one or more PVs. Once a PV is in a VG, its PEs
+     become indistinguishable members of a single allocation pool &mdash; the VG doesn&rsquo;t
+     care which disk they live on (unless you tell it to care, via allocation policies
+     or striping). The VG is the unit you name meaningfully: <code>data</code>, <code>vg_ssd</code>,
+     <code>pve</code>, <code>nvme0</code>&hellip;</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> vgcreate data /dev/sdb1 /dev/sdc1
+<span class="output">  Volume group "data" successfully created</span>
+
+<span class="prompt">root@host:~#</span> vgs
+<span class="output">  VG    #PV #LV #SN Attr   VSize  VFree
+  data    2   0   0 wz--n- 3.64t  3.64t</span></pre>
+
+  <h3>Logical Volume (LV)</h3>
+  <p>An LV is a virtual block device allocated from a VG. It has a size, a type
+     (linear, striped, raid, thin, mirror, cache), and appears in <code>/dev</code> as both
+     <code>/dev/&lt;vg&gt;/&lt;lv&gt;</code> (symlink) and <code>/dev/mapper/&lt;vg&gt;-&lt;lv&gt;</code> (the actual dm node).</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> lvcreate -L 100G -n mydata data
+<span class="output">  Logical volume "mydata" created.</span>
+
+<span class="prompt">root@host:~#</span> ls -l /dev/data/mydata /dev/mapper/data-mydata
+<span class="output">lrwxrwxrwx 1 root root  7 Apr 20 10:00 /dev/data/mydata -> ../dm-3
+lrwxrwxrwx 1 root root  7 Apr 20 10:00 /dev/mapper/data-mydata -> ../dm-3</span>
+
+<span class="prompt">root@host:~#</span> mkfs.xfs /dev/data/mydata &amp;&amp; mount /dev/data/mydata /data</pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Physical Extents                         -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Physical Extents (PE)</h2>
+
+  <p>The <strong>PE</strong> is LVM&rsquo;s unit of allocation. Default size is <strong>4&nbsp;MiB</strong>
+     (configurable at <code>vgcreate</code> time with <code>-s</code>). Every allocation decision &mdash;
+     creating an LV, extending one, moving data &mdash; happens in whole PEs.</p>
+
+  <ul>
+    <li>A 100&nbsp;GiB LV = 25,600 PEs at the default 4&nbsp;MiB</li>
+    <li>The VG tracks the free PE count across all member PVs</li>
+    <li>Linear LVs claim contiguous PEs (on a single PV when possible, spanning PVs when needed)</li>
+    <li>Striped LVs interleave PEs across PVs in a round-robin pattern</li>
+  </ul>
+
+  <p>Think of the VG as a grid of PE cells distributed across PVs. An LV is a set of cells
+     marked as belonging to it. The mapping lives in the VG metadata &mdash; not in any on-disk
+     structure of the LV itself.</p>
+
+  <div class="panel">
+    <div class="panel-title">PE grid &mdash; simplified view of a VG with 2 PVs</div>
+<pre>              PV1 (/dev/sdb1)                   PV2 (/dev/sdc1)
+         ┌───┬───┬───┬───┬───┬───┐         ┌───┬───┬───┬───┬───┬───┐
+         │ A │ A │ A │ A │ B │ B │         │ B │ B │ C │ C │ . │ . │
+         ├───┼───┼───┼───┼───┼───┤         ├───┼───┼───┼───┼───┼───┤
+         │ A │ A │ A │ A │ . │ . │         │ . │ . │ C │ C │ . │ . │
+         └───┴───┴───┴───┴───┴───┘         └───┴───┴───┴───┴───┴───┘
+
+         A = LV "mydata"   (8 PEs, linear on PV1)
+         B = LV "logs"     (4 PEs, spans PV1 → PV2, linear)
+         C = LV "scratch"  (4 PEs, on PV2)
+         . = free PE</pre>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- LV Types                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>LV Types</h2>
+
+  <p>The LV <strong>type</strong> chooses which dm target backs the volume. The default
+     is <code>linear</code>; everything else you ask for explicitly.</p>
+
+  <table>
+    <tr>
+      <th>Type</th>
+      <th>dm target</th>
+      <th>Purpose</th>
+      <th>Create</th>
+    </tr>
+    <tr>
+      <td><strong>linear</strong> <em>(default)</em></td>
+      <td>dm-linear</td>
+      <td>Contiguous PE allocation, may span multiple PVs</td>
+      <td><code>lvcreate -L 100G -n lv vg</code></td>
+    </tr>
+    <tr>
+      <td><strong>striped</strong></td>
+      <td>dm-stripe</td>
+      <td>Interleave PEs across N PVs for parallel I/O</td>
+      <td><code>lvcreate -L 100G -i 4 -I 64 -n lv vg</code></td>
+    </tr>
+    <tr>
+      <td><strong>mirror</strong> <em>(legacy)</em></td>
+      <td>dm-mirror</td>
+      <td>Synchronous copies &mdash; prefer raid1</td>
+      <td><code>lvcreate --type mirror -m1 -L 100G&hellip;</code></td>
+    </tr>
+    <tr>
+      <td><strong>raid1/4/5/6/10</strong></td>
+      <td>dm-raid (MD code)</td>
+      <td>Modern RAID levels via the kernel MD stack</td>
+      <td><code>lvcreate --type raid5 -i 3 -L 300G&hellip;</code></td>
+    </tr>
+    <tr>
+      <td><strong>thin</strong></td>
+      <td>dm-thin</td>
+      <td>Allocate on demand from a thin pool</td>
+      <td>See <a href="./thin-provisioning-snapshots.html">thin-provisioning-snapshots.html</a></td>
+    </tr>
+    <tr>
+      <td><strong>cache</strong></td>
+      <td>dm-cache</td>
+      <td>Front a slow LV with an SSD-backed cache pool</td>
+      <td>See thin/snapshots page</td>
+    </tr>
+    <tr>
+      <td><strong>snapshot</strong> <em>(traditional)</em></td>
+      <td>dm-snapshot</td>
+      <td>Short-lived CoW overlay of an origin LV</td>
+      <td><code>lvcreate -s -L 10G -n snap vg/origin</code></td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Striping tuning:</strong> <code>-i N</code> is the stripe count (number of PVs),
+    <code>-I stripesize</code> is in KiB (default 64). Choose a stripe size that matches
+    the dominant I/O unit &mdash; larger for sequential, smaller for random.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- LVM Metadata                             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>LVM Metadata</h2>
+
+  <p>LVM metadata describes the entire VG: PV UUIDs, PE allocations, LV names, types, and extent maps.
+     It is stored <strong>on every PV</strong> in the VG by default (redundant copies), in a
+     <strong>human-readable text format</strong> inside the first few MiB of each PV. When you run any
+     LVM command, it reads metadata from a quorum of PVs and writes updates back atomically.</p>
+
+  <ul>
+    <li><strong>Number of copies:</strong> one per PV by default; tunable with <code>--metadatacopies</code></li>
+    <li><strong>On-disk format:</strong> plain text (looks like a config file)</li>
+    <li><strong>Backups:</strong> every change is also dumped to <code>/etc/lvm/backup/&lt;vg&gt;</code>
+        and archives to <code>/etc/lvm/archive/</code></li>
+  </ul>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> vgcfgbackup -f /tmp/vg-data.txt data
+<span class="output">  Volume group "data" successfully backed up.</span>
+
+<span class="prompt">root@host:~#</span> pvck --dump metadata /dev/sdb1 | head -20
+<span class="output">data {
+    id = "aB3cD4-ef5G-..."
+    seqno = 17
+    format = "lvm2"
+    status = ["RESIZEABLE", "READ", "WRITE"]
+    extent_size = 8192        # 4 MiB in sectors
+    physical_volumes {
+        pv0 { id = "..." device = "/dev/sdb1" ... }
+        pv1 { id = "..." device = "/dev/sdc1" ... }
+    }
+    logical_volumes {
+        mydata { segment_count = 1 ... }
+    }
+}</span></pre>
+
+  <div class="tip">
+    <strong>Recovery:</strong> a wiped PV header can often be restored with
+    <code>vgcfgrestore -f /etc/lvm/archive/&lt;vg&gt;_NNNN.vg &lt;vg&gt;</code> as long as the
+    PV&rsquo;s data area hasn&rsquo;t been overwritten.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Command Cheat Sheet                      -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Command Cheat Sheet</h2>
+
+  <p>LVM commands follow a strict verb-per-layer naming scheme. Once you see the pattern,
+     the whole interface memorises itself.</p>
+
+  <table>
+    <tr>
+      <th>Layer</th>
+      <th>Inspect</th>
+      <th>Create / Modify</th>
+      <th>Activate / Move / Remove</th>
+    </tr>
+    <tr>
+      <td><strong>PV</strong></td>
+      <td><code>pvs</code>, <code>pvdisplay</code>, <code>pvck</code></td>
+      <td><code>pvcreate</code>, <code>pvresize</code>, <code>pvchange</code></td>
+      <td><code>pvmove</code>, <code>pvremove</code></td>
+    </tr>
+    <tr>
+      <td><strong>VG</strong></td>
+      <td><code>vgs</code>, <code>vgdisplay</code>, <code>vgck</code></td>
+      <td><code>vgcreate</code>, <code>vgextend</code>, <code>vgreduce</code>, <code>vgrename</code></td>
+      <td><code>vgchange -a y|n</code>, <code>vgremove</code></td>
+    </tr>
+    <tr>
+      <td><strong>LV</strong></td>
+      <td><code>lvs</code>, <code>lvdisplay</code></td>
+      <td><code>lvcreate</code>, <code>lvextend</code>, <code>lvreduce</code>, <code>lvresize</code>, <code>lvrename</code>, <code>lvconvert</code></td>
+      <td><code>lvchange -a y|n</code>, <code>lvremove</code></td>
+    </tr>
+  </table>
+
+  <div class="tip">
+    <strong>Shortcut flags:</strong> <code>-o +&lt;field&gt;</code> adds columns to <code>pvs/vgs/lvs</code>.
+    Try <code>lvs -o +devices,stripes,lv_attr,lv_layout</code> for a denser view.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Online Resize                            -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Online Resize</h2>
+
+  <h3>Growing a volume</h3>
+  <p>Two steps: extend the LV at the block layer, then grow the filesystem. LVM can do both at once
+     with <code>-r</code> (<code>--resizefs</code>).</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> lvextend -L +50G /dev/data/mydata
+<span class="output">  Size of logical volume data/mydata changed from 100.00 GiB to 150.00 GiB.
+  Logical volume data/mydata successfully resized.</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># ext4</span>
+<span class="prompt">root@host:~#</span> resize2fs /dev/data/mydata
+<span class="prompt">root@host:~#</span> <span class="cm"># xfs (must be mounted)</span>
+<span class="prompt">root@host:~#</span> xfs_growfs /data
+
+<span class="prompt">root@host:~#</span> <span class="cm"># one-shot: grow LV and filesystem together</span>
+<span class="prompt">root@host:~#</span> lvextend -r -L +50G /dev/data/mydata</pre>
+
+  <h3>Shrinking a volume (ext4 only)</h3>
+
+  <div class="warn">
+    <strong>XFS cannot be shrunk.</strong> Full stop. If you need a smaller volume, <code>xfsdump</code>
+    to another volume, recreate at the target size, <code>xfsrestore</code>. btrfs supports shrink
+    natively (<code>btrfs filesystem resize</code>).
+  </div>
+
+  <div class="warn">
+    <strong>Always back up first.</strong> Shrink is the one LVM operation that can easily lose data
+    if the filesystem ends up smaller than the LV. The rule is: <em>filesystem size &le; LV size</em>,
+    never the other way around.
+  </div>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> umount /data
+<span class="prompt">root@host:~#</span> e2fsck -f /dev/data/mydata                 <span class="cm"># required before resize2fs shrink</span>
+<span class="prompt">root@host:~#</span> resize2fs -p /dev/data/mydata 80G           <span class="cm"># shrink FS first</span>
+<span class="prompt">root@host:~#</span> lvreduce -L 80G /dev/data/mydata            <span class="cm"># then shrink LV</span>
+<span class="prompt">root@host:~#</span> e2fsck -f /dev/data/mydata
+<span class="prompt">root@host:~#</span> mount /dev/data/mydata /data</pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- pvmove                                   -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Online Data Migration: <code>pvmove</code></h2>
+
+  <p><code>pvmove</code> relocates PEs from one PV to another while the LV stays online.
+     It uses a temporary dm-mirror to duplicate writes to both source and destination
+     until all PEs are copied, then atomically switches the LV&rsquo;s extent map to point at the
+     new PV. Applications see no interruption.</p>
+
+  <p>Typical uses: retiring a failing disk, swapping to a larger drive, consolidating data
+     onto faster storage, evacuating a PV before <code>vgreduce</code>.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># move everything off /dev/sdb1 onto /dev/sdd1</span>
+<span class="prompt">root@host:~#</span> pvmove /dev/sdb1 /dev/sdd1
+<span class="output">  /dev/sdb1: Moved: 0.12%
+  /dev/sdb1: Moved: 17.34%
+  /dev/sdb1: Moved: 54.81%
+  /dev/sdb1: Moved: 100.00%</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># now safe to drop the old PV</span>
+<span class="prompt">root@host:~#</span> vgreduce data /dev/sdb1
+<span class="prompt">root@host:~#</span> pvremove /dev/sdb1</pre>
+
+  <div class="tip">
+    <strong>Resumable:</strong> <code>pvmove</code> is interruptible. If the host reboots mid-move,
+    run <code>pvmove</code> with no args on the next boot and it picks up where it left off.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Adding a Disk                            -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Adding a Disk to a VG</h2>
+
+  <p>The canonical growth workflow: initialise the new disk as a PV, add it to the VG, then
+     extend the LV to consume the new free space (and grow the filesystem).</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> pvcreate /dev/sde
+<span class="prompt">root@host:~#</span> vgextend data /dev/sde
+<span class="prompt">root@host:~#</span> vgs
+<span class="output">  VG    #PV #LV #SN Attr   VSize  VFree
+  data    3   4   0 wz--n- 5.46t  1.82t</span>
+
+<span class="prompt">root@host:~#</span> lvextend -r -l +100%FREE /dev/data/mydata</pre>
+
+  <div class="note">
+    <strong>Whole disk vs. partition:</strong> using the whole disk (<code>/dev/sde</code>)
+    as a PV is simpler and avoids alignment pitfalls. Partitioning first
+    (<code>/dev/sde1</code>) is needed only if something else will share the disk, or if you
+    want a bootable GPT for BIOS constraints.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Activation                               -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Activation &amp; Boot</h2>
+
+  <p>LVs are <strong>inactive</strong> until LVM creates the dm nodes for them. On boot, the
+     <code>lvm2-*.service</code> / <code>lvm2-activation-*.service</code> units (invoked by udev and
+     systemd generators) scan available PVs and activate any VG they can assemble.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> vgchange -a y data                  <span class="cm"># activate all LVs in vg "data"</span>
+<span class="prompt">root@host:~#</span> vgchange -a n data                  <span class="cm"># deactivate</span>
+<span class="prompt">root@host:~#</span> vgchange --activationmode partial   <span class="cm"># activate a degraded RAID LV</span></pre>
+
+  <h3>/boot on LVM</h3>
+  <p>GRUB2 can read LVM (including thin pools on recent versions) and boot a kernel from an LV.
+     In practice most installers still put <code>/boot</code> on a plain partition &mdash; it keeps
+     recovery simple (any Linux live image can mount it), avoids coupling GRUB to LVM quirks,
+     and makes Secure Boot / boot-chain updates easier.</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- LVM RAID vs mdadm                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>LVM RAID vs. mdadm</h2>
+
+  <p>LVM RAID and mdadm both sit on the same kernel code &mdash; the MD/dm-raid personality.
+     There is no performance or reliability difference. The distinction is operational:</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header type1">LVM RAID (dm-raid)</div>
+      <div class="comp-body">
+        <ul>
+          <li>RAID is an LV type; add/remove members with LVM commands</li>
+          <li>Metadata lives in the VG alongside LV maps</li>
+          <li>Integrates with <code>pvmove</code>, thin pools, caching</li>
+          <li><code>lvcreate --type raid5 -i 3 -L 300G -n rlv vg</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header type2">mdadm</div>
+      <div class="comp-body">
+        <ul>
+          <li>Standalone subsystem &mdash; exposes <code>/dev/mdX</code></li>
+          <li>Metadata at the start/end of each member (0.90, 1.x)</li>
+          <li>Simpler for plain block-level RAID with no LVM on top</li>
+          <li>Most distro installers use mdadm + LVM (md as a PV)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Traditional Snapshots                    -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Traditional (Non-thin) Snapshots</h2>
+
+  <p>The classic LVM snapshot is a <strong>copy-on-write overlay</strong> on top of an origin LV.
+     You allocate a separate LV to hold the CoW exception store; LVM intercepts writes to the origin
+     and copies the <em>old</em> block into the snapshot LV before overwriting. Reading from the
+     snapshot returns origin blocks unless they&rsquo;ve been overwritten &mdash; in which case the original
+     value comes from the snapshot&rsquo;s store.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> lvcreate -L 10G -s -n mydata_snap /dev/data/mydata
+<span class="output">  Logical volume "mydata_snap" created.</span>
+
+<span class="prompt">root@host:~#</span> mount -o ro /dev/data/mydata_snap /mnt/snap
+<span class="prompt">root@host:~#</span> tar czf /backup/snap.tgz /mnt/snap
+<span class="prompt">root@host:~#</span> umount /mnt/snap &amp;&amp; lvremove /dev/data/mydata_snap</pre>
+
+  <div class="warn">
+    <strong>The snapshot LV can fill up.</strong> Its size must accommodate every block changed
+    on the origin while the snapshot lives. If the exception store fills, the snapshot becomes
+    <em>invalid</em> and is dropped &mdash; any reader of it gets I/O errors. Monitor
+    <code>lvs -o name,snap_percent</code>.
+  </div>
+
+  <div class="warn">
+    <strong>Performance cost:</strong> every origin write now triggers a read-old-block + write-to-snapshot
+    before the actual write. Fine for minutes-to-hours, not for long-lived snapshots. For anything
+    persistent or at scale, use <strong>thin snapshots</strong> instead.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Common Stacks                            -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Common Storage Stacks</h2>
+
+  <p>LVM plays well with mdadm, LUKS, and anything that looks like a block device.
+     The ordering determines what each layer can do.</p>
+
+  <div class="panel">
+    <div class="panel-title">Stack A &mdash; Classic full-disk encryption with RAID</div>
+<pre>disks → mdadm (RAID1/5/6) → LUKS → LVM (PV/VG/LVs) → filesystem
+
+• mdadm handles redundancy below encryption (one LUKS unlock for the array)
+• LVM carves out volumes inside the encrypted container
+• Each filesystem is on its own LV, still shares the single unlock</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Stack B &mdash; Per-volume encryption</div>
+<pre>disks → LVM (PV/VG) → LUKS (per LV) → filesystem
+
+• Each LV can be encrypted with its own key
+• Resizing is trickier (LUKS header has fixed-size slots; cryptsetup resize required)
+• Useful when only some volumes need encryption</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Stack C &mdash; Proxmox default on a single disk</div>
+<pre>disk → partitions → LVM-thin pool → raw LVs for VMs → filesystems inside the VM
+
+• /boot on its own partition; root on an LV
+• data VG "pve" uses a thin pool; each VM disk is a thin LV in that pool
+• Snapshots / clones of VM disks are thin snapshots</pre>
+  </div>
+
+  <div class="tip">
+    <strong>Order matters for flexibility:</strong> put LVM <em>above</em> LUKS if you want
+    one unlock to expose many volumes, <em>below</em> LUKS if you want to resize the unlocked
+    container easily. Put LVM <em>above</em> mdadm so the PV is the md device &mdash;
+    redundancy stays invisible to LVM.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

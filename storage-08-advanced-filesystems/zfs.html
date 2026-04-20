@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 08 — ZFS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 08 &mdash; ZFS</h1>
+  <p class="subtitle">The integrated filesystem, volume manager, RAID, and integrity layer</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Philosophy                                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Philosophy</h2>
+
+  <p>ZFS was developed at Sun Microsystems starting in 2001 and marketed as
+     <em>&ldquo;the last word in filesystems&rdquo;</em>. Today it lives on as
+     <strong>OpenZFS</strong>, the community-maintained fork that runs on FreeBSD,
+     illumos, Linux, and macOS.</p>
+
+  <p>Its design goal was radical for its time: collapse the classic storage stack
+     &mdash; partitioner, volume manager, RAID engine, filesystem, integrity
+     checker &mdash; into a <strong>single coherent system</strong>. The authors
+     argued (correctly) that layered stacks like
+     <code>mdadm + LVM + ext4 + fsck</code> are each unaware of the other's
+     semantics: mdadm doesn't know which blocks contain file data, LVM doesn't
+     know what redundancy the lower layer provides, and ext4 can't tell the RAID
+     layer that a corrupt block is recoverable elsewhere. Each layer is forced
+     to make pessimistic assumptions.</p>
+
+  <div class="panel">
+    <div class="panel-title">What ZFS merges into one system</div>
+    <ul>
+      <li><strong>Filesystem</strong> &mdash; POSIX directories, files, xattrs</li>
+      <li><strong>Volume manager</strong> &mdash; pools of devices, datasets, zvols</li>
+      <li><strong>RAID engine</strong> &mdash; mirror, raidz1/2/3, draid</li>
+      <li><strong>Integrity layer</strong> &mdash; end-to-end checksums on every block</li>
+      <li><strong>Snapshot &amp; replication engine</strong> &mdash; CoW snapshots, <code>send</code>/<code>receive</code></li>
+      <li><strong>Caching tier</strong> &mdash; ARC (RAM), L2ARC (SSD), SLOG</li>
+      <li><strong>Encryption layer</strong> &mdash; native AES-256-GCM at dataset granularity</li>
+    </ul>
+  </div>
+
+  <h3>Why it matters operationally</h3>
+  <ul>
+    <li><strong>End-to-end checksums</strong> catch <em>silent</em> corruption that
+        traditional stacks miss entirely &mdash; bit rot, misdirected writes,
+        phantom writes, controller/cable errors, DRAM flips that escape ECC.</li>
+    <li><strong>Copy-on-write</strong> gives free, atomic snapshots and crash
+        consistency &mdash; the on-disk tree is always a valid previous state.</li>
+    <li><strong>No fsck, ever.</strong> A ZFS pool cannot be half-committed. A
+        crash simply means the uberblock points to the last-committed transaction
+        group &mdash; everything in it is already consistent.</li>
+  </ul>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Storage hierarchy                         -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>The Storage Hierarchy</h2>
+
+  <p>Internalising the ZFS hierarchy is non-negotiable. Three levels sit between
+     the raw disks and the filesystem you mount.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Datasets &amp; zvols &mdash; <code>pool/home</code>, <code>pool/vm-100-disk-0</code></div>
+    <div class="encap-layer tcp">Pool (zpool) &mdash; stripe across vdevs</div>
+    <div class="encap-layer ip">vdevs &mdash; fault-tolerance unit (mirror / raidz / &hellip;)</div>
+    <div class="encap-layer eth">Disks &mdash; physical block devices</div>
+    <div class="encap-layer phys">Hardware (HBA / SAS / SATA / NVMe)</div>
+  </div>
+
+  <h3>vdev &mdash; Virtual Device</h3>
+  <p>A vdev is the <strong>fault-tolerance unit</strong>. From the pool's point of
+     view each vdev is a black box with a stated redundancy level. If a vdev
+     fails (beyond its redundancy) the entire pool fails. vdevs come in several
+     flavours &mdash; data vdevs, and support vdevs for caching/logging/spares.</p>
+
+  <h3>Pool (zpool)</h3>
+  <p>A pool is one or more vdevs combined. Data is <strong>striped</strong> (RAID-0-like)
+     across the data vdevs in the pool. The pool is the unit of import/export
+     and the top of the administrative namespace.</p>
+
+  <div class="warn">
+    <strong>Pool layout is largely irreversible.</strong> Historically you could
+    only <em>add</em> data vdevs to a pool, never remove them. Recent OpenZFS
+    allows removal of top-level mirror or single-disk vdevs via
+    <code>zpool remove</code>, but <em>raidz vdevs cannot be removed</em>.
+    Raidz vdev expansion (adding one disk to an existing raidz) only landed
+    in OpenZFS 2.3. <strong>Plan the vdev layout carefully up front.</strong>
+  </div>
+
+  <h3>Dataset &amp; zvol</h3>
+  <p>A <strong>dataset</strong> is a named filesystem within the pool &mdash;
+     <code>pool/home</code>, <code>pool/home/alice</code>. Datasets form a
+     hierarchical tree; children inherit properties from their parent by default.
+     Each dataset has its own mountpoint, compression, quota, snapshots, etc.</p>
+  <p>A <strong>zvol</strong> is a dataset exposed as a block device (e.g.
+     <code>/dev/zvol/pool/vm-100-disk-0</code>) &mdash; used for VM disks, iSCSI
+     LUNs, swap, or anything that wants raw block storage on top of the pool.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> zpool status tank
+<span class="output">  pool: tank
+ state: ONLINE
+  scan: scrub repaired 0B in 02:14:33 with 0 errors on 2026-04-07
+
+config:
+
+        NAME                      STATE     READ WRITE CKSUM
+        tank                      ONLINE       0     0     0
+          raidz2-0                ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+            ata-WDC_WD80EFBX-...  ONLINE       0     0     0
+        special
+          mirror-1                ONLINE       0     0     0
+            nvme0n1p1             ONLINE       0     0     0
+            nvme1n1p1             ONLINE       0     0     0
+        logs
+          mirror-2                ONLINE       0     0     0
+            nvme0n1p2             ONLINE       0     0     0
+            nvme1n1p2             ONLINE       0     0     0
+        cache
+          nvme0n1p3               ONLINE       0     0     0
+
+errors: No known data errors</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Copy on Write                             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Copy-on-Write, Everywhere</h2>
+
+  <p>ZFS <strong>never overwrites live data in place</strong>. Every write path
+     allocates fresh blocks, writes the new indirect blocks bottom-up, and then
+     atomically updates the pool's <strong>uberblock</strong> &mdash; a small
+     on-disk pointer &mdash; to point at the new tree root.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">App writes</div>
+      <div class="desc">New data blocks allocated from free space</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Indirect blocks</div>
+      <div class="desc">Updated bottom-up with new pointers &amp; checksums</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">New uberblock</div>
+      <div class="desc">Atomic pointer swap to new tree root</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">Old blocks freed</div>
+      <div class="desc">Unless pinned by a snapshot</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Consequences</div>
+    <ul>
+      <li><strong>Always consistent on disk</strong> &mdash; a crash leaves the
+          last committed transaction group intact; partial writes don't exist.
+          <em>No fsck.</em></li>
+      <li><strong>Snapshots are free</strong> &mdash; just keep a pointer to a
+          previous tree root. No data copy.</li>
+      <li><strong>Efficient replication</strong> &mdash; <code>zfs send</code>
+          walks block-pointer deltas, not file contents.</li>
+      <li><strong>Fragmentation can accumulate</strong> on heavily-churned pools
+          with little free space &mdash; keep pools below ~80% full.</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Checksums                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Checksums on Everything</h2>
+
+  <p>Every block in a ZFS pool has a checksum. Critically, the checksum is
+     stored in the <strong>parent</strong> block pointer &mdash; <em>not</em>
+     next to the data. This detaches the integrity guarantee from the data
+     itself: a misdirected write that lands in the wrong location, or a block
+     that's been silently overwritten, will fail verification because the
+     expected checksum lives elsewhere in the tree.</p>
+
+  <div class="note">
+    Default is <strong>fletcher4</strong> &mdash; a fast non-cryptographic
+    checksum designed for this workload. <strong>SHA-256</strong>,
+    <strong>SHA-512</strong>, <strong>Skein</strong>, <strong>Edon-R</strong>,
+    and <strong>BLAKE3</strong> are available for stronger guarantees or when
+    dedup demands collision resistance.
+  </div>
+
+  <h3>What this catches that traditional stacks miss</h3>
+  <table>
+    <thead>
+      <tr><th>Failure mode</th><th>Traditional stack</th><th>ZFS</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Disk reports bad sector (URE)</td><td>Detected, RAID recovers</td><td>Detected, self-heals</td></tr>
+      <tr><td>Silent bit rot (block returns wrong data, no error)</td><td><strong>Undetected</strong></td><td>Detected, self-heals from redundancy</td></tr>
+      <tr><td>Misdirected write (firmware bug, landed at wrong LBA)</td><td><strong>Undetected</strong></td><td>Detected via parent checksum</td></tr>
+      <tr><td>Phantom write (write acknowledged, never reached platter)</td><td><strong>Undetected</strong></td><td>Detected on next read</td></tr>
+      <tr><td>In-flight corruption on HBA/cable/DRAM</td><td><strong>Undetected</strong></td><td>Detected end-to-end</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Self-healing read path</h3>
+  <p>On a read, ZFS computes the checksum of the returned block and compares it
+     against the value stored in the parent pointer. If they disagree and the
+     vdev has redundancy (mirror / raidz), ZFS:</p>
+  <div class="steps">
+    <div class="step"><div class="step-num">1</div><div>Reads a redundant copy (mirror peer, or raidz reconstruction)</div></div>
+    <div class="step"><div class="step-num">2</div><div>Verifies <em>that</em> copy's checksum too</div></div>
+    <div class="step"><div class="step-num">3</div><div>Returns good data to the application</div></div>
+    <div class="step"><div class="step-num">4</div><div>Rewrites the bad copy in place &mdash; silent rescue, recorded in <code>CKSUM</code> counters</div></div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- vdev types                                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>vdev Types</h2>
+
+  <h3>Data vdevs</h3>
+  <table>
+    <thead>
+      <tr><th>Type</th><th>Redundancy</th><th>Usable capacity</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>single disk</strong></td><td>None</td><td>100%</td><td>No self-healing possible. Loss = pool loss.</td></tr>
+      <tr><td><strong>mirror</strong></td><td>Survives N&minus;1 failures (N-way)</td><td>1/N</td><td>2-way typical; 3-way for paranoid or large rebuild windows.</td></tr>
+      <tr><td><strong>raidz1</strong></td><td>1 disk loss</td><td>(N&minus;1)/N</td><td>Like RAID 5, without the write hole (full-stripe CoW).</td></tr>
+      <tr><td><strong>raidz2</strong></td><td>2 disk loss</td><td>(N&minus;2)/N</td><td>Like RAID 6. Recommended for 6+ disk arrays.</td></tr>
+      <tr><td><strong>raidz3</strong></td><td>3 disk loss</td><td>(N&minus;3)/N</td><td>For very large arrays with long rebuild times.</td></tr>
+      <tr><td><strong>draid</strong></td><td>Configurable</td><td>Depends on config</td><td>Distributed RAID &mdash; reserves spare capacity across all disks, resilver reads/writes many disks in parallel. Much faster rebuild.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>raidz vs legacy RAID 5:</strong> raidz writes always span a full
+    stripe &mdash; there is no partial-stripe read-modify-write, and therefore
+    <em>no write hole</em>. Stripe width is variable; small writes use narrow
+    stripes. This is possible because ZFS owns the filesystem layer and knows
+    which blocks are live.
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header code">mirror</div>
+      <div class="comp-body">
+        <p>Every write goes to every disk. Reads can come from any copy.</p>
+        <ul>
+          <li>Fastest random IO (any disk answers reads)</li>
+          <li>Fastest rebuild (plain disk-to-disk copy of live data)</li>
+          <li>Worst capacity efficiency</li>
+          <li>Best for VM storage, databases</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">raidz1</div>
+      <div class="comp-body">
+        <p>Single-parity. One disk's worth of capacity goes to parity.</p>
+        <ul>
+          <li>Good capacity efficiency with 4&ndash;5 disks</li>
+          <li>Slow random reads (wide stripe)</li>
+          <li><strong>Risky for large disks</strong> &mdash; rebuild time puts URE probability uncomfortably high</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">raidz2</div>
+      <div class="comp-body">
+        <p>Double-parity. Survives any 2 disks failing.</p>
+        <ul>
+          <li>Default choice for bulk storage arrays of 6+ disks</li>
+          <li>Handles a URE during rebuild of a failed disk</li>
+          <li>Capacity efficiency &asymp; (N&minus;2)/N</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">raidz3 / draid</div>
+      <div class="comp-body">
+        <p>Triple parity / distributed RAID for very large arrays.</p>
+        <ul>
+          <li>raidz3: for 12+ disks with long rebuild windows</li>
+          <li>draid: distributes spare capacity &rarr; rebuild reads/writes many disks in parallel</li>
+          <li>Used in large JBODs, backup targets, nearline</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Support vdevs</h3>
+  <table>
+    <thead>
+      <tr><th>vdev</th><th>Purpose</th><th>Loss impact</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>special</strong></td><td>Dedicated SSD vdev for <em>metadata</em> and optionally small data blocks. Massive speedup for metadata-heavy workloads (<code>ls -lR</code>, rsync, find).</td><td><strong>Pool loss</strong> if redundancy fails &mdash; mirror it.</td></tr>
+      <tr><td><strong>log (SLOG)</strong></td><td>Low-latency device for the ZFS Intent Log. Handles <em>sync writes only</em>. Very fast NVMe with PLP is ideal.</td><td>Losing SLOG = lose sync writes in flight at crash time. Pool survives.</td></tr>
+      <tr><td><strong>cache (L2ARC)</strong></td><td>SSD tier below the RAM-based ARC. Read cache only. Optional.</td><td>Pool unaffected &mdash; safe to lose.</td></tr>
+      <tr><td><strong>spare</strong></td><td>Hot spare. Auto-attached when a disk fails (if autoreplace / hot-spare policy enabled).</td><td>Pool unaffected.</td></tr>
+      <tr><td><strong>dedup</strong></td><td>Dedicated vdev for the dedup table (OpenZFS 2.3+).</td><td>Pool loss if lost &mdash; mirror it.</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Caching                                   -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Caching: ARC, L2ARC, ZIL, SLOG</h2>
+
+  <h3>ARC &mdash; Adaptive Replacement Cache</h3>
+  <p>The <strong>ARC</strong> is ZFS's RAM-based read cache. Unlike the Linux
+     page cache it uses the ARC algorithm, which balances <em>recency</em> and
+     <em>frequency</em> dynamically with scan-resistant ghost lists &mdash; a
+     sequential <code>find / -type f</code> does not evict your hot working
+     set.</p>
+
+  <p>ARC grows opportunistically towards a tunable <code>arc_max</code> (default
+     on Linux is half of RAM) and releases memory under pressure. Monitor it:</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> arc_summary | head -30
+<span class="output">ZFS Subsystem Report                           Sun Apr 20 10:12:04 2026
+Linux 6.8.0-52-generic                                 2.2.3-1~bookworm
+Machine: nas (x86_64)                                               2.2.3-1
+
+ARC status:
+        Total memory available:                                128.0 GiB
+        ARC size (current):                       89.2 %       57.0 GiB
+        Target size (adaptive):                   89.6 %       57.3 GiB
+        Min size (hard limit):                     6.2 %        4.0 GiB
+        Max size (high water):                    50.0 %       64.0 GiB
+
+ARC hit ratio:                                    97.4 %     21.1 M
+        Demand data hit ratio:                    96.1 %      8.2 M
+        Demand metadata hit ratio:                99.8 %     12.4 M</span></pre>
+
+  <h3>L2ARC</h3>
+  <p>L2ARC is an <strong>SSD-backed extension</strong> of the ARC, used when the
+     working set exceeds RAM. It's only useful for read-heavy workloads that miss
+     ARC. It costs RAM &mdash; the ARC needs pointers tracking every L2ARC entry,
+     roughly 70&ndash;100 bytes per block. Oversizing L2ARC relative to RAM is a
+     classic mistake.</p>
+
+  <h3>ZIL &mdash; ZFS Intent Log</h3>
+  <p>The <strong>ZIL</strong> is where <em>synchronous</em> writes are durably
+     logged before the next transaction group commits them to the pool proper.
+     Every pool has a ZIL; by default it lives <em>inline on the data disks</em>
+     as scattered ZIL blocks.</p>
+
+  <h3>SLOG &mdash; Separate LOG</h3>
+  <p>A <strong>SLOG</strong> is a dedicated (fast) log vdev that moves the ZIL
+     off the data disks. Typical workloads: NFS servers with many sync writes,
+     databases with <code>O_SYNC</code>/<code>fsync</code>, iSCSI with
+     writeback disabled.</p>
+
+  <div class="warn">
+    <strong>The SLOG is NOT a general-purpose write cache.</strong>
+    <ul>
+      <li><strong>Async writes</strong> never touch the ZIL or SLOG &mdash; they
+          go straight to the in-RAM transaction group and are flushed to pool on
+          the next TXG sync (typically every 5 s).</li>
+      <li>Only <strong>sync writes</strong> (and large sync writes only above
+          <code>zfs_immediate_write_sz</code>) use the ZIL.</li>
+      <li>The ZIL is read only during <em>crash recovery</em>, to replay any
+          committed sync writes that hadn't made it to the pool.</li>
+      <li>SLOG device <strong>must</strong> have power-loss protection (PLP) if
+          you want the durability guarantee to be meaningful. Consumer NVMe is
+          usually a bad choice.</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Dataset properties                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Dataset Properties Worth Knowing</h2>
+
+  <table>
+    <thead>
+      <tr><th>Property</th><th>Recommended</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>compression</code></td><td><code>lz4</code> (or <code>zstd</code>)</td><td><strong>Almost always on.</strong> lz4 is near-free on modern CPUs, ~1.5&ndash;2&times; on typical data, compresses-or-punts (no penalty on incompressible blocks). zstd for better ratio at higher CPU cost.</td></tr>
+      <tr><td><code>atime</code></td><td><code>off</code></td><td>Disables access-time updates. Removes a constant write workload for many-file trees.</td></tr>
+      <tr><td><code>xattr</code></td><td><code>sa</code></td><td>Stores extended attributes in the inode (system attribute) rather than as hidden files. Faster, less metadata churn. Required for SELinux, ACLs.</td></tr>
+      <tr><td><code>recordsize</code></td><td><code>128K</code> default</td><td>Maximum block size for files. Smaller (e.g. <code>16K</code>) for PostgreSQL, <code>8K</code> for MySQL InnoDB. Larger (<code>1M</code>) for media/backup targets.</td></tr>
+      <tr><td><code>volblocksize</code></td><td>Depends</td><td>Block size for <em>zvols</em>. Set at creation only. Match the guest's expected block size (often 16K for VM disks; 8K for DB VMs).</td></tr>
+      <tr><td><code>dedup</code></td><td><code>off</code> unless measured</td><td><strong>Expensive.</strong> Needs roughly 1&ndash;5 GB RAM per 1 TB of unique data for the DDT. Compression + clones usually win.</td></tr>
+      <tr><td><code>encryption</code></td><td><code>aes-256-gcm</code></td><td>Native dataset-level encryption. Keys managed per-dataset. Enables <em>raw replication</em> (<code>send -w</code>) to untrusted destinations.</td></tr>
+      <tr><td><code>sync</code></td><td><code>standard</code></td><td>Honour <code>O_SYNC</code> / <code>fsync</code>. <code>always</code> for DBs wanting extra durability; <code>disabled</code> for speed at crash-consistency risk.</td></tr>
+      <tr><td><code>quota</code> / <code>refquota</code></td><td>As needed</td><td><code>quota</code> includes snapshots/descendants; <code>refquota</code> limits only the live dataset.</td></tr>
+      <tr><td><code>reservation</code> / <code>refreservation</code></td><td>As needed</td><td>Guaranteed space. <code>refreservation=auto</code> on thick zvols prevents ENOSPC on the pool from killing guest writes.</td></tr>
+      <tr><td><code>primarycache</code> / <code>secondarycache</code></td><td><code>all</code> default</td><td>Per-dataset ARC/L2ARC policy. Set <code>metadata</code> for DB datasets to avoid polluting ARC with cold pages.</td></tr>
+    </tbody>
+  </table>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> zfs create -o compression=zstd -o atime=off -o recordsize=16K tank/postgres
+<span class="prompt">root@host:~#</span> zfs get compression,atime,recordsize,xattr tank/postgres
+<span class="output">NAME           PROPERTY     VALUE     SOURCE
+tank/postgres  compression  zstd      local
+tank/postgres  atime        off       local
+tank/postgres  recordsize   16K       local
+tank/postgres  xattr        sa        inherited from tank</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Snapshots                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Snapshots, Clones, Send/Receive</h2>
+
+  <h3>Snapshots</h3>
+  <p>A snapshot is a <strong>read-only, atomic, instant</strong> point-in-time
+     view of a dataset. Because ZFS is CoW, taking one is just writing a new
+     snapshot record that pins the current tree root. Deleting newer data
+     doesn't free blocks that snapshots still reference.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> zfs snapshot tank/home@2026-04-20
+<span class="prompt">root@host:~#</span> zfs list -t snapshot -r tank/home
+<span class="output">NAME                        USED  AVAIL     REFER  MOUNTPOINT
+tank/home@2026-04-19       8.2M      -     42.1G  -
+tank/home@2026-04-20          0      -     42.1G  -</span>
+
+<span class="prompt">user@host:~$</span> cd ~/.zfs/snapshot/2026-04-20
+<span class="prompt">user@host:~$</span> ls -la
+<span class="output">drwxr-xr-x  42 alice alice   42 Apr 20 09:14 .
+...</span></pre>
+
+  <div class="tip">
+    <strong>Set <code>snapdir=visible</code></strong> on datasets where
+    users benefit from self-service file restore from
+    <code>.zfs/snapshot/</code>. Pair with a snapshot scheduler like
+    <code>zfs-auto-snapshot</code>, <code>sanoid</code>, or
+    <code>zrepl</code>.
+  </div>
+
+  <h3>Rollback</h3>
+  <p><code>zfs rollback tank/home@2026-04-20</code> reverts the dataset to the
+     snapshot &mdash; and <em>destroys</em> any snapshots taken after it.
+     <code>-r</code> allows destroying intermediate snapshots; use with care.</p>
+
+  <h3>Clones</h3>
+  <p>A clone is a <strong>writable snapshot</strong> &mdash;
+     <code>zfs clone tank/home@snap tank/home-copy</code> creates a new dataset
+     that shares blocks with the snapshot until it diverges. Perfect for testing
+     schema migrations against a production snapshot, or instant VM template
+     provisioning. <code>zfs promote</code> swaps origin and clone, letting you
+     delete the original dataset.</p>
+
+  <h3>Send / Receive</h3>
+  <p>Replication in ZFS walks the block-pointer delta directly &mdash; no file
+     tree traversal, no file-by-file comparison. It is <em>orders of magnitude</em>
+     more efficient than rsync on filesystems with many files.</p>
+
+  <table>
+    <thead>
+      <tr><th>Mode</th><th>Command</th><th>Use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Full</td><td><code>zfs send tank/home@snap | zfs receive back/home</code></td><td>Initial seed</td></tr>
+      <tr><td>Incremental</td><td><code>zfs send -i @prev tank/home@snap | ssh dest "zfs receive back/home"</code></td><td>Routine sync</td></tr>
+      <tr><td>Recursive</td><td><code>zfs send -R tank@snap | ...</code></td><td>All descendants, properties, snapshots</td></tr>
+      <tr><td>Raw / encrypted</td><td><code>zfs send -w ...</code></td><td>Ciphertext-only replication to an untrusted target &mdash; the remote cannot read your data</td></tr>
+      <tr><td>Resumable</td><td><code>zfs send -t &lt;token&gt;</code></td><td>Resume an interrupted send (requires <code>-s</code> on receive side)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Maintenance                               -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Maintenance: Scrub, Resilver, Monitoring</h2>
+
+  <h3>Scrub</h3>
+  <p><code>zpool scrub tank</code> reads <em>every</em> live block in the pool,
+     recomputes its checksum, and repairs any mismatch from redundant copies.
+     This is the mechanism by which ZFS detects and heals bit rot <em>before</em>
+     it propagates into your backups.</p>
+
+  <div class="tip">
+    <strong>Run scrubs monthly.</strong> A common cadence is weekly on SSD
+    pools, monthly on HDD pools. Without scrub you don't know a cold file has
+    rotted until you try to read it &mdash; possibly after the redundancy has
+    already quietly degraded on another block.
+  </div>
+
+  <h3>Resilver</h3>
+  <p>Resilvering is the ZFS term for rebuilding a vdev after disk replacement.
+     Crucially, <strong>resilver only reads/writes live (allocated) blocks</strong>
+     &mdash; unlike traditional RAID which rebuilds the entire disk surface
+     regardless of whether it's in use. A half-full pool resilvers roughly half
+     as fast as RAID would, and the window for a second failure hitting live
+     data is correspondingly smaller.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> zpool replace tank ata-BAD-serial /dev/disk/by-id/ata-NEW-serial
+<span class="prompt">root@host:~#</span> zpool status tank
+<span class="output">  pool: tank
+ state: DEGRADED
+status: One or more devices is currently being resilvered.
+  scan: resilver in progress since Sun Apr 20 09:00:00 2026
+        312G scanned at 1.2G/s, 118G issued at 480M/s, 8.4T total
+        29.5G resilvered, 1.37% done, 04:12:21 to go</span></pre>
+
+  <h3>Routine monitoring</h3>
+  <table>
+    <tbody>
+      <tr><td><code>zpool status -v</code></td><td>Health, errors, current scrub/resilver, per-device CKSUM counts</td></tr>
+      <tr><td><code>zpool iostat -v 1</code></td><td>Per-vdev IO stats, latency distribution (with <code>-l</code>)</td></tr>
+      <tr><td><code>zpool list -v</code></td><td>Pool and vdev capacity, fragmentation</td></tr>
+      <tr><td><code>zfs list -t all</code></td><td>All datasets, volumes, snapshots</td></tr>
+      <tr><td><code>arc_summary</code></td><td>ARC hit ratio, sizing, memory pressure</td></tr>
+      <tr><td><code>zpool events</code></td><td>Event log &mdash; checksum errors, IO errors, resilvers, vdev state changes</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Tuning                                    -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Tuning Knobs</h2>
+
+  <h3><code>ashift</code> &mdash; set at pool creation, cannot change</h3>
+  <p><code>ashift</code> is the log&#x2082; of the smallest IO unit ZFS will issue
+     to a vdev. It <em>cannot be changed</em> after pool creation without
+     rebuilding. Match it to the disk's physical sector size:</p>
+
+  <table>
+    <thead><tr><th>ashift</th><th>Sector size</th><th>When to use</th></tr></thead>
+    <tbody>
+      <tr><td>9</td><td>512 B</td><td>Very old disks only</td></tr>
+      <tr><td>12</td><td>4 KiB</td><td><strong>Default for modern HDDs and most SSDs</strong></td></tr>
+      <tr><td>13</td><td>8 KiB</td><td>NVMe that prefer 8K pages, some enterprise SSDs</td></tr>
+      <tr><td>14</td><td>16 KiB</td><td>Certain modern NVMe with 16K IU</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Wrong ashift hurts.</strong> Too low (9 on a 4K disk) causes massive
+    write amplification. Too high (13 on a 4K disk) wastes space for small files.
+    Disks often <em>lie</em> about their sector size (reporting 512 for
+    backwards compat). Check with <code>smartctl -i</code> or manufacturer
+    datasheet, then pin <code>ashift=12</code> explicitly at pool creation.
+  </div>
+
+  <h3>Other knobs worth knowing</h3>
+  <ul>
+    <li><code>recordsize</code> (dataset) &mdash; already covered; tune per workload.</li>
+    <li><code>volblocksize</code> (zvol, creation-time only) &mdash; match guest FS / DB page size.</li>
+    <li><code>primarycache=all|metadata|none</code> &mdash; per-dataset ARC policy.</li>
+    <li><code>logbias=latency|throughput</code> &mdash; how sync writes use the ZIL. <code>throughput</code> bypasses SLOG for large writes.</li>
+    <li><code>zfs_arc_max</code> (module parameter) &mdash; hard cap on ARC size. Often pinned on systems co-hosting KVM/containers to prevent ARC&harr;guest tug-of-war.</li>
+  </ul>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- ZFS on Linux                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>ZFS on Linux (OpenZFS)</h2>
+
+  <p>ZFS originated at Sun (Solaris). Oracle later relicensed Solaris ZFS as
+     closed source; the community picked up the last CDDL-licensed snapshot
+     and has developed OpenZFS ever since. OpenZFS is now the upstream for all
+     ZFS ports.</p>
+
+  <div class="warn">
+    <strong>Licensing:</strong> CDDL (ZFS) is incompatible with GPLv2 (Linux
+    kernel). That's why ZFS on Linux <em>cannot</em> be merged into the
+    mainline kernel and ships as an <strong>out-of-tree module</strong> (DKMS
+    or prebuilt per-kernel). Canonical has ruled internally that shipping the
+    module binary with Ubuntu is acceptable; the FSF disagrees. Practically:
+    it works, but upgrades need care.
+  </div>
+
+  <h3>Distro support</h3>
+  <table>
+    <tbody>
+      <tr><td><strong>Ubuntu</strong></td><td>Shipped in installer, <code>zfsutils-linux</code> + <code>zfs-dkms</code>. Root-on-ZFS supported in the GUI installer.</td></tr>
+      <tr><td><strong>Debian</strong></td><td>In <code>contrib</code>. <code>apt install zfs-dkms zfsutils-linux</code>. No root-on-ZFS in the default installer.</td></tr>
+      <tr><td><strong>Proxmox VE</strong></td><td><strong>First-class.</strong> Installer offers ZFS mirror / raidz root directly. Proxmox kernel ships with pre-built ZFS modules.</td></tr>
+      <tr><td><strong>RHEL / Rocky / Alma</strong></td><td>Via OpenZFS repo. DKMS-only; expect to manage kernel/module compatibility manually.</td></tr>
+      <tr><td><strong>Arch</strong></td><td>AUR + <code>zfs-linux</code> / <code>zfs-dkms</code>. Kernel upgrades frequently break the module &mdash; use the LTS kernel and pin.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    The OpenZFS project tracks each upstream kernel release and updates the
+    kernel-facing shim as needed. The module-to-kernel interface is <em>not</em>
+    a stable kernel API &mdash; blind kernel upgrades can brick ZFS until a
+    compatible OpenZFS release lands.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- When to use / avoid                       -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>When to Use ZFS &mdash; and When Not To</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">Good fit</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Storage servers / NAS</strong> &mdash; integrity + snapshots + replication</li>
+          <li><strong>Backup targets</strong> &mdash; compression, dedup (if measured), <code>send</code>/<code>recv</code></li>
+          <li><strong>Proxmox hosts</strong> &mdash; built-in, local+replicated VM storage with snapshots</li>
+          <li><strong>Any workload that values data integrity over peak throughput</strong></li>
+          <li><strong>Long-term archival</strong> &mdash; scrubs catch bit rot before it spreads</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">Poor fit (or: be careful)</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Laptops</strong> &mdash; root-on-ZFS adds real complexity around kernel upgrades, hibernation, initramfs</li>
+          <li><strong>Low-RAM systems</strong> (&lt; 4 GB) &mdash; ARC competes with everything, performance suffers</li>
+          <li><strong>Latency-critical DBs</strong> with their own integrity &mdash; PG/MySQL can outperform on ext4/XFS if you accept the integrity story; if you use ZFS, tune <code>recordsize</code> and <code>primarycache=metadata</code></li>
+          <li><strong>Pure peak throughput</strong> on fast NVMe &mdash; the CoW tax is real; XFS is faster for some sequential workloads</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Proxmox cross-reference:</strong> Proxmox uses ZFS heavily &mdash;
+    see <a href="../virt-10-proxmox-kvm/storage-ha.html">Virt 10 &mdash; Storage &amp; HA</a>
+    for how <code>pveperf</code>, <code>pvesm</code>, and replication plug into
+    ZFS pools for VM disks and backups.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

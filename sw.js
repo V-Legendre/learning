@@ -2,7 +2,7 @@
 // Strategy: pre-cache all content on install, serve cache-first
 // All URLs are relative to the SW scope (works on GitHub Pages subpaths)
 
-const CACHE_NAME = 'learning-notes-v3';
+const CACHE_NAME = 'learning-notes-v4';
 
 // Paths relative to the service worker location
 const PRECACHE_PATHS = [
@@ -141,6 +141,22 @@ const PRECACHE_PATHS = [
   'virt-10-proxmox-kvm/proxmox-architecture.html',
   'virt-10-proxmox-kvm/vm-lifecycle-networking.html',
   'virt-10-proxmox-kvm/storage-ha.html',
+  // Storage
+  'storage-01-block-devices/disks-ssds-nvme.html',
+  'storage-01-block-devices/partitions.html',
+  'storage-02-filesystems/filesystem-fundamentals.html',
+  'storage-02-filesystems/ext4-xfs.html',
+  'storage-03-raid/raid-levels.html',
+  'storage-03-raid/mdadm.html',
+  'storage-04-device-mapper/device-mapper.html',
+  'storage-05-lvm/lvm-fundamentals.html',
+  'storage-05-lvm/thin-provisioning-snapshots.html',
+  'storage-06-encryption/dm-crypt-luks.html',
+  'storage-06-encryption/luks-auto-unlock.html',
+  'storage-07-tpm-secure-boot/tpm-basics.html',
+  'storage-07-tpm-secure-boot/secure-boot-auto-unlock.html',
+  'storage-08-advanced-filesystems/zfs.html',
+  'storage-08-advanced-filesystems/btrfs.html',
 ];
 
 // Resolve relative paths to absolute URLs based on SW scope

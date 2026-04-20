@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 05 — Thin Provisioning & Snapshots</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 05 &mdash; Thin Provisioning &amp; Snapshots</h1>
+  <p class="subtitle">Allocate on demand, snapshot at scale</p>
+
+  <div class="note">
+    <strong>Prerequisite:</strong> this page assumes the PV / VG / LV model from
+    <a href="./lvm-fundamentals.html">LVM Fundamentals</a>. Thin volumes and snapshots
+    are built on top of <strong>dm-thin</strong> &mdash; see <a href="../storage-04-device-mapper/device-mapper.html">Device Mapper</a>
+    for the underlying target.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- What Thin Provisioning Is                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>What Thin Provisioning Is</h2>
+
+  <p><strong>Thin provisioning</strong> decouples the size an LV <em>advertises</em>
+     from the capacity it has actually consumed. Multiple thin LVs share a single
+     <strong>thin pool</strong>; physical blocks are allocated from the pool on first
+     write, not at creation time.</p>
+
+  <p>Because the sum of advertised sizes can exceed the pool&rsquo;s real capacity
+     (<strong>over-provisioning</strong>), thin provisioning lets you treat workloads
+     statistically: most volumes never come close to their declared size, so a smaller
+     physical pool can back many oversized logical volumes.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header type1">Thick (traditional) LV</div>
+      <div class="comp-body">
+        <ul>
+          <li>Physical PEs claimed at <code>lvcreate</code></li>
+          <li>Advertised size = allocated size</li>
+          <li>No over-provisioning possible</li>
+          <li>Snapshots need pre-sized CoW space</li>
+          <li>Simple, predictable, never &ldquo;fills&rdquo;</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header type2">Thin LV</div>
+      <div class="comp-body">
+        <ul>
+          <li>No physical blocks claimed until write</li>
+          <li>Advertised (virtual) size &ne; allocated size</li>
+          <li>Over-provisioning is the norm</li>
+          <li>Instant, cheap, writable snapshots</li>
+          <li>Pool can fill &mdash; <strong>must be monitored</strong></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Why thin?</h3>
+  <ul>
+    <li><strong>Efficient utilisation</strong> &mdash; VMs / containers that declare 100 GB often use 10&ndash;20 GB</li>
+    <li><strong>Instant snapshots</strong> &mdash; no pre-allocated CoW area, snapshot is just another thin LV that shares blocks</li>
+    <li><strong>Snapshots of snapshots</strong> &mdash; the dependency graph is a tree, not a single level</li>
+    <li><strong>Block-layer analog of qcow2</strong> &mdash; same idea (sparse, CoW) but implemented under the filesystem</li>
+  </ul>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Thin Pool Anatomy                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Thin Pool Anatomy</h2>
+
+  <p>A thin pool is actually <strong>two</strong> LVs hidden behind a single logical entity:</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Thin LVs &mdash; <code>mythin1</code>, <code>mythin2</code>, snapshot, snap-of-snap&hellip;</div>
+    <div class="encap-layer tcp">Thin Pool (dm-thin target) &mdash; translates thin LV addresses → pool blocks</div>
+    <div class="encap-layer ip">Data LV (_tdata) &mdash; holds actual data blocks</div>
+    <div class="encap-layer eth">Metadata LV (_tmeta) &mdash; B-tree mapping thin addr → pool addr &mdash; <strong>CRITICAL</strong></div>
+    <div class="encap-layer phys">Volume Group (PVs)</div>
+  </div>
+
+  <ul>
+    <li><strong>Data LV</strong> (<code>pool_tdata</code>) &mdash; the physical capacity of the pool.
+        Every first-write-to-an-address in any thin LV allocates a chunk here.</li>
+    <li><strong>Metadata LV</strong> (<code>pool_tmeta</code>) &mdash; a B-tree that maps
+        <em>(thin LV id, logical block)</em> → <em>pool block</em>. Lose this and you lose
+        every thin LV in the pool.</li>
+  </ul>
+
+  <div class="warn">
+    <strong>Metadata is precious.</strong> Size it generously at creation time. Rule of thumb:
+    <strong>0.1% of data LV size</strong>, minimum 2&nbsp;MiB, and LVM imposes a 16&nbsp;GiB hard
+    max. Metadata can be grown later (<code>lvextend --poolmetadatasize</code>) but avoid the scramble.
+  </div>
+
+  <h3>Creating a thin pool</h3>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># Let LVM pick metadata size</span>
+<span class="prompt">root@host:~#</span> lvcreate --type thin-pool -L 500G -n tpool data
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Or be explicit (recommended for any sizable pool)</span>
+<span class="prompt">root@host:~#</span> lvcreate --type thin-pool -L 500G --poolmetadatasize 512M -n tpool data
+<span class="output">  Thin pool volume with chunk size 256.00 KiB can address at most 63.25 TiB of data.
+  Logical volume "tpool" created.</span>
+
+<span class="prompt">root@host:~#</span> lvs data/tpool
+<span class="output">  LV    VG   Attr       LSize   Pool Data%  Meta%
+  tpool data twi-a-tz-- 500.00g       0.00   0.15</span></pre>
+
+  <h3>Creating thin volumes</h3>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># -V = virtual size (may exceed pool size), -T names the backing pool</span>
+<span class="prompt">root@host:~#</span> lvcreate -V 100G -T data/tpool -n mythin
+<span class="output">  Logical volume "mythin" created.</span>
+
+<span class="prompt">root@host:~#</span> lvcreate -V 100G -T data/tpool -n mythin2
+<span class="prompt">root@host:~#</span> lvcreate -V 2T   -T data/tpool -n fatbutsparse   <span class="cm"># 2 TiB virtual on 500 GiB pool</span>
+
+<span class="prompt">root@host:~#</span> lvs -o name,lv_size,data_percent,pool_lv data
+<span class="output">  LV            LSize   Data%  Pool
+  tpool         500.00g  0.00
+  mythin        100.00g  0.00   tpool
+  mythin2       100.00g  0.00   tpool
+  fatbutsparse    2.00t  0.00   tpool</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Over-provisioning                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Over-provisioning</h2>
+
+  <p>The sum of virtual sizes in the example above (100+100+2048 = 2248 GiB) is over 4&times;
+     the pool&rsquo;s 500 GiB. That&rsquo;s legal and often desirable. The deal is simple:</p>
+
+  <ul>
+    <li>As long as <em>actual</em> usage stays under the pool&rsquo;s capacity, everything works</li>
+    <li>When writes push the pool past 100%, the pool enters the <strong>pool-full</strong> state
+        and starts failing allocations &mdash; see the warning below</li>
+  </ul>
+
+  <div class="warn">
+    <strong>Pool-full is the single most important operational concern with thin pools.</strong>
+    When the data LV fills, in-flight writes to any thin LV in the pool fail with <code>EIO</code>.
+    The kernel queues further writes for a grace period (configurable <code>no_space_timeout</code>,
+    default 60 s) and then marks volumes read-only. Filesystems on top may hit a remount-ro state
+    or corruption &mdash; an application writing at the moment of exhaustion can lose that write.
+    <strong>Metadata exhaustion is just as fatal</strong> and has no early warning from the FS side.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Autoextend                               -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Autoextend: Growing the Pool Automatically</h2>
+
+  <p>LVM can watch pool usage via <code>dmeventd</code> and extend the pool when a configured
+     threshold is crossed &mdash; assuming the VG has free PEs available. Configured per-host in
+     <code>/etc/lvm/lvm.conf</code>:</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> grep -E 'thin_pool_autoextend' /etc/lvm/lvm.conf
+<span class="output">    thin_pool_autoextend_threshold = 80
+    thin_pool_autoextend_percent   = 20</span></pre>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Pool writes</div>
+      <div class="desc">Thin LVs receive writes, pool data usage climbs</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Threshold hit</div>
+      <div class="desc">Pool data usage crosses 80%</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">dmeventd fires</div>
+      <div class="desc">Monitored by <code>lvm2-monitor.service</code></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">lvextend +20%</div>
+      <div class="desc">Pool grows if VG has free PEs</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">5</div>
+      <div class="label">Back to watching</div>
+      <div class="desc">Loop continues until VG is empty</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Autoextend is a safety net, not a strategy.</strong> It requires <em>free PEs in the VG</em>.
+    If the VG is full, autoextend cannot help and you are right back at pool-full risk. Treat
+    autoextend as &ldquo;buy me time to provision more physical capacity,&rdquo; and alert long before
+    the VG itself runs out.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Monitoring                               -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Monitoring</h2>
+
+  <p>There are two independent usage values to watch per pool: <code>data_percent</code> and
+     <code>metadata_percent</code>. Alert on both.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> lvs -o name,lv_size,data_percent,metadata_percent,pool_lv,lv_attr
+<span class="output">  LV       LSize   Data%  Meta%  Pool   Attr
+  tpool    500.00g 72.41  3.04          twi-aotz--
+  mythin   100.00g 18.12         tpool  Vwi-a-tz--
+  mythin2  100.00g  6.51         tpool  Vwi-a-tz--</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Low-level: dmsetup status shows live counters</span>
+<span class="prompt">root@host:~#</span> dmsetup status data-tpool
+<span class="output">0 1048576000 thin-pool 234 1560/131072 921600/2000000 ...
+                           ^^^^ ^^^^^^^ ^^^^^^^^^^^^^^^
+                           meta used/total   data used/total  (in chunks)</span></pre>
+
+  <div class="panel">
+    <div class="panel-title">Alert thresholds worth codifying</div>
+    <ul>
+      <li><code>data_percent &gt; 80</code> &mdash; warning (autoextend should have triggered; investigate why if not)</li>
+      <li><code>data_percent &gt; 90</code> &mdash; critical</li>
+      <li><code>metadata_percent &gt; 80</code> &mdash; warning; grow <code>_tmeta</code> with <code>lvextend --poolmetadatasize +</code></li>
+      <li>VG <code>VFree</code> low &mdash; autoextend won&rsquo;t save you anymore</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Thin Snapshots                           -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Thin Snapshots</h2>
+
+  <p>A thin snapshot is a new thin LV that shares all existing blocks with the origin by
+     pointing at the same pool addresses in the metadata B-tree. On first write to a shared
+     block (from either origin or snapshot) a new pool block is allocated and the mapping is
+     updated &mdash; true copy-on-write at the thin-pool level.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> lvcreate --snapshot -n mythin_snap data/mythin
+<span class="output">  Logical volume "mythin_snap" created.</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># snapshots are writable by default</span>
+<span class="prompt">root@host:~#</span> mount /dev/data/mythin_snap /mnt/snap
+
+<span class="prompt">root@host:~#</span> <span class="cm"># snapshots-of-snapshots work the same way</span>
+<span class="prompt">root@host:~#</span> lvcreate --snapshot -n mythin_snap2 data/mythin_snap</pre>
+
+  <h3>Thin vs. traditional snapshots</h3>
+
+  <table>
+    <tr>
+      <th>Property</th>
+      <th>Traditional (dm-snapshot)</th>
+      <th>Thin (dm-thin)</th>
+    </tr>
+    <tr>
+      <td>Pre-allocated space</td>
+      <td>Yes &mdash; fixed-size CoW store per snapshot</td>
+      <td>No &mdash; shares the pool</td>
+    </tr>
+    <tr>
+      <td>Creation cost</td>
+      <td>Small but non-zero (allocate CoW LV)</td>
+      <td>Instant &mdash; only metadata is written</td>
+    </tr>
+    <tr>
+      <td>Origin write overhead</td>
+      <td>Read-modify-write on first change per block</td>
+      <td>Single CoW allocation in the pool, negligible</td>
+    </tr>
+    <tr>
+      <td>Writable</td>
+      <td>Read-only by default</td>
+      <td>Writable by default</td>
+    </tr>
+    <tr>
+      <td>Snapshot-of-snapshot</td>
+      <td>No (or emulated with significant cost)</td>
+      <td>Native, unlimited depth</td>
+    </tr>
+    <tr>
+      <td>Scale</td>
+      <td>A handful, short-lived</td>
+      <td>Hundreds or thousands, long-lived</td>
+    </tr>
+    <tr>
+      <td>Failure mode if space exhausted</td>
+      <td>Snapshot invalidated &amp; dropped (origin fine)</td>
+      <td>Pool-full affects <em>all</em> LVs in the pool</td>
+    </tr>
+  </table>
+
+  <h3>Common use cases</h3>
+  <ul>
+    <li><strong>Consistent backups</strong> &mdash; <code>fsfreeze</code> the origin filesystem,
+        <code>lvcreate --snapshot</code>, <code>fsfreeze -u</code>, back up the snapshot while the
+        origin keeps serving writes. Remove the snapshot when done.</li>
+    <li><strong>Pre-upgrade rollback</strong> &mdash; snapshot the root LV, run the upgrade, keep
+        the snapshot for a day, remove on success. If something is broken, <code>lvconvert --merge</code>
+        rolls the origin back to the snapshot on next boot.</li>
+    <li><strong>Cheap dev / test clones</strong> &mdash; spin up dozens of snapshots of a production
+        copy for QA without paying full storage cost.</li>
+  </ul>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># freeze → snap → thaw pattern</span>
+<span class="prompt">root@host:~#</span> fsfreeze -f /data
+<span class="prompt">root@host:~#</span> lvcreate --snapshot -n data_backup data/mythin
+<span class="prompt">root@host:~#</span> fsfreeze -u /data
+<span class="prompt">root@host:~#</span> mount -o ro,nouuid /dev/data/data_backup /mnt/snap    <span class="cm"># nouuid for xfs</span>
+<span class="prompt">root@host:~#</span> rsync -aHAX /mnt/snap/ backup-host:/srv/backups/data/
+<span class="prompt">root@host:~#</span> umount /mnt/snap &amp;&amp; lvremove -f /dev/data/data_backup</pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Pool Repair                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Pool Repair</h2>
+
+  <p>If metadata is suspected corrupt (pool won&rsquo;t activate, <code>lvchange</code> errors about
+     bad references) the <code>thin_*</code> tools (from <code>thin-provisioning-tools</code>)
+     can check, export, and rebuild the B-tree. Run on a <strong>deactivated</strong> pool.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> vgchange -a n data
+
+<span class="prompt">root@host:~#</span> thin_check /dev/mapper/data-tpool_tmeta
+<span class="output">examining superblock
+examining devices tree
+examining mapping tree
+checking space map counts</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Export metadata to XML for inspection or rebuild</span>
+<span class="prompt">root@host:~#</span> thin_dump /dev/mapper/data-tpool_tmeta -o /tmp/thin.xml
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Restore onto a fresh metadata LV</span>
+<span class="prompt">root@host:~#</span> thin_restore -i /tmp/thin.xml -o /dev/mapper/data-tpool_tmeta_new</pre>
+
+  <div class="tip">
+    LVM&rsquo;s own <code>lvconvert --repair data/tpool</code> wraps this workflow end to end:
+    it snapshots the metadata, runs <code>thin_check</code>, and swaps in the repaired copy.
+    Prefer it unless you need to hand-edit the XML.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- dm-cache                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Cache LVs (dm-cache)</h2>
+
+  <p>A <strong>cache LV</strong> puts an SSD in front of a slower (HDD) LV transparently.
+     dm-cache sits between the filesystem and the origin LV; hot blocks live on the fast
+     device, cold blocks on the slow one. Promotion / demotion is policy-driven.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># VG "data" contains both the slow HDD PV and the fast SSD PV</span>
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Create a cache pool on the SSD</span>
+<span class="prompt">root@host:~#</span> lvcreate --type cache-pool -L 50G --cachemode writeback \
+                -n cpool data /dev/nvme0n1
+
+<span class="prompt">root@host:~#</span> <span class="cm"># Attach the cache pool to the slow LV</span>
+<span class="prompt">root@host:~#</span> lvconvert --type cache --cachepool data/cpool data/slowlv
+
+<span class="prompt">root@host:~#</span> lvs -o name,cache_mode,cache_policy,cache_settings,data_percent
+<span class="output">  LV      CacheMode   Policy  Settings  Data%
+  slowlv  writeback   smq               12.34</span></pre>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header good">writethrough</div>
+      <div class="comp-body">
+        <ul>
+          <li>Every write hits cache <em>and</em> origin synchronously</li>
+          <li>Read acceleration only &mdash; write latency is HDD-bound</li>
+          <li>Cache device can fail without data loss</li>
+          <li>Safe default when in doubt</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header bad">writeback</div>
+      <div class="comp-body">
+        <ul>
+          <li>Writes acknowledged once they land on the SSD</li>
+          <li>Full read <em>and</em> write acceleration</li>
+          <li><strong>SSD failure = data loss</strong> for dirty blocks</li>
+          <li>Use mirrored/RAID1 cache devices for safety</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- VDO                                      -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>VDO &mdash; Dedup &amp; Compression</h2>
+
+  <p><strong>VDO</strong> (Virtual Data Optimizer) is Red Hat&rsquo;s kernel layer that adds
+     <strong>inline deduplication</strong>, <strong>compression</strong>, and thin provisioning
+     below the filesystem. A VDO volume appears as <code>/dev/mapper/&lt;name&gt;</code> and is
+     typically used as the block device under a filesystem or as an LVM PV.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> <span class="cm"># On RHEL/Alma/Rocky</span>
+<span class="prompt">root@host:~#</span> dnf install vdo kmod-kvdo
+
+<span class="prompt">root@host:~#</span> vdo create --name=vdo0 --device=/dev/data/backing --vdoLogicalSize=10T
+<span class="prompt">root@host:~#</span> mkfs.xfs -K /dev/mapper/vdo0             <span class="cm"># -K avoids fstrim of the sparse device</span>
+<span class="prompt">root@host:~#</span> mount -o discard /dev/mapper/vdo0 /backup
+
+<span class="prompt">root@host:~#</span> vdostats --human-readable
+<span class="output">Device            Size       Used Available Use%   Space saving%
+/dev/mapper/vdo0   5.0T       1.2T       3.8T  24%            67%</span></pre>
+
+  <div class="panel">
+    <div class="panel-title">When VDO earns its keep</div>
+    <ul>
+      <li><strong>Backup targets</strong> &mdash; full backups dedupe heavily across generations</li>
+      <li><strong>VM storage</strong> with many similar guest images</li>
+      <li><strong>Container registries / image caches</strong> &mdash; large duplication between layers</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>Kernel module status:</strong> VDO is distributed as an out-of-tree module
+    (<code>kmod-kvdo</code>) on RHEL-family distros. It is not in mainline Linux
+    as of 2024. On Debian/Ubuntu you&rsquo;re on your own; consider ZFS with compression/dedup
+    or btrfs with compression instead.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Thin LVM vs ZFS                          -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Thin LVM vs. ZFS</h2>
+
+  <p>ZFS has thin volumes (<em>zvols</em>), unlimited instant snapshots, and send/receive built
+     into the same filesystem. If you can run ZFS, you almost always will. LVM-thin stays
+     relevant when ZFS isn&rsquo;t an option or you want to keep a traditional filesystem stack.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header type1">LVM thin + ext4 / xfs</div>
+      <div class="comp-body">
+        <ul>
+          <li>Mainline kernel, no licensing concerns</li>
+          <li>Works with any Linux filesystem on top</li>
+          <li><strong>No block-level checksums</strong> &mdash; bit rot undetectable</li>
+          <li>No send/receive equivalent (use filesystem-level tools)</li>
+          <li>Pool management is imperative, manual</li>
+          <li>Proxmox, RHEL, Ubuntu defaults and ecosystem</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header type2">ZFS (zvols + datasets)</div>
+      <div class="comp-body">
+        <ul>
+          <li>CDDL license &mdash; out-of-tree on Linux (OpenZFS DKMS)</li>
+          <li>Integrated filesystem + volume manager + RAID</li>
+          <li><strong>End-to-end checksums</strong> and self-healing on redundant vdevs</li>
+          <li>Native <code>zfs send</code> / <code>zfs receive</code> snapshots stream</li>
+          <li>ARC / L2ARC / SLOG for caching &mdash; RAM-hungry</li>
+          <li>TrueNAS, FreeBSD, Proxmox (optional) ecosystem</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>Pragmatic rule:</strong> if you need data integrity guarantees (bit-rot detection,
+    self-healing), reach for ZFS or btrfs &mdash; LVM-thin does not checksum. If you just want
+    flexibility and instant snapshots on top of a traditional stack, LVM-thin is the simplest
+    and most universally available option.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

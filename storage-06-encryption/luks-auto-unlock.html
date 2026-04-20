@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 06 — LUKS Keys, crypttab & Auto-Unlock</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 06 — LUKS Keys, crypttab &amp; Auto-Unlock</h1>
+  <p class="subtitle">Multiple unlock methods and integrating with systemd</p>
+
+  <!-- ===== MULTI-SLOT MODEL ===== -->
+  <h2>The Multi-Slot Unlock Model</h2>
+
+  <p>LUKS's defining feature for operators is that <strong>a single master key can be unlocked by multiple independent credentials</strong>. Each key slot holds a copy of the master key encrypted under a different slot key (derived from a passphrase, a keyfile, a TPM-sealed secret, a FIDO2 response, etc.). Any slot's credential opens the device — they are not a chain, they are alternatives.</p>
+
+  <p>This is the foundation for realistic unlock policies:</p>
+
+  <div class="panel">
+    <div class="panel-title">A Realistic Slot Layout</div>
+    <table>
+      <thead><tr><th>Slot</th><th>Credential</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Strong passphrase (human-memorable)</td><td>Recovery. Always present. Written down in a safe / password manager.</td></tr>
+        <tr><td>1</td><td>TPM2-sealed key, bound to PCRs 0/2/4/7</td><td>Automatic unlock on this machine, this firmware, this bootloader.</td></tr>
+        <tr><td>2</td><td>FIDO2 (YubiKey)</td><td>Portable unlock — works on the same user's other machines if they carry the key.</td></tr>
+        <tr><td>3</td><td>Clevis / Tang pin</td><td>Auto-unlock only when attached to the trusted network (server in a datacenter).</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn">
+    <strong>Always keep a passphrase slot as recovery.</strong> TPM hardware can fail. Motherboards get replaced. Firmware updates change PCR values and invalidate TPM-sealed keys. FIDO2 keys get lost. Tang servers die. If you lose <em>every</em> automated unlock slot and have no passphrase, the data is gone. Document the recovery slot's credential and store it offline.
+  </div>
+
+  <!-- ===== UNLOCK METHODS ===== -->
+  <h2>Unlock Methods</h2>
+
+  <h3>Passphrase</h3>
+
+  <p>The simplest credential: a string typed at a prompt. Goes through the KDF (Argon2id on LUKS2) to derive the slot key. Typically occupies slot 0.</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX
+<span class="output">Enter any existing passphrase: ****
+Enter new passphrase for key slot: ****
+Verify passphrase: ****</span>
+  </div>
+
+  <h3>Keyfile</h3>
+
+  <p>A keyfile is just <strong>bytes</strong> — any file. <code>cryptsetup</code> hashes the content (with the configured KDF) to derive the slot key. The file can be 4 KiB of random data or a sentence in a text file; cryptographic strength depends on the content's entropy.</p>
+
+  <div class="terminal">
+<span class="prompt"># Generate a strong keyfile</span>
+<span class="prompt">$</span> dd if=/dev/urandom of=/root/keys/data.key bs=512 count=8
+<span class="prompt">$</span> chmod 0400 /root/keys/data.key
+
+<span class="prompt"># Enroll it to a LUKS slot</span>
+<span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX /root/keys/data.key
+<span class="output">Enter any existing passphrase: ****</span>
+  </div>
+
+  <h3>TPM 2.0 (LUKS2 token)</h3>
+
+  <p>The <code>systemd-cryptenroll</code> tool seals a random key to the TPM, bound to a set of PCR values (firmware, bootloader, kernel measurements). The sealed blob is stored as a <strong>LUKS2 token</strong> in the header, referencing a key slot. At boot, systemd asks the TPM to unseal — the TPM only releases the key if the PCRs still match.</p>
+
+  <div class="terminal">
+<span class="prompt"># Bind to default PCRs (7 = Secure Boot state, usually)</span>
+<span class="prompt">$</span> systemd-cryptenroll --tpm2-device=auto /dev/sdX
+
+<span class="prompt"># Bind to multiple PCRs — firmware (0), bootloader (2), kernel (4), Secure Boot (7)</span>
+<span class="prompt">$</span> systemd-cryptenroll \
+      --tpm2-device=auto \
+      --tpm2-pcrs=0+2+4+7 \
+      /dev/sdX
+  </div>
+
+  <p>Details of PCR selection, sealing, and Measured Boot live in <a href="../storage-07-tpm-secure-boot/">Storage 07 — TPM &amp; Secure Boot</a>.</p>
+
+  <h3>FIDO2 security key</h3>
+
+  <p>A YubiKey or similar. The unlock requires <strong>user presence</strong> (touch the key). Useful for portable unlock that doesn't depend on a single TPM.</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> systemd-cryptenroll --fido2-device=auto /dev/sdX
+<span class="output">Requested to enroll FIDO2 security token...
+Please touch security token: ...</span>
+  </div>
+
+  <h3>Tang / Clevis (Network-Bound Disk Encryption)</h3>
+
+  <p>NBDE binds unlock to <strong>reachability of a trusted network service</strong>. Tang is a lightweight HTTP server that holds asymmetric keys; Clevis is the client that talks to Tang. The disk unlocks automatically only when the machine is on a network where Tang is reachable. Remove the network &rarr; no unlock &rarr; disk stays encrypted at rest.</p>
+
+  <div class="terminal">
+<span class="prompt"># Simple single-Tang binding</span>
+<span class="prompt">$</span> clevis luks bind -d /dev/sdX tang '{"url":"http://tang.example.com"}'
+
+<span class="prompt"># Shamir Secret Sharing: require 2 of 3 pins</span>
+<span class="prompt">$</span> clevis luks bind -d /dev/sdX sss '{
+      "t": 2,
+      "pins": {
+        "tang": [
+          {"url": "http://tang1.dc.example"},
+          {"url": "http://tang2.dc.example"}
+        ],
+        "tpm2": {"pcr_ids": "7"}
+      }
+    }'
+  </div>
+
+  <p>Use cases: servers in a trusted datacenter that should auto-recover from power cycles without operator intervention, but should <em>not</em> be trivially readable if someone steals the disk and takes it home.</p>
+
+  <h3>systemd-cryptenroll — the unified tool</h3>
+
+  <p>On modern systems, <code>systemd-cryptenroll</code> is the preferred single entry point for managing LUKS2 tokens. It speaks all the protocols above.</p>
+
+  <table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>systemd-cryptenroll --password /dev/sdX</code></td><td>Enroll a passphrase</td></tr>
+      <tr><td><code>systemd-cryptenroll --recovery-key /dev/sdX</code></td><td>Generate and enroll a printable recovery key</td></tr>
+      <tr><td><code>systemd-cryptenroll --tpm2-device=auto /dev/sdX</code></td><td>Enroll TPM2-sealed key</td></tr>
+      <tr><td><code>systemd-cryptenroll --fido2-device=auto /dev/sdX</code></td><td>Enroll FIDO2 token</td></tr>
+      <tr><td><code>systemd-cryptenroll --pkcs11-token-uri=auto /dev/sdX</code></td><td>Enroll a PKCS#11 smartcard</td></tr>
+      <tr><td><code>systemd-cryptenroll --wipe-slot=tpm2 /dev/sdX</code></td><td>Remove all TPM2 enrollments</td></tr>
+      <tr><td><code>systemd-cryptenroll /dev/sdX</code> (no action)</td><td>List enrolled tokens/slots</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== CRYPTTAB ===== -->
+  <h2>/etc/crypttab Format</h2>
+
+  <p>One line per encrypted device. Fields separated by whitespace.</p>
+
+  <div class="panel">
+    <div class="panel-title">Syntax</div>
+    <pre><code><span class="num">target-name</span>  <span class="num">source-device</span>  <span class="num">key-file</span>  <span class="num">options</span></code></pre>
+  </div>
+
+  <table>
+    <thead><tr><th>Field</th><th>Purpose</th><th>Common values</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>target-name</code></td>
+        <td>Name of the resulting device-mapper node</td>
+        <td><code>cryptroot</code>, <code>cryptdata</code> — appears as <code>/dev/mapper/&lt;name&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>source-device</code></td>
+        <td>The backing encrypted block device</td>
+        <td><code>UUID=…</code> (most robust), <code>PARTUUID=…</code>, <code>PARTLABEL=…</code>, or <code>/dev/sdX</code></td>
+      </tr>
+      <tr>
+        <td><code>key-file</code></td>
+        <td>How to get the unlock credential</td>
+        <td><code>none</code> or <code>-</code> (prompt), absolute path to a keyfile, or irrelevant when a token option is set</td>
+      </tr>
+      <tr>
+        <td><code>options</code></td>
+        <td>Comma-separated flags</td>
+        <td>See below</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Common options</h3>
+
+  <table>
+    <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>luks</code></td><td>LUKS format (autodetected; default on modern systems)</td></tr>
+      <tr><td><code>luks1</code> / <code>luks2</code></td><td>Force a specific LUKS version</td></tr>
+      <tr><td><code>tpm2-device=auto</code></td><td>Unlock via TPM2 token in the header</td></tr>
+      <tr><td><code>fido2-device=auto</code></td><td>Unlock via FIDO2 token (requires user presence — not for headless auto-unlock)</td></tr>
+      <tr><td><code>discard</code></td><td>Enable TRIM pass-through (<code>--allow-discards</code>)</td></tr>
+      <tr><td><code>timeout=30</code></td><td>Seconds to wait for passphrase before failing</td></tr>
+      <tr><td><code>headless</code></td><td>Fail rather than prompt; for scripted/automated unlock via tokens or keyfiles</td></tr>
+      <tr><td><code>x-initrd.attach</code></td><td>Attach early, in initramfs (for root and anything needed before switch-root)</td></tr>
+      <tr><td><code>noauto</code></td><td>Don't attach at boot (manual <code>systemctl start</code>)</td></tr>
+      <tr><td><code>nofail</code></td><td>Boot continues even if this device fails to unlock</td></tr>
+      <tr><td><code>keyfile-timeout=10</code></td><td>Wait N seconds for keyfile (on removable media) before falling back to passphrase prompt</td></tr>
+      <tr><td><code>keyfile-size=</code>N</td><td>Read only the first N bytes of the keyfile</td></tr>
+    </tbody>
+  </table>
+
+  <h3>A realistic crypttab</h3>
+
+  <div class="terminal">
+<span class="prompt"># /etc/crypttab</span>
+<span class="output"># name          source                  key-file           options
+cryptroot       UUID=3e2d6bc8-8d1c...   none               luks,discard,tpm2-device=auto,x-initrd.attach
+cryptdata       UUID=def01234-5678...   /root/data.key     luks,discard,nofail
+cryptbak        UUID=ghi56789-abcd...   none               luks,headless,nofail,noauto</span>
+  </div>
+
+  <ul>
+    <li><strong>cryptroot</strong> — root disk. Unlocks via TPM2 in initramfs; falls back to passphrase if the TPM refuses (PCR mismatch).</li>
+    <li><strong>cryptdata</strong> — data disk. Keyfile lives on the encrypted root, so it's only readable <em>after</em> root is unlocked. Chain of trust: passphrase / TPM &rarr; root &rarr; data keyfile. <code>nofail</code> ensures boot continues if the data disk is missing.</li>
+    <li><strong>cryptbak</strong> — backup disk. <code>noauto</code> + <code>headless</code> means it's not touched at boot; unlock manually when needed. <code>headless</code> prevents any prompt dialog if run in a non-interactive context.</li>
+  </ul>
+
+  <!-- ===== SYSTEMD INTEGRATION ===== -->
+  <h2>systemd Integration</h2>
+
+  <p>At boot, <code>systemd-cryptsetup-generator</code> reads <code>/etc/crypttab</code> and generates a <code>systemd-cryptsetup@&lt;target&gt;.service</code> unit for each entry. These units are wired into the boot ordering so that:</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <span class="num">1</span>
+      <div class="label">LUKS open</div>
+      <div class="desc">cryptsetup@cryptroot</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">2</span>
+      <div class="label">LVM activate</div>
+      <div class="desc">LVs appear on cryptdevice</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">3</span>
+      <div class="label">FS mount</div>
+      <div class="desc">/etc/fstab entries</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">4</span>
+      <div class="label">local-fs.target</div>
+      <div class="desc">System continues</div>
+    </div>
+  </div>
+
+  <div class="terminal">
+<span class="prompt"># See the generated units</span>
+<span class="prompt">$</span> systemctl list-units 'systemd-cryptsetup*'
+<span class="output">UNIT                                 LOAD   ACTIVE SUB     DESCRIPTION
+systemd-cryptsetup@cryptroot.service loaded active exited  Cryptography Setup for cryptroot
+systemd-cryptsetup@cryptdata.service loaded active exited  Cryptography Setup for cryptdata</span>
+
+<span class="prompt"># Inspect one</span>
+<span class="prompt">$</span> systemctl cat systemd-cryptsetup@cryptdata.service
+  </div>
+
+  <!-- ===== INITRAMFS UNLOCK ===== -->
+  <h2>Initramfs Unlock (Root Disk)</h2>
+
+  <p>The root filesystem is encrypted, but the kernel needs <em>something</em> to boot before it can unlock root. That something is the <strong>initramfs</strong>: a small userspace packed alongside the kernel in <code>/boot</code>, loaded into RAM, run before the real root is mounted.</p>
+
+  <div class="panel">
+    <div class="panel-title">Boot Sequence with Encrypted Root</div>
+    <ol style="margin-left: 20px;">
+      <li>Firmware / bootloader loads kernel + initramfs from <code>/boot</code> (typically unencrypted, or encrypted in GRUB2's LUKS1-only path)</li>
+      <li>Kernel unpacks initramfs into RAM, runs its <code>init</code></li>
+      <li>Initramfs asks for passphrase (or uses TPM / keyfile / dropbear-ssh) &rarr; unlocks LUKS root</li>
+      <li>Activates LVM LVs on the cryptdevice</li>
+      <li>Mounts real root read-only</li>
+      <li><code>switch_root</code> — real <code>/sbin/init</code> (systemd) takes over</li>
+    </ol>
+  </div>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">Debian / Ubuntu</div>
+      <div class="comp-body">
+        <p>Uses <strong>initramfs-tools</strong>. The <code>cryptroot</code> hook scans <code>/etc/crypttab</code> at build time and embeds the relevant entries.</p>
+        <ul>
+          <li>Modern systemd-based initramfs respects <code>x-initrd.attach</code> in crypttab options</li>
+          <li>Regenerate after any crypttab change: <code>update-initramfs -u -k all</code></li>
+          <li>Config: <code>/etc/cryptsetup-initramfs/conf-hook</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header linux">RHEL / Fedora</div>
+      <div class="comp-body">
+        <p>Uses <strong>dracut</strong>. Modular; the <code>crypt</code> module adds LUKS support, <code>tpm2-tss</code> adds TPM unlock, <code>clevis</code> adds NBDE, etc.</p>
+        <ul>
+          <li>Regenerate after crypttab change: <code>dracut -f</code> (or <code>dracut --regenerate-all -f</code>)</li>
+          <li>Config: <code>/etc/dracut.conf.d/*.conf</code></li>
+          <li><code>rd.luks.*</code> kernel command-line params override crypttab</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>Gotcha: keyboard layout in initramfs.</strong> The initramfs typically ships with a US QWERTY layout and doesn't know about your configured XKB keymap. A passphrase containing non-US-accessible characters (accented letters, symbols in different positions on AZERTY / QWERTZ) will be typed differently at the initramfs prompt than after boot. Test unlock by rebooting before you rely on it. Consider a passphrase that's identical on any layout.
+  </div>
+
+  <!-- ===== HEADLESS REMOTE UNLOCK ===== -->
+  <h2>Headless Remote Unlock</h2>
+
+  <p>Servers in colocation / remote datacenters with no console need a way to supply the passphrase at boot. Three common approaches:</p>
+
+  <h3>dropbear-initramfs (SSH in the initramfs)</h3>
+
+  <p>Embeds a minimal SSH server in the initramfs. On boot, the system acquires an IP (via DHCP) and waits for an SSH connection. The operator SSHes in and types the passphrase (or runs <code>cryptroot-unlock</code>).</p>
+
+  <div class="terminal">
+<span class="prompt"># Debian/Ubuntu</span>
+<span class="prompt">$</span> apt install dropbear-initramfs
+
+<span class="prompt"># Place your ops key (different from the one on the booted system)</span>
+<span class="prompt">$</span> echo "ssh-ed25519 AAAAC3Nza... ops@laptop" \
+      &gt; /etc/dropbear/initramfs/authorized_keys
+<span class="prompt">$</span> chmod 0600 /etc/dropbear/initramfs/authorized_keys
+
+<span class="prompt"># Configure network in initramfs (DHCP by default, or static)</span>
+<span class="prompt">$</span> echo 'IP=dhcp' &gt;&gt; /etc/initramfs-tools/initramfs.conf
+
+<span class="prompt"># Rebuild</span>
+<span class="prompt">$</span> update-initramfs -u -k all
+
+<span class="prompt"># Later, from the ops laptop</span>
+<span class="prompt">$</span> ssh -i ~/.ssh/ops_initramfs root@server.example.com
+<span class="output">To unlock root partition, and maybe others like swap, run `cryptroot-unlock`</span>
+<span class="prompt">#</span> cryptroot-unlock
+<span class="output">Please unlock disk cryptroot: ****
+cryptsetup: cryptroot set up successfully
+</span>
+  </div>
+
+  <h3>tinyssh-initramfs</h3>
+
+  <p>Smaller alternative to dropbear, Ed25519-only. Same idea, lighter binary footprint.</p>
+
+  <h3>Tang / Clevis NBDE (auto-unlock)</h3>
+
+  <p>If the server only needs to auto-unlock when it's on the trusted datacenter network, NBDE removes the need for <em>any</em> human intervention on reboot. Power cycle &rarr; boots &rarr; reaches Tang &rarr; unlocks. If the disk is stolen and taken off-network, it stays encrypted.</p>
+
+  <p>Security boundary: you're trusting the <strong>network</strong> as the policy. An attacker with access to the Tang server, or the ability to connect the stolen disk to the datacenter network, can unlock. Useful in <em>physical-theft</em> threat models, not in <em>insider</em> ones.</p>
+
+  <!-- ===== KEYFILE BEST PRACTICES ===== -->
+  <h2>Keyfile Best Practices</h2>
+
+  <div class="panel">
+    <div class="panel-title">Rules</div>
+    <ol style="margin-left: 20px;">
+      <li><strong>High-entropy content.</strong> Generate with <code>/dev/urandom</code>, not a text file you typed.
+        <pre><code>dd if=/dev/urandom of=/root/keys/data.key bs=512 count=8   <span class="cm"># 4 KiB random</span></code></pre>
+      </li>
+      <li><strong>Permissions:</strong> <code>chmod 0400</code> and owned by root. No group or world access. Parent directory also <code>chmod 0700</code>.</li>
+      <li><strong>Location:</strong> on the <em>encrypted root disk</em>, not on <code>/boot</code> or an unencrypted partition. This chains trust: root must be unlocked (by passphrase / TPM) before the data disk's keyfile is readable.</li>
+      <li><strong>Never</strong> keep keyfiles on the same block device they unlock. Always a separate device (root &rarr; data pattern).</li>
+      <li><strong>Backup the keyfile</strong> when you back up the LUKS header. Losing either means losing that unlock path.</li>
+    </ol>
+  </div>
+
+  <!-- ===== RECOVERY PLANNING ===== -->
+  <h2>Recovery Planning Checklist</h2>
+
+  <div class="panel">
+    <div class="panel-title">Per-volume, once and annually</div>
+    <ul>
+      <li><strong>Header backup off-device.</strong> <code>cryptsetup luksHeaderBackup --header-backup-file hdr.bin /dev/sdX</code>. Store on a USB stick and on another server. Repeat after every slot change.</li>
+      <li><strong>One passphrase slot.</strong> Memorable or in a password manager. This is the "if everything else fails" path.</li>
+      <li><strong>Document each slot's purpose.</strong> <code>luksDump</code> shows slot numbers but not <em>what</em> credential is in each. Keep a README: "slot 0 = recovery passphrase in 1Password; slot 1 = TPM2; slot 2 = Alice's YubiKey; slot 3 = keyfile at /root/keys/data.key".</li>
+      <li><strong>Test recovery annually.</strong> Boot from rescue media (Ubuntu live USB, SystemRescue), restore the header backup to a scratch device, unlock with the recovery passphrase. If this fails, you discover it now, not during an emergency.</li>
+      <li><strong>Firmware-update drill.</strong> On systems using TPM-sealed unlock, any UEFI/firmware update can invalidate the sealed PCRs. Either re-enroll <em>before</em> the update or know how to fall back to passphrase.</li>
+    </ul>
+  </div>
+
+  <!-- ===== DISCARD RECAP ===== -->
+  <h2>--allow-discards Details</h2>
+
+  <p>See <a href="dm-crypt-luks.html">dm-crypt &amp; LUKS</a> for the full trade-off discussion. Quick reference:</p>
+
+  <table>
+    <thead><tr><th>Where</th><th>How to enable</th></tr></thead>
+    <tbody>
+      <tr><td>Ad-hoc open</td><td><code>cryptsetup open --allow-discards /dev/sdX name</code></td></tr>
+      <tr><td>Persistent (crypttab)</td><td>Add <code>discard</code> to the options field</td></tr>
+      <tr><td>Persistent (LUKS2 header flag)</td><td><code>cryptsetup --allow-discards --persistent refresh /dev/sdX</code></td></tr>
+      <tr><td>Filesystem side</td><td>Mount with <code>discard</code> (ext4, xfs, btrfs), or use <code>fstrim.timer</code> for periodic batch TRIM</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Recommended:</strong> enable <code>discard</code> in crypttab and rely on <code>fstrim.timer</code> (weekly batch TRIM) rather than continuous <code>discard</code> mount option. Batch TRIM is easier on SSD controllers and still gives most of the benefit. The LUKS-level <code>--allow-discards</code> is what <em>permits</em> the TRIM to reach the SSD at all.
+  </div>
+
+  <!-- ===== CROSS REF ===== -->
+  <h2>See Also</h2>
+
+  <ul>
+    <li><a href="dm-crypt-luks.html">dm-crypt &amp; LUKS</a> — the layer beneath everything on this page.</li>
+    <li><a href="../storage-04-device-mapper/device-mapper.html">Storage 04 — Device Mapper</a> — dm-crypt is a DM target; understanding the DM framework explains how the crypto device appears in <code>/dev/mapper</code>.</li>
+    <li><a href="../storage-07-tpm-secure-boot/">Storage 07 — TPM &amp; Secure Boot</a> — PCR selection, sealing, Measured Boot, and the full story of TPM-based unlock.</li>
+  </ul>
+
+<script src="../nav.js"></script>
+</body>
+</html>

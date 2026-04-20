@@ -544,6 +544,100 @@
 
   </div>
 
+  <!-- ===== STORAGE TRACK ===== -->
+  <h2 style="color: #fbbf24; margin: 60px 0 0;">Linux Storage</h2>
+
+  <div class="section-label">Devices & Partitioning</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Storage 01 — Block Devices</h3>
+      <p class="desc">HDDs, SSDs, NVMe, the kernel block layer, and disk partitioning (MBR/GPT)</p>
+      <ul>
+        <li><a href="storage-01-block-devices/disks-ssds-nvme.html">Disks, SSDs & NVMe</a></li>
+        <li><a href="storage-01-block-devices/partitions.html">Partitions (MBR & GPT)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Storage 02 — Filesystems</h3>
+      <p class="desc">Inodes, journaling, VFS, and the two mainstream Linux filesystems: ext4 and XFS</p>
+      <ul>
+        <li><a href="storage-02-filesystems/filesystem-fundamentals.html">Filesystem Fundamentals</a></li>
+        <li><a href="storage-02-filesystems/ext4-xfs.html">ext4 & XFS</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">RAID, LVM & Device Mapper</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Storage 03 — RAID</h3>
+      <p class="desc">RAID levels, the write hole, bit rot, and Linux mdadm software RAID</p>
+      <ul>
+        <li><a href="storage-03-raid/raid-levels.html">RAID Levels</a></li>
+        <li><a href="storage-03-raid/mdadm.html">Linux Software RAID (mdadm)</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Storage 04 — Device Mapper</h3>
+      <p class="desc">The kernel framework behind LVM, LUKS, and thin pools — they're all dm targets</p>
+      <ul>
+        <li><a href="storage-04-device-mapper/device-mapper.html">Device Mapper</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Storage 05 — LVM</h3>
+      <p class="desc">PV/VG/LV model, online resize, pvmove, thin provisioning, snapshots, dm-cache</p>
+      <ul>
+        <li><a href="storage-05-lvm/lvm-fundamentals.html">LVM Fundamentals</a></li>
+        <li><a href="storage-05-lvm/thin-provisioning-snapshots.html">Thin Provisioning & Snapshots</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Encryption & Trusted Boot</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Storage 06 — Encryption</h3>
+      <p class="desc">dm-crypt, LUKS1 vs LUKS2, key slots, crypttab, and auto-unlock methods</p>
+      <ul>
+        <li><a href="storage-06-encryption/dm-crypt-luks.html">dm-crypt & LUKS</a></li>
+        <li><a href="storage-06-encryption/luks-auto-unlock.html">LUKS Keys, crypttab & Auto-Unlock</a></li>
+      </ul>
+    </div>
+
+    <div class="topic-card">
+      <h3>Storage 07 — TPM & Secure Boot</h3>
+      <p class="desc">TPM 2.0, PCRs, measured boot, sealing LUKS keys, systemd-cryptenroll, Clevis+Tang</p>
+      <ul>
+        <li><a href="storage-07-tpm-secure-boot/tpm-basics.html">TPM Fundamentals</a></li>
+        <li><a href="storage-07-tpm-secure-boot/secure-boot-auto-unlock.html">Secure Boot & LUKS Auto-Unlock</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="section-label">Integrated Filesystems</div>
+  <div class="topic-grid">
+
+    <div class="topic-card">
+      <h3>Storage 08 — Advanced Filesystems</h3>
+      <p class="desc">ZFS and btrfs — integrated filesystem + volume manager + RAID + integrity</p>
+      <ul>
+        <li><a href="storage-08-advanced-filesystems/zfs.html">ZFS</a></li>
+        <li><a href="storage-08-advanced-filesystems/btrfs.html">btrfs</a></li>
+      </ul>
+    </div>
+
+  </div>
+
   <!-- PWA Service Worker Registration -->
   <script>
     if ('serviceWorker' in navigator) {

@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 06 — dm-crypt & LUKS</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 06 — dm-crypt &amp; LUKS</h1>
+  <p class="subtitle">Full-disk encryption the Linux way</p>
+
+  <!-- ===== TWO LEVELS ===== -->
+  <h2>Two Levels: dm-crypt and LUKS</h2>
+
+  <p>Linux full-disk encryption is built from <strong>two independent layers</strong> that are almost always used together, but it's critical to understand them as separate pieces. Conflating them is the source of most confusion when you read <code>cryptsetup</code> man pages or debug an unlock failure.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header kernel">dm-crypt (kernel)</div>
+      <div class="comp-body">
+        <p><strong>The crypto engine.</strong> A device-mapper target (see <a href="../storage-04-device-mapper/device-mapper.html">Storage 04 — Device Mapper</a>) that sits between a backing block device and a virtual one, transparently encrypting every sector that passes through.</p>
+        <ul>
+          <li>Lives entirely in the kernel (<code>dm-crypt.ko</code>)</li>
+          <li>Stores <strong>no metadata on disk</strong></li>
+          <li>Needs to be told: cipher, mode, key size, hash, IV mode, and the key itself — every time</li>
+          <li>Produces <code>/dev/mapper/&lt;name&gt;</code> — a regular block device</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header good">LUKS (on-disk format)</div>
+      <div class="comp-body">
+        <p><strong>A standard disk-resident metadata format</strong> that sits on top of dm-crypt. LUKS (Linux Unified Key Setup) defines how to store cipher parameters and multiple encrypted copies of a master key in a header at the start of the device.</p>
+        <ul>
+          <li>Pure userspace spec, implemented by <code>cryptsetup</code></li>
+          <li>Header is <strong>on the disk</strong> — self-describing</li>
+          <li>Multiple key slots → multiple passphrases / keyfiles unlock the same volume</li>
+          <li>When you "open" a LUKS device, <code>cryptsetup</code> reads the header and configures dm-crypt for you</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Mental Model</div>
+    <p>dm-crypt is the encryption <em>engine</em>. LUKS is the <em>manifest</em> that tells the engine how to run and holds the encrypted keys. When you unlock a LUKS volume:</p>
+    <ol style="margin-left: 20px; margin-top: 10px;">
+      <li><code>cryptsetup</code> reads the LUKS header from the disk</li>
+      <li>It uses your passphrase (through a KDF) to decrypt the master key</li>
+      <li>It calls the kernel to create a dm-crypt mapping with that master key and the header's cipher parameters</li>
+      <li>The master key lives only in kernel memory; the header on disk never holds it in plaintext</li>
+    </ol>
+  </div>
+
+  <!-- ===== PLAIN DM-CRYPT ===== -->
+  <h2>Plain dm-crypt: No Header, No Safety Net</h2>
+
+  <p>You can use dm-crypt directly without LUKS. Because nothing is stored on the disk, <strong>you must remember every crypto parameter</strong>. Forget any of them — cipher, mode, key size, hash, IV — and the data is gone. There's no header to look at, no tool that can introspect the device.</p>
+
+  <div class="terminal">
+<span class="prompt"># Plain mode — no metadata. You must never forget these params.</span>
+<span class="prompt">$</span> cryptsetup open --type plain \
+      --cipher aes-xts-plain64 \
+      --key-size 512 \
+      --hash sha256 \
+      /dev/sdX plainvol
+<span class="output">Enter passphrase: ****</span>
+  </div>
+
+  <div class="warn">
+    <strong>When to use plain mode:</strong> almost never. It exists for <strong>plausible deniability</strong> (the disk looks like random data — no header, no "this is encrypted" signal) and for special cases like encrypting swap with a random key at boot. For anything you care about keeping, use LUKS.
+  </div>
+
+  <!-- ===== WHY LUKS ===== -->
+  <h2>Why LUKS Exists</h2>
+
+  <div class="panel">
+    <div class="panel-title">Problems LUKS Solves</div>
+    <ul>
+      <li><strong>Self-describing volumes</strong> — you can plug a LUKS disk into any Linux system and it knows exactly how to attempt to decrypt it.</li>
+      <li><strong>Multiple unlock credentials</strong> — up to 8 (LUKS1) or 32 (LUKS2) key slots, each independently unlocking the same master key. Add a colleague's keyfile without reencrypting anything.</li>
+      <li><strong>Passphrase change without reencryption</strong> — the master key stays the same; only the slot that holds an encrypted copy of it changes.</li>
+      <li><strong>Cryptographic erase</strong> — destroying the 16 MiB header wipes the only decryptable copy of the master key. Faster than overwriting a 20 TB disk.</li>
+      <li><strong>Standard tooling</strong> — <code>cryptsetup</code> is everywhere; systemd integrates via <code>/etc/crypttab</code> and <code>systemd-cryptsetup-generator</code>.</li>
+    </ul>
+  </div>
+
+  <!-- ===== CIPHER MODES ===== -->
+  <h2>Cipher Modes</h2>
+
+  <p>The <code>--cipher</code> option takes a triple: <code>&lt;algorithm&gt;-&lt;mode&gt;-&lt;iv&gt;</code>. The kernel's crypto API assembles the corresponding transformation.</p>
+
+  <table>
+    <thead>
+      <tr><th>Spec</th><th>Status</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>aes-xts-plain64</code></td>
+        <td style="color:#34d399;">Standard modern choice</td>
+        <td>XTS is a tweakable block mode specifically designed for disk encryption. It preserves sector length (ciphertext size == plaintext size). <code>plain64</code> means the IV / tweak is the 64-bit sector number. AES hardware accelerated on any modern CPU (AES-NI).</td>
+      </tr>
+      <tr>
+        <td><code>aes-cbc-essiv:sha256</code></td>
+        <td style="color:#fbbf24;">Legacy</td>
+        <td>Old LUKS1 default. ESSIV (Encrypted Salt-Sector IV) derives per-sector IVs from <code>SHA-256(master_key)</code> to defeat watermarking attacks that plain CBC was vulnerable to. Still secure if used correctly, but XTS is preferred for new setups.</td>
+      </tr>
+      <tr>
+        <td><code>serpent-xts-plain64</code></td>
+        <td style="color:#888;">Alternative</td>
+        <td>Serpent cipher instead of AES. Conservative margin against future AES attacks, but no hardware acceleration — much slower. Rarely used outside of paranoid / AES-distrusting setups.</td>
+      </tr>
+      <tr>
+        <td><code>twofish-xts-plain64</code></td>
+        <td style="color:#888;">Alternative</td>
+        <td>Another AES-alternative cipher. Similar profile to Serpent. Rarely used.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Key Sizes</h3>
+
+  <p>For XTS mode, the "key" is split into <strong>two halves</strong>: one for encryption, one as the tweak key. That's why AES-256 in XTS takes a <code>--key-size 512</code>: two 256-bit halves = 512 bits total.</p>
+
+  <table>
+    <thead>
+      <tr><th>Option</th><th>Actual AES strength</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--key-size 256</code> with XTS</td><td>AES-128</td><td>Two 128-bit halves.</td></tr>
+      <tr><td><code>--key-size 512</code> with XTS</td><td>AES-256</td><td>Two 256-bit halves. Default and recommended.</td></tr>
+      <tr><td><code>--key-size 256</code> with CBC</td><td>AES-256</td><td>CBC uses the whole key for encryption.</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== SECTOR LEVEL ===== -->
+  <h2>Sector-Level Encryption</h2>
+
+  <p>dm-crypt encrypts each disk sector (typically 512 B or 4 KiB) <strong>independently</strong>. The IV / tweak for sector N is derived from N itself (with <code>plain64</code>, it literally <em>is</em> N). This has important consequences:</p>
+
+  <ul>
+    <li><strong>Random access</strong> — reading sector 1 000 000 decrypts only that sector, not everything before it.</li>
+    <li><strong>No compression / integrity by default</strong> — ciphertext is the same size as plaintext. For integrity, layer dm-integrity (see below).</li>
+    <li><strong>Identical plaintext in two sectors yields different ciphertext</strong> — because the tweak differs.</li>
+    <li><strong>Identical plaintext written to the <em>same</em> sector twice yields the <em>same</em> ciphertext</strong> — an attacker with snapshots can see which sectors changed. This is inherent to disk encryption; the only mitigation is authenticated encryption with a nonce (dm-integrity + dm-crypt).</li>
+  </ul>
+
+  <!-- ===== LUKS1 vs LUKS2 ===== -->
+  <h2>LUKS1 vs LUKS2</h2>
+
+  <p>LUKS2 is the default on all modern distros (cryptsetup &ge; 2.1, ~2018). You'll only see LUKS1 on older systems or when explicitly requested for compatibility.</p>
+
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>LUKS1</th><th>LUKS2</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Header location</strong></td>
+        <td>Fixed 1 MiB at start of device, binary layout</td>
+        <td>Flexible JSON metadata, 16 MiB by default, with a <strong>secondary backup copy</strong> in the header area</td>
+      </tr>
+      <tr>
+        <td><strong>KDF</strong> (passphrase &rarr; slot key)</td>
+        <td>PBKDF2 (SHA-256/SHA-512)</td>
+        <td><strong>Argon2id</strong> by default — memory-hard, resistant to GPU/ASIC brute force</td>
+      </tr>
+      <tr>
+        <td><strong>Key slots</strong></td>
+        <td>8 fixed slots</td>
+        <td>Up to 32 slots (practical limit; header size scales)</td>
+      </tr>
+      <tr>
+        <td><strong>Tokens</strong></td>
+        <td>Not supported</td>
+        <td><strong>Yes</strong> — pluggable unlock methods (TPM2, FIDO2, systemd, clevis pins) stored as JSON token objects referencing a key slot</td>
+      </tr>
+      <tr>
+        <td><strong>Online reencryption</strong></td>
+        <td>Offline only (<code>cryptsetup-reencrypt</code>)</td>
+        <td><strong>Yes</strong> — change cipher / master key while the device is mounted and in use. Crash-safe and resumable.</td>
+      </tr>
+      <tr>
+        <td><strong>Header integrity</strong></td>
+        <td>No checksum on metadata</td>
+        <td>Metadata is <strong>checksummed</strong>; updates are atomic (primary + backup)</td>
+      </tr>
+      <tr>
+        <td><strong>AEAD (dm-integrity + dm-crypt)</strong></td>
+        <td>Not supported at format time</td>
+        <td><code>--integrity</code> option at format</td>
+      </tr>
+      <tr>
+        <td><strong>Anti-forensic splitter</strong></td>
+        <td>AFsplitter on key material (explicit)</td>
+        <td>Equivalent protection via JSON key-material segments</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>Converting LUKS1 &rarr; LUKS2:</strong> <code>cryptsetup convert --type luks2 /dev/sdX</code>. Backup the header first. Some features (e.g. tokens) require LUKS2, so this is usually worth doing on older installs.
+  </div>
+
+  <!-- ===== MASTER KEY & SLOTS ===== -->
+  <h2>Master Key and Key Slots</h2>
+
+  <p>This is the most important concept in LUKS. Once it clicks, most of the tooling makes sense.</p>
+
+  <div class="panel">
+    <div class="panel-title">Life of a Master Key</div>
+    <ol style="margin-left: 20px;">
+      <li>When you run <code>luksFormat</code>, <code>cryptsetup</code> generates a <strong>random master key</strong> from <code>/dev/urandom</code>. This is the actual AES-XTS key that encrypts every sector.</li>
+      <li>The master key is <strong>never stored on disk in plaintext</strong>. It lives in kernel memory while the device is open, and disappears when it's closed.</li>
+      <li>Each <strong>key slot</strong> stores an encrypted copy of the master key. The slot's encryption key is derived from a passphrase (or keyfile) via the KDF (PBKDF2 for LUKS1, Argon2id for LUKS2).</li>
+      <li>To open: passphrase &rarr; KDF &rarr; slot key &rarr; decrypt slot &rarr; master key &rarr; dm-crypt.</li>
+    </ol>
+  </div>
+
+  <h3>Unlock Flow</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <span class="num">1</span>
+      <div class="label">Passphrase</div>
+      <div class="desc">User input or keyfile bytes</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">2</span>
+      <div class="label">KDF</div>
+      <div class="desc">Argon2id / PBKDF2<br>memory + time cost</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">3</span>
+      <div class="label">Slot key</div>
+      <div class="desc">Decrypts slot payload</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">4</span>
+      <div class="label">Master key</div>
+      <div class="desc">Loaded into kernel</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="flow-step">
+      <span class="num">5</span>
+      <div class="label">dm-crypt active</div>
+      <div class="desc">/dev/mapper/name</div>
+    </div>
+  </div>
+
+  <h3>Consequences</h3>
+
+  <ul>
+    <li><strong>Changing a passphrase re-encrypts only that slot.</strong> The master key doesn't change, so the disk itself isn't rewritten. <code>luksChangeKey</code> is instant even on a 20 TB disk.</li>
+    <li><strong>Adding a user is zero-cost.</strong> <code>luksAddKey</code> fills an empty slot with the same master key, encrypted under a new passphrase.</li>
+    <li><strong>Removing a passphrase is cheap.</strong> <code>luksRemoveKey</code> or <code>luksKillSlot</code> overwrites only the slot, not the payload.</li>
+    <li><strong>The header is the single point of failure.</strong> No header, no decryptable master key, no data. This is a feature for cryptographic erase — and a <em>disaster</em> if the header is lost to disk corruption.</li>
+  </ul>
+
+  <div class="warn">
+    <strong>Backing up the LUKS header is critical.</strong> A failed write to the first 16 MiB of a 20 TB disk can leave the payload intact but the master key unreadable forever. Always run <code>luksHeaderBackup</code> after format and keep the backup offsite.
+  </div>
+
+  <!-- ===== AF SPLITTER ===== -->
+  <h2>Anti-Forensic Splitter (AFsplitter)</h2>
+
+  <p>A subtle but clever LUKS feature. Without AF, each key slot would contain ~64 bytes of ciphertext — the encrypted master key. If an attacker could recover <em>any</em> sector of the header from, say, a scrubbed platter or an SSD's reallocation pool, they'd have a cracking target.</p>
+
+  <p>AFsplitter "stretches" the encrypted master key across <strong>many disk blocks</strong> (thousands) by mixing it with random data using a diffusion hash. The full block must be present to reconstruct the key; losing even one byte of the stretched material makes reconstruction infeasible.</p>
+
+  <ul>
+    <li>LUKS1: AFsplitter is the explicit mechanism (part of the on-disk spec).</li>
+    <li>LUKS2: JSON metadata references "keyslots segments" which serve the equivalent role.</li>
+  </ul>
+
+  <!-- ===== CRYPTSETUP WALKTHROUGH ===== -->
+  <h2>cryptsetup Command Walkthrough</h2>
+
+  <h3>Format a new device</h3>
+
+  <div class="terminal">
+<span class="prompt"># Simple — distro defaults (LUKS2, argon2id, aes-xts-plain64 on modern cryptsetup)</span>
+<span class="prompt">$</span> cryptsetup luksFormat /dev/sdX
+
+WARNING!
+========
+This will overwrite data on /dev/sdX irrevocably.
+
+Are you sure? (Type 'yes' in capital letters): <span class="output">YES</span>
+Enter passphrase for /dev/sdX: ****
+Verify passphrase: ****
+
+<span class="prompt"># Explicit — pin every parameter for reproducibility</span>
+<span class="prompt">$</span> cryptsetup luksFormat \
+      --type luks2 \
+      --cipher aes-xts-plain64 \
+      --key-size 512 \
+      --hash sha512 \
+      --pbkdf argon2id \
+      --pbkdf-memory 1048576 \
+      --pbkdf-parallel 4 \
+      /dev/sdX
+  </div>
+
+  <h3>Open and close</h3>
+
+  <div class="terminal">
+<span class="prompt"># Open — creates /dev/mapper/cryptroot</span>
+<span class="prompt">$</span> cryptsetup open /dev/sdX cryptroot
+<span class="output">Enter passphrase for /dev/sdX: ****</span>
+
+<span class="prompt"># Both forms work (luksOpen is the old alias)</span>
+<span class="prompt">$</span> cryptsetup luksOpen /dev/sdX cryptroot
+
+<span class="prompt"># Verify</span>
+<span class="prompt">$</span> ls -l /dev/mapper/cryptroot
+<span class="output">lrwxrwxrwx 1 root root 7 Apr 20 09:12 /dev/mapper/cryptroot -&gt; ../dm-3</span>
+
+<span class="prompt"># Close</span>
+<span class="prompt">$</span> cryptsetup close cryptroot
+  </div>
+
+  <h3>Manage key slots</h3>
+
+  <div class="terminal">
+<span class="prompt"># Add a passphrase to the next free slot (prompts for existing + new)</span>
+<span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX
+
+<span class="prompt"># Add a keyfile to the next free slot</span>
+<span class="prompt">$</span> cryptsetup luksAddKey /dev/sdX /root/keys/data.key
+
+<span class="prompt"># Remove a passphrase (by supplying it — asks which one)</span>
+<span class="prompt">$</span> cryptsetup luksRemoveKey /dev/sdX
+
+<span class="prompt"># Force-remove a slot by number (destructive, no prompt for slot's key)</span>
+<span class="prompt">$</span> cryptsetup luksKillSlot /dev/sdX 2
+
+<span class="prompt"># Change a passphrase in place (old passphrase &rarr; new passphrase, same slot)</span>
+<span class="prompt">$</span> cryptsetup luksChangeKey /dev/sdX
+
+<span class="prompt"># Destroy ALL key slots (device becomes unopenable forever)</span>
+<span class="prompt">$</span> cryptsetup luksErase /dev/sdX
+  </div>
+
+  <h3>Inspect the header</h3>
+
+  <div class="terminal">
+<span class="prompt">$</span> cryptsetup luksDump /dev/sdX
+<span class="output">LUKS header information
+Version:        2
+Epoch:          6
+Metadata area:  16384 [bytes]
+Keyslots area:  16744448 [bytes]
+UUID:           3e2d6bc8-8d1c-4a51-9f2b-a9b07e3c21a0
+Label:          (no label)
+Subsystem:      (no subsystem)
+Flags:          (no flags)
+
+Data segments:
+  0: crypt
+        offset: 16777216 [bytes]
+        length: (whole device)
+        cipher: aes-xts-plain64
+        sector: 512 [bytes]
+
+Keyslots:
+  0: luks2
+        Key:        512 bits
+        Priority:   normal
+        Cipher:     aes-xts-plain64
+        Cipher key: 512 bits
+        PBKDF:      argon2id
+        Time cost:  7
+        Memory:     1048576
+        Threads:    4
+        Salt:       62 4c 1e a8 7d ... 3b
+        AF stripes: 4000
+        AF hash:    sha256
+        Area offset: 32768 [bytes]
+        Area length: 258048 [bytes]
+        Digest ID:   0
+  1: luks2
+        ... (TPM2-sealed, smaller memory cost)
+  4: luks2
+        ... (FIDO2-sealed)
+
+Tokens:
+  0: systemd-tpm2
+        tpm2-hash-pcrs:    7
+        tpm2-pcrlock:      false
+        tpm2-pubkey:       (null)
+        Keyslot:           1
+  1: systemd-fido2
+        fido2-credential:  Bq2...
+        Keyslot:           4
+
+Digests:
+  0: pbkdf2
+        Hash:       sha256
+        Iterations: 95320
+        Salt:       a1 2f ...
+        Digest:     fa 8c ...</span>
+  </div>
+
+  <h3>Header backup and restore</h3>
+
+  <div class="terminal">
+<span class="prompt"># Backup the 16 MiB header to a file — do this after every slot change</span>
+<span class="prompt">$</span> cryptsetup luksHeaderBackup \
+      --header-backup-file /root/cryptroot-header.bin \
+      /dev/sdX
+
+<span class="prompt"># Store the backup OFF the encrypted disk (USB, another host, offsite)</span>
+<span class="prompt">$</span> chmod 0400 /root/cryptroot-header.bin
+
+<span class="prompt"># Restore (dangerous — overwrites current header)</span>
+<span class="prompt">$</span> cryptsetup luksHeaderRestore \
+      --header-backup-file /root/cryptroot-header.bin \
+      /dev/sdX
+  </div>
+
+  <div class="warn">
+    <strong>Header backups are sensitive.</strong> They contain the encrypted master key. An attacker with your header backup + a weak passphrase can brute-force offline, with unlimited parallelism. Treat header backup files with the same care as the passphrases themselves.
+  </div>
+
+  <!-- ===== LAYERING ===== -->
+  <h2>Layering: LUKS with LVM</h2>
+
+  <p>Two common topologies. Both are valid; the choice is about <strong>granularity of encryption</strong> vs. <strong>operational simplicity</strong>.</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header before">LUKS on LVM (per-LV)</div>
+      <div class="comp-body">
+        <pre><code>RAID (mdraid or hardware)
+  └─ PV
+     └─ VG
+        ├─ LV: root       &rarr; LUKS &rarr; ext4
+        ├─ LV: home       &rarr; LUKS &rarr; ext4  (different key)
+        ├─ LV: data       &rarr; LUKS &rarr; xfs   (keyfile-only)
+        └─ LV: swap       &rarr; LUKS &rarr; swap  (random key at boot)</code></pre>
+        <ul>
+          <li>Per-LV cipher choice and per-LV passphrase</li>
+          <li>Can leave some LVs unencrypted (e.g. <code>/boot</code>)</li>
+          <li>Each LV has its own <code>/dev/mapper/luks-&lt;uuid&gt;</code> entry</li>
+          <li>More <code>crypttab</code> entries, more unlock prompts</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header after">LVM on LUKS (whole-disk)</div>
+      <div class="comp-body">
+        <pre><code>RAID (mdraid or hardware)
+  └─ partition
+     └─ LUKS (cryptroot)
+        └─ PV
+           └─ VG
+              ├─ LV: root  &rarr; ext4
+              ├─ LV: home  &rarr; ext4
+              ├─ LV: data  &rarr; xfs
+              └─ LV: swap  &rarr; swap</code></pre>
+        <ul>
+          <li>Single passphrase unlocks the whole VG</li>
+          <li>Ubuntu/Debian installer default</li>
+          <li>Simpler for root / laptops</li>
+          <li>All LVs share the same master key — no per-LV key rotation</li>
+          <li>Growing the VG means growing the LUKS device (resize dance)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Criterion</th><th>LUKS on LVM</th><th>LVM on LUKS</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Number of passphrases at boot</td><td>One per LV (or keyfiles)</td><td>One</td></tr>
+      <tr><td>Per-LV encryption choice</td><td>Yes</td><td>No (all or nothing)</td></tr>
+      <tr><td>Key rotation granularity</td><td>Per-LV</td><td>Whole VG</td></tr>
+      <tr><td>Growing the pool</td><td>Add new PV, encrypt new LVs</td><td>Resize LUKS then PV then VG</td></tr>
+      <tr><td>Snapshots</td><td>LVM snapshots live <em>above</em> LUKS, unencrypted in memory but encrypted on disk when written</td><td>Same, but inside the single cryptdevice</td></tr>
+      <tr><td>Typical use</td><td>Servers with selective encryption</td><td>Laptops, full-disk encryption installers</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== CRYPTO ERASE ===== -->
+  <h2>Cryptographic Erase</h2>
+
+  <p>Because the master key is only recoverable from the header, destroying the header destroys the only path to the plaintext. This is orders of magnitude faster than overwriting the payload.</p>
+
+  <div class="terminal">
+<span class="prompt"># Official: erase all LUKS key slots</span>
+<span class="prompt">$</span> cryptsetup erase /dev/sdX
+
+<span class="prompt"># Brute force: overwrite the first 16 MiB with random data</span>
+<span class="prompt">$</span> dd if=/dev/urandom of=/dev/sdX bs=1M count=16 status=progress
+
+<span class="prompt"># Verification — header is gone</span>
+<span class="prompt">$</span> cryptsetup luksDump /dev/sdX
+<span class="output">Device /dev/sdX is not a valid LUKS device.</span>
+  </div>
+
+  <div class="tip">
+    <strong>Why this matters for SRE:</strong> decommissioning a 20 TB disk by wiping 16 MiB takes seconds instead of hours. Combined with SED (self-encrypting drives) or TCG Opal, you can "instantly retire" disks at scale. Just be sure the header backup is also destroyed.
+  </div>
+
+  <!-- ===== ONLINE REENCRYPTION ===== -->
+  <h2>Online Reencryption (LUKS2)</h2>
+
+  <p>LUKS2 can re-encrypt an in-use device while applications keep reading and writing. Useful for rotating the master key after a suspected compromise, or migrating from CBC to XTS.</p>
+
+  <div class="terminal">
+<span class="prompt"># Rotate the master key (same cipher). Active and resumable.</span>
+<span class="prompt">$</span> cryptsetup reencrypt /dev/sdX
+
+<span class="prompt"># Migrate cipher</span>
+<span class="prompt">$</span> cryptsetup reencrypt --cipher aes-xts-plain64 /dev/sdX
+
+<span class="prompt"># Resume an interrupted reencryption (after crash or SIGINT)</span>
+<span class="prompt">$</span> cryptsetup reencrypt --resume-only /dev/sdX
+  </div>
+
+  <p>Internally, LUKS2 keeps a <strong>reencryption journal</strong> in the header that records progress. If the system crashes mid-reencryption, the operation resumes from the last committed segment. No data loss, no "broken" state.</p>
+
+  <!-- ===== DM-INTEGRITY ===== -->
+  <h2>Authenticated Encryption: dm-integrity + dm-crypt</h2>
+
+  <p>Plain dm-crypt gives you <strong>confidentiality</strong> but not <strong>integrity</strong>. An attacker with write access to the raw disk can flip ciphertext bits; after decryption, the corresponding plaintext bits are scrambled — but the filesystem above may not notice until files misbehave. Silent bit rot from failing disks has the same effect.</p>
+
+  <p>LUKS2 can layer <strong>dm-integrity</strong> underneath dm-crypt to store a per-sector authentication tag (HMAC or Poly1305), turning the stack into <strong>AEAD on a block device</strong>.</p>
+
+  <div class="encap-diagram">
+    <div class="encap-layer app">Filesystem (ext4 / xfs / btrfs)</div>
+    <div class="encap-layer tcp">dm-crypt (AES-GCM-random or AES-XTS + HMAC)</div>
+    <div class="encap-layer ip">dm-integrity (per-sector tag storage)</div>
+    <div class="encap-layer eth">Block device</div>
+  </div>
+
+  <div class="terminal">
+<span class="prompt"># Format with integrity (LUKS2 only)</span>
+<span class="prompt">$</span> cryptsetup luksFormat \
+      --type luks2 \
+      --cipher aes-gcm-random \
+      --integrity aead \
+      --key-size 256 \
+      /dev/sdX
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>Cost / Benefit</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Detects bit rot</td><td>Yes — mismatched tag &rarr; I/O error bubbles up, filesystem sees a read failure</td></tr>
+      <tr><td>Detects tampering</td><td>Yes — attacker cannot forge sector + tag without the key</td></tr>
+      <tr><td>Write performance</td><td>~20% penalty (extra tag write per sector)</td></tr>
+      <tr><td>Disk space overhead</td><td>~1% for per-sector tags (16 bytes per 4 KiB sector)</td></tr>
+      <tr><td>Maturity</td><td>Production on modern kernels (&ge; 4.12), widely used for sensitive data-at-rest</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===== DISCARD / TRIM ===== -->
+  <h2>Discard / TRIM on LUKS</h2>
+
+  <p>SSDs rely on the filesystem sending TRIM commands to know which sectors are free, so the FTL can garbage-collect them. By default, <strong>dm-crypt does NOT pass TRIM through</strong> — every sector looks "in use" to the SSD, even if the filesystem has freed it. Over time, this hurts write amplification and wear leveling.</p>
+
+  <p>Enable pass-through with <code>--allow-discards</code>:</p>
+
+  <div class="terminal">
+<span class="prompt"># Per-open (not persisted)</span>
+<span class="prompt">$</span> cryptsetup open --allow-discards /dev/sdX cryptroot
+
+<span class="prompt"># In /etc/crypttab (persistent)</span>
+cryptroot  UUID=...  none  luks,discard
+  </div>
+
+  <div class="note">
+    <strong>Trade-off:</strong> TRIM pass-through leaks information — an attacker with raw disk access can see <em>which sectors are in use</em> and which are free. Depending on filesystem usage patterns, this can reveal file size distributions. For SSDs in server fleets where the performance and longevity win is significant, most operators accept the leak. For highly adversarial threat models (seized laptop), you may want to disable discards.
+  </div>
+
+  <!-- ===== FORWARD REF ===== -->
+  <h2>Next: Automatic Unlock</h2>
+
+  <p>This page covered the core of dm-crypt and LUKS. The companion page — <a href="luks-auto-unlock.html">LUKS Keys, crypttab &amp; Auto-Unlock</a> — covers the key-slot ecosystem (keyfiles, TPM2 tokens, FIDO2, Tang/Clevis NBDE), <code>/etc/crypttab</code> syntax, initramfs unlock, and headless remote unlock via dropbear.</p>
+
+  <p>TPM-based unlock in particular is fleshed out in <a href="../storage-07-tpm-secure-boot/">Storage 07 — TPM &amp; Secure Boot</a> (forward reference — covers PCRs, sealing, and Measured Boot).</p>
+
+<script src="../nav.js"></script>
+</body>
+</html>

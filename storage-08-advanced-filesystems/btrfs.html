@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 08 — btrfs</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 08 &mdash; btrfs</h1>
+  <p class="subtitle">Linux-native copy-on-write filesystem</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- What btrfs is                             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>What btrfs Is</h2>
+
+  <p><strong>btrfs</strong> (B-Tree FS, pronounced <em>butter FS</em> or
+     <em>better FS</em>) started at Oracle in 2007 and has been in the
+     mainline Linux kernel since 2.6.29 &mdash; no licensing friction, no
+     out-of-tree module, no DKMS. It is a modern copy-on-write filesystem
+     whose goals closely parallel ZFS: integrate <strong>filesystem + volume
+     management + snapshots + checksums</strong> into one coherent system.</p>
+
+  <div class="panel">
+    <div class="panel-title">Core ideas shared with ZFS</div>
+    <ul>
+      <li>Copy-on-write: no in-place overwrite of live data</li>
+      <li>Checksums on every block (CRC32C default; xxhash / SHA-256 / BLAKE2 since 5.5)</li>
+      <li>Snapshots as CoW pointer operations &mdash; instant, cheap</li>
+      <li>Efficient <code>send</code> / <code>receive</code> replication</li>
+      <li>Multi-device pools with built-in RAID profiles</li>
+      <li>Transparent compression (zlib, lzo, zstd)</li>
+      <li>Subvolumes &mdash; named trees within one filesystem</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">What btrfs does differently</div>
+    <ul>
+      <li><strong>In-tree.</strong> Ships with every modern Linux kernel.</li>
+      <li><strong>Online flexibility.</strong> Add / remove / replace devices
+          and convert RAID profile <em>without</em> unmounting &mdash; a huge
+          operational win versus mdadm and versus ZFS.</li>
+      <li><strong>Subvolumes instead of datasets.</strong> Similar semantics,
+          different internal model.</li>
+      <li><strong>Single filesystem per pool.</strong> Unlike ZFS which has a
+          pool plus independent datasets, a btrfs &ldquo;filesystem&rdquo; is
+          one object; subvolumes are trees within it.</li>
+      <li><strong>Caveat: parity RAID (5/6) is still not safe</strong> as of
+          2024 &mdash; more on this below.</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Subvolumes                                -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Subvolumes</h2>
+
+  <p>A <strong>subvolume</strong> is a named, separately-mountable tree within a
+     btrfs filesystem. Think of it as a directory with its own identity: it
+     can be snapshotted independently, mounted with different options, given
+     its own quotas, and replicated on its own.</p>
+
+  <p>Crucially, <strong>snapshots <em>are</em> subvolumes.</strong> A snapshot
+     is just a CoW copy of a subvolume's tree root &mdash; the two are
+     indistinguishable to the kernel apart from their origin.</p>
+
+  <h3>Typical desktop layout</h3>
+
+  <div class="file-tree">
+/  <span class="cm"># mounted with subvol=@</span>
+├── home        <span class="cm"># mounted with subvol=@home</span>
+├── var
+│   ├── log     <span class="cm"># mounted with subvol=@var_log</span>
+│   └── cache   <span class="cm"># mounted with subvol=@var_cache</span>
+└── .snapshots  <span class="cm"># mounted with subvol=@snapshots</span>
+  </div>
+
+  <p>Each <code>@xxx</code> is a separate subvolume inside the single btrfs
+     filesystem on the root device. Snapshotting <code>@</code> before a
+     package transaction captures the root FS without touching
+     <code>@home</code>. Rollback reverts only the root.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> btrfs subvolume create /mnt/@data
+<span class="output">Create subvolume '/mnt/@data'</span>
+
+<span class="prompt">root@host:~#</span> btrfs subvolume list /mnt
+<span class="output">ID 256 gen 14 top level 5 path @
+ID 257 gen 22 top level 5 path @home
+ID 258 gen 22 top level 5 path @var_log
+ID 260 gen 30 top level 5 path @data</span>
+
+<span class="prompt">root@host:~#</span> btrfs subvolume delete /mnt/@data
+<span class="output">Delete subvolume (no-commit): '/mnt/@data'</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Snapshots                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Snapshots</h2>
+
+  <p>A snapshot is a subvolume created from another subvolume, sharing all
+     blocks CoW. Writable by default; pass <code>-r</code> for read-only
+     (required for <code>btrfs send</code>). Nesting is legal &mdash; snapshot
+     of a snapshot is fine.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> btrfs subvolume snapshot /mnt/@ /mnt/@snapshots/pre-upgrade
+<span class="output">Create a snapshot of '/mnt/@' in '/mnt/@snapshots/pre-upgrade'</span>
+
+<span class="prompt">root@host:~#</span> btrfs subvolume snapshot -r /mnt/@home /mnt/@snapshots/home-ro-2026-04-20
+<span class="output">Create a readonly snapshot of '/mnt/@home' in '/mnt/@snapshots/home-ro-2026-04-20'</span></pre>
+
+  <h3>Reflinks &mdash; instant file copies</h3>
+  <p><code>cp --reflink=always SRC DST</code> inside a btrfs filesystem creates
+     a CoW-shared copy &mdash; instant, regardless of file size, taking no
+     additional space until one side is modified. Indispensable for VM image
+     cloning, large media, backup rotations:</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> cp --reflink=always ubuntu-base.qcow2 vm-042.qcow2
+<span class="cm"># returns instantly even for a 40 GB file</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- RAID profiles                             -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Built-in RAID Profiles</h2>
+
+  <p>btrfs sets data and metadata profiles <strong>independently</strong> via
+     <code>-d</code> and <code>-m</code>. You can, for example, have
+     <code>data=single</code> + <code>metadata=raid1</code> &mdash; duplicated
+     metadata trees but single-copy data. Profiles can be changed online via
+     <code>btrfs balance</code>.</p>
+
+  <table>
+    <thead>
+      <tr><th>Profile</th><th>Behaviour</th><th>Min devices</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>single</code></td><td>One copy, no redundancy</td><td>1</td><td>Pure capacity.</td></tr>
+      <tr><td><code>dup</code></td><td>Two copies on the <em>same</em> device</td><td>1</td><td>Metadata default on single-disk FSes &mdash; survives sector loss.</td></tr>
+      <tr><td><code>raid0</code></td><td>Stripe, no redundancy</td><td>2</td><td>Capacity &times; N, speed, risk.</td></tr>
+      <tr><td><code>raid1</code></td><td>Two copies on <em>different</em> devices</td><td>2</td><td>Block-level mirroring &mdash; not whole-device like mdadm.</td></tr>
+      <tr><td><code>raid10</code></td><td>Stripe of mirror pairs</td><td>4</td><td>Capacity / 2, good performance.</td></tr>
+      <tr><td><code>raid1c3</code></td><td>Three copies</td><td>3</td><td>Survives 2 device losses. Good for metadata on large arrays.</td></tr>
+      <tr><td><code>raid1c4</code></td><td>Four copies</td><td>4</td><td>Survives 3 device losses.</td></tr>
+      <tr><td><code>raid5</code></td><td>Parity stripe, 1 disk tolerance</td><td>3</td><td><strong>Write hole unresolved &mdash; avoid.</strong></td></tr>
+      <tr><td><code>raid6</code></td><td>Double parity, 2 disk tolerance</td><td>4</td><td><strong>Write hole unresolved &mdash; avoid.</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>Do not use btrfs raid5/raid6 for anything you value.</strong> The
+    parity <em>write hole</em> &mdash; the window where a crash during a
+    partial stripe write leaves parity inconsistent with data &mdash; has been
+    known since 2016 and remains unresolved in mainline as of 2024.
+    <strong>Especially dangerous on metadata:</strong> a metadata write hole
+    can corrupt the filesystem tree irrecoverably.
+    <br><br>
+    <strong>Safe patterns:</strong>
+    <ul>
+      <li>Use <code>raid1</code> / <code>raid10</code> for data <em>and</em> metadata; or</li>
+      <li>Run btrfs on top of a <code>mdadm</code> RAID 5/6 array and use <code>single</code>/<code>dup</code> profiles &mdash; you lose btrfs's self-healing but get working parity RAID.</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Online device ops                         -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Online Multi-Device Operations</h2>
+
+  <p>Unlike ZFS, btrfs allows essentially every device-level operation to
+     happen <strong>online, on a mounted filesystem</strong>. This is arguably
+     btrfs's biggest operational advantage.</p>
+
+  <table>
+    <tbody>
+      <tr><td><code>btrfs device add /dev/sdX /mnt</code></td><td>Add a device to the FS. New blocks can be allocated on it immediately.</td></tr>
+      <tr><td><code>btrfs device remove /dev/sdX /mnt</code></td><td>Evacuate data off the device, then remove it. Rebalances automatically.</td></tr>
+      <tr><td><code>btrfs device replace start /dev/OLD /dev/NEW /mnt</code></td><td>Live replacement &mdash; reads from the old device (or reconstructs from redundancy if it's dead) and writes to the new one, without dropping below the profile's redundancy.</td></tr>
+      <tr><td><code>btrfs balance start /mnt</code></td><td>Rewrite all chunks. Used after adding/removing devices to redistribute data, or to reclaim metadata space.</td></tr>
+      <tr><td><code>btrfs balance start -dconvert=raid10 -mconvert=raid10 /mnt</code></td><td>Convert data and metadata profiles <em>online</em>.</td></tr>
+    </tbody>
+  </table>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> btrfs device add /dev/sdd /mnt
+<span class="prompt">root@host:~#</span> btrfs balance start -dconvert=raid1 -mconvert=raid1 /mnt
+<span class="output">Done, had to relocate 412 out of 412 chunks</span></pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Scrub                                     -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Scrub &amp; Self-Healing</h2>
+
+  <p>Like ZFS, btrfs has a built-in scrub that reads every block, verifies the
+     checksum, and repairs corruption from redundant copies. Self-healing
+     requires a redundant profile (raid1/raid10/raid1c3/raid1c4 or
+     <code>dup</code> for metadata).</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> btrfs scrub start /mnt
+<span class="output">scrub started on /mnt, fsid 6a2f... (pid=12345)</span>
+
+<span class="prompt">root@host:~#</span> btrfs scrub status /mnt
+<span class="output">UUID:             6a2f...
+Scrub started:    Sun Apr 20 09:00:00 2026
+Status:           running
+Duration:         0:12:33
+ETA:              2:41:40
+Total to scrub:   4.2TiB
+Rate:             540.2MiB/s
+Error summary:    no errors found</span></pre>
+
+  <div class="tip">
+    Schedule <code>btrfs scrub</code> weekly on SSDs, monthly on spinning
+    rust. Without scrub, silent bit rot on a block only referenced by cold
+    files is caught only when you try to read it &mdash; by which time the
+    other copy may already have rotted too.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- send/receive                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>send / receive</h2>
+
+  <p>btrfs's replication model mirrors ZFS's closely: send a stream derived
+     from the block-pointer delta of a read-only snapshot, receive it into
+     another btrfs filesystem.</p>
+
+  <pre class="terminal"><span class="cm"># Initial full send</span>
+<span class="prompt">root@host:~#</span> btrfs subvolume snapshot -r /mnt/@home /mnt/@snapshots/home-2026-04-19
+<span class="prompt">root@host:~#</span> btrfs send /mnt/@snapshots/home-2026-04-19 | btrfs receive /backup/
+
+<span class="cm"># Incremental &mdash; only the delta since home-2026-04-19</span>
+<span class="prompt">root@host:~#</span> btrfs subvolume snapshot -r /mnt/@home /mnt/@snapshots/home-2026-04-20
+<span class="prompt">root@host:~#</span> btrfs send -p /mnt/@snapshots/home-2026-04-19 \
+                  /mnt/@snapshots/home-2026-04-20 | btrfs receive /backup/</pre>
+
+  <p>Read-only snapshots are required on the source &mdash; the stream
+     references a concrete frozen tree. The receiving side reconstructs
+     subvolumes with matching content.</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Checksums                                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Checksum Algorithms</h2>
+
+  <table>
+    <thead><tr><th>Algorithm</th><th>Width</th><th>When</th></tr></thead>
+    <tbody>
+      <tr><td><strong>CRC32C</strong></td><td>32 bit</td><td>Default. Hardware-accelerated on all modern CPUs. Fast, decent collision resistance for non-adversarial bit-rot detection.</td></tr>
+      <tr><td><strong>xxhash</strong></td><td>64 bit</td><td>Faster than CRC32C on some CPUs, wider &rarr; far fewer collisions.</td></tr>
+      <tr><td><strong>SHA-256</strong></td><td>256 bit</td><td>Cryptographic. Slow without dedicated instructions. Overkill for most use cases.</td></tr>
+      <tr><td><strong>BLAKE2b</strong></td><td>256 bit</td><td>Cryptographic, faster than SHA-256 in software.</td></tr>
+    </tbody>
+  </table>
+
+  <p>Set at filesystem creation only: <code>mkfs.btrfs --csum xxhash /dev/sdX</code>.
+     Not changeable after the fact.</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Inline data & compression                 -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Inline Data &amp; Compression</h2>
+
+  <h3>Inline data</h3>
+  <p>Files smaller than roughly 4 KB can be stored directly inside the
+     metadata b-tree (inline extent), avoiding a separate data block allocation.
+     Excellent for directories full of small config files, dotfiles, mail
+     spools.</p>
+
+  <h3>Transparent compression</h3>
+  <p>btrfs compresses extents on write. Three algorithms:
+     <strong>zlib</strong> (older, good ratio, slow), <strong>lzo</strong>
+     (fast, modest ratio), <strong>zstd</strong> (modern sweet spot, tunable
+     levels 1&ndash;15). Incompressible extents are detected and stored raw.</p>
+
+  <pre class="terminal"><span class="cm"># Filesystem-wide via mount option</span>
+<span class="prompt">root@host:~#</span> mount -o compress=zstd:3 /dev/sdX /mnt
+
+<span class="cm"># Or per-file</span>
+<span class="prompt">root@host:~#</span> btrfs property set /mnt/logs compression zstd</pre>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Tools                                     -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Tool Surface</h2>
+
+  <table>
+    <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>btrfs subvolume {create,list,delete,snapshot}</code></td><td>Subvolume lifecycle</td></tr>
+      <tr><td><code>btrfs filesystem show</code></td><td>Devices and FSIDs</td></tr>
+      <tr><td><code>btrfs filesystem df /mnt</code></td><td>Allocation by block group type (data / metadata / system)</td></tr>
+      <tr><td><code>btrfs filesystem usage /mnt</code></td><td><strong>The one you actually need.</strong> Reconciles raw vs usable space honestly.</td></tr>
+      <tr><td><code>btrfs filesystem resize &lt;SIZE|max&gt; /mnt</code></td><td>Online grow/shrink</td></tr>
+      <tr><td><code>btrfs device {add,remove,replace,stats}</code></td><td>Device lifecycle and IO/checksum error counters</td></tr>
+      <tr><td><code>btrfs balance {start,pause,cancel,status}</code></td><td>Rewrite chunks &mdash; rebalance after add/remove, convert profile, reclaim space</td></tr>
+      <tr><td><code>btrfs scrub {start,cancel,status}</code></td><td>Checksum-verify the whole FS</td></tr>
+      <tr><td><code>btrfs send</code> / <code>btrfs receive</code></td><td>Replication</td></tr>
+      <tr><td><code>btrfs check</code></td><td>Offline fsck. Modern kernels rarely need it &mdash; it's also historically been risky. Read the wiki before running with <code>--repair</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Operational quirks                        -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Operational Quirks</h2>
+
+  <h3><code>df</code> is misleading</h3>
+  <p>Because btrfs separates chunk allocation from block usage, and because
+     CoW makes &ldquo;free space&rdquo; a fuzzy concept when snapshots exist,
+     <code>df</code> numbers on btrfs are essentially advisory. Always cross-
+     check with <code>btrfs filesystem usage</code>.</p>
+
+  <pre class="terminal"><span class="prompt">root@host:~#</span> df -h /mnt
+<span class="output">Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdb        3.6T  1.9T  1.7T  53% /mnt</span>
+
+<span class="prompt">root@host:~#</span> btrfs filesystem usage /mnt
+<span class="output">Overall:
+    Device size:                   3.64TiB
+    Device allocated:              2.10TiB
+    Device unallocated:            1.54TiB
+    Used:                          1.87TiB
+    Free (estimated):              1.65TiB      (min: 878.50GiB)
+    Data ratio:                        1.00
+    Metadata ratio:                    2.00
+    Global reserve:              512.00MiB      (used: 0.00B)</span></pre>
+
+  <h3>ENOSPC when df shows free</h3>
+  <p>btrfs allocates space in <em>chunks</em> (typically 1 GiB for data, 256
+     MiB for metadata). You can run out of metadata chunks while plenty of
+     raw data space remains &rarr; the kernel returns <code>ENOSPC</code>
+     even though <code>df</code> says you have free space.</p>
+  <p>Fix: <code>btrfs balance start -dusage=50 /mnt</code> &mdash; rewrites
+     half-empty data chunks, returns their underlying space to the
+     unallocated pool so metadata can grow.</p>
+
+  <div class="warn">
+    On small or heavily-churned filesystems, schedule <strong>periodic
+    balances with usage filters</strong> (e.g.
+    <code>-dusage=50 -musage=50</code>). Full balances on a large FS can take
+    days.
+  </div>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- Snapper & Timeshift                       -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>Snapper &amp; Timeshift</h2>
+
+  <h3>Snapper (openSUSE, SUSE, Ubuntu)</h3>
+  <p><strong>Snapper</strong> is the killer feature of btrfs-on-Linux for
+     workstations and servers. It hooks into package management to take
+     <em>pre</em> and <em>post</em> snapshots of <code>@</code> around every
+     transaction, plus timeline snapshots on a cron schedule.</p>
+
+  <div class="panel">
+    <div class="panel-title">openSUSE rollback model</div>
+    <ol>
+      <li><code>zypper update</code> starts &rarr; Snapper takes a <em>pre</em> snapshot of <code>@</code></li>
+      <li>Update runs</li>
+      <li>Snapper takes a <em>post</em> snapshot</li>
+      <li>If the system boots and everything works &mdash; done.</li>
+      <li>If the system breaks: reboot, pick the <em>pre</em> snapshot from
+          GRUB, boot into it, run <code>snapper rollback</code> &rarr;
+          <code>@</code> is reset to that snapshot.</li>
+    </ol>
+  </div>
+
+  <h3>Timeshift (Linux Mint, Ubuntu)</h3>
+  <p>GUI-driven snapshot manager. Supports both rsync (to any backup target)
+     and btrfs (using subvolume snapshots) backends. Its btrfs mode creates
+     named snapshots of <code>@</code> and <code>@home</code> on a schedule.
+     Less tightly integrated with packaging than Snapper but easier for users
+     unfamiliar with the command line.</p>
+
+  <!-- ───────────────────────────────────────── -->
+  <!-- btrfs vs ZFS                              -->
+  <!-- ───────────────────────────────────────── -->
+  <h2>btrfs vs ZFS &mdash; Honest Comparison</h2>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header linux">btrfs wins</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>In-tree</strong> &mdash; no DKMS, no licensing discussion</li>
+          <li><strong>Online flexibility</strong> &mdash; add / remove / replace devices, convert RAID profile without unmounting</li>
+          <li><strong>Simpler single-disk story</strong> &mdash; default on Fedora Workstation, openSUSE, Mint; root-on-btrfs is boring</li>
+          <li><strong>Snapper integration</strong> &mdash; rollback-a-bad-update is a killer feature unmatched on Linux</li>
+          <li><strong>Reflinks</strong> &mdash; <code>cp --reflink</code> is one command away</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header code">ZFS wins</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Mature at scale</strong> &mdash; 20+ years in Solaris, large production deployments</li>
+          <li><strong>Working parity RAID</strong> &mdash; raidz1/2/3 have no write hole</li>
+          <li><strong>Richer cache tiering</strong> &mdash; ARC, L2ARC, SLOG, special vdevs</li>
+          <li><strong>Per-dataset encryption</strong> with raw send/receive to untrusted destinations</li>
+          <li><strong>Generally faster under heavy concurrent load</strong></li>
+          <li><strong>Proxmox first-class support</strong> &mdash; native replication, HA integration</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Verdict</h3>
+  <ul>
+    <li><strong>Workstation / laptop:</strong> btrfs. Snapper rollback is worth
+        its weight; kernel-upgrade friction is zero because it's in-tree.</li>
+    <li><strong>Storage server / NAS / backup target:</strong> ZFS. The cache
+        tiering, mature parity RAID, and send/receive performance matter more
+        than the online device gymnastics.</li>
+    <li><strong>Proxmox hosts:</strong> ZFS. It's first-class; btrfs support
+        exists but is less polished.</li>
+    <li><strong>Desktops with large RAID arrays needing parity:</strong>
+        either btrfs on top of mdadm, or ZFS with raidz. <em>Not</em> btrfs
+        raid5/6.</li>
+  </ul>
+
+  <div class="tip">
+    <strong>Both work, neither is obviously wrong.</strong> Pick based on the
+    workload and the team's familiarity. A badly-operated ZFS pool will lose
+    data just as effectively as a badly-operated btrfs filesystem. The
+    integrity story of both is light-years ahead of ext4 / XFS on any
+    underlying RAID.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>

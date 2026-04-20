@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 01 — Physical Storage Devices</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+</head>
+<body>
+
+  <h1>Storage 01 — Physical Storage Devices</h1>
+  <p class="subtitle">HDDs, SSDs, NVMe, and how the kernel sees them</p>
+
+  <!-- ===== THE STACK ===== -->
+  <h2>The Storage Stack at a Glance</h2>
+
+  <p>Before looking at devices, it helps to see where they sit. A userspace write travels through multiple abstraction layers before electrons land on magnetic platters or NAND cells.</p>
+
+  <div class="layer-diagram">
+    <div class="layer l7">
+      <span class="layer-num">7</span>
+      <span class="layer-name">Application</span>
+      <span class="layer-pdu">bytes</span>
+      <span class="layer-protocols">write(2), pwrite(2), mmap(2)</span>
+    </div>
+    <div class="layer l6">
+      <span class="layer-num">6</span>
+      <span class="layer-name">VFS</span>
+      <span class="layer-pdu">inodes / files</span>
+      <span class="layer-protocols">Virtual FileSystem — path resolution, caching</span>
+    </div>
+    <div class="layer l5">
+      <span class="layer-num">5</span>
+      <span class="layer-name">Filesystem</span>
+      <span class="layer-pdu">blocks</span>
+      <span class="layer-protocols">ext4, xfs, btrfs, zfs — metadata, journaling, CoW</span>
+    </div>
+    <div class="layer l4">
+      <span class="layer-num">4</span>
+      <span class="layer-name">Block Layer</span>
+      <span class="layer-pdu">bio / request</span>
+      <span class="layer-protocols">page cache, I/O scheduler, multi-queue (blk-mq)</span>
+    </div>
+    <div class="layer l3">
+      <span class="layer-num">3</span>
+      <span class="layer-name">Device Driver</span>
+      <span class="layer-pdu">SCSI / NVMe commands</span>
+      <span class="layer-protocols">sd, nvme, virtio-blk, drbd</span>
+    </div>
+    <div class="layer l2">
+      <span class="layer-num">2</span>
+      <span class="layer-name">Transport / Bus</span>
+      <span class="layer-pdu">frames</span>
+      <span class="layer-protocols">SATA (AHCI), SAS, PCIe, USB, iSCSI, FC</span>
+    </div>
+    <div class="layer l1">
+      <span class="layer-num">1</span>
+      <span class="layer-name">Physical Medium</span>
+      <span class="layer-pdu">sectors / pages</span>
+      <span class="layer-protocols">Magnetic platters, NAND flash, 3D XPoint</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Scope of this page:</strong> we focus on the bottom three layers — what the hardware looks like, how the kernel enumerates it, and which tools and knobs exist at the block device level. Filesystems are covered in <code>storage-02-filesystems</code>.
+  </div>
+
+  <!-- ===== HDDs ===== -->
+  <h2>Hard Disk Drives (HDDs)</h2>
+
+  <p>A rotating stack of magnetic platters read by mechanical arms. The design dates to 1956 (IBM 350) and the fundamentals have not changed — only the density, bus, and controller.</p>
+
+  <h3>Internal Geometry</h3>
+
+  <div class="panel">
+    <div class="panel-title">Mechanical Anatomy</div>
+    <ul>
+      <li><strong>Platters:</strong> rigid aluminum or glass disks coated with a ferromagnetic film. Modern drives stack 1–10 platters, double-sided. Each side is a <em>surface</em>.</li>
+      <li><strong>Heads:</strong> one read/write head per surface, mounted on a shared actuator arm. All heads move together, so at any instant they read the same cylinder.</li>
+      <li><strong>Tracks:</strong> concentric circles on a platter surface where data is written.</li>
+      <li><strong>Sectors:</strong> fixed-size arcs of a track — historically 512 bytes, now 4096 (Advanced Format / 4Kn).</li>
+      <li><strong>Cylinders:</strong> the set of same-radius tracks across all surfaces — useful because reading a cylinder requires no head movement, only platter rotation.</li>
+      <li><strong>Spindle motor:</strong> spins the platter stack at 5400, 7200, 10K, or 15K RPM.</li>
+      <li><strong>Actuator:</strong> a voice-coil motor that positions the head arm radially.</li>
+    </ul>
+  </div>
+
+  <h3>The Latency Breakdown</h3>
+
+  <p>HDD latency is the dominant reason they are slow for random I/O. Two physical delays matter:</p>
+
+  <table>
+    <tr><th>Component</th><th>What it is</th><th>Typical value</th></tr>
+    <tr><td><strong>Seek time</strong></td><td>Time for the actuator to move the head to the correct track</td><td>4–10 ms (avg random seek)</td></tr>
+    <tr><td><strong>Rotational latency</strong></td><td>Time for the target sector to rotate under the head</td><td>2–6 ms (½ rotation at 5400–15000 RPM)</td></tr>
+    <tr><td><strong>Transfer time</strong></td><td>Time to read/write the sector once located</td><td>&lt; 0.1 ms per sector</td></tr>
+    <tr><td><strong>Command overhead</strong></td><td>Bus + controller processing</td><td>~0.1 ms</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>Rule of thumb:</strong> a 7200 RPM HDD can sustain roughly <strong>100–200 random IOPS</strong>. Sequential throughput is 150–250 MB/s. Any workload with scattered small reads is where you feel the pain.
+  </div>
+
+  <h3>SATA and SAS — The HDD Interfaces</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header">SATA</div>
+      <div class="comp-body">
+        <ul>
+          <li>Serial ATA — consumer/prosumer interface</li>
+          <li>AHCI controller protocol, <strong>1 queue × 32 commands (NCQ)</strong></li>
+          <li>Up to 6 Gb/s (SATA III)</li>
+          <li>Half-duplex command path, no multi-host</li>
+          <li>Cheap cables, point-to-point only</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header">SAS</div>
+      <div class="comp-body">
+        <ul>
+          <li>Serial Attached SCSI — enterprise</li>
+          <li>Full-duplex, dual-port for HA (two paths per drive)</li>
+          <li>Up to 22.5 Gb/s (SAS-4)</li>
+          <li>Expanders allow hundreds of drives on one controller</li>
+          <li>Backward compatible with SATA drives in SAS backplanes (not vice versa)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SSDs ===== -->
+  <h2>Solid State Drives (SSDs)</h2>
+
+  <p>No moving parts. Data lives in floating-gate transistors (NAND flash) arranged in pages and blocks. Electrons are trapped in the floating gate during a <em>program</em> operation and swept out during an <em>erase</em>.</p>
+
+  <h3>NAND Cell Density</h3>
+
+  <p>Each NAND cell stores charge that represents one or more bits. More bits per cell means more capacity per wafer — and worse everything else.</p>
+
+  <table>
+    <tr><th>Type</th><th>Bits/cell</th><th>States</th><th>P/E cycles</th><th>Use case</th></tr>
+    <tr><td><strong>SLC</strong></td><td>1</td><td>2</td><td>~100,000</td><td>Industrial, caches, write-heavy</td></tr>
+    <tr><td><strong>MLC</strong></td><td>2</td><td>4</td><td>~10,000</td><td>Legacy enterprise</td></tr>
+    <tr><td><strong>TLC</strong></td><td>3</td><td>8</td><td>~3,000</td><td>Mainstream consumer + enterprise</td></tr>
+    <tr><td><strong>QLC</strong></td><td>4</td><td>16</td><td>~1,000</td><td>Read-heavy, bulk storage</td></tr>
+    <tr><td><strong>PLC</strong></td><td>5</td><td>32</td><td>~100–300</td><td>Archival (rare)</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>P/E cycles</strong> = program/erase cycles. Each NAND block can only be erased a finite number of times before the insulating oxide layer degrades and charge leaks. Modern drives use wear-leveling to spread writes evenly across the entire flash chip.
+  </div>
+
+  <h3>Why SSDs Need a Controller</h3>
+
+  <p>NAND flash is not a block device. It has annoying properties that the drive's controller hides from the host:</p>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title">NAND Reality</div>
+      <ul>
+        <li>Read and program at <strong>page</strong> granularity (4–16 KiB)</li>
+        <li>Erase only at <strong>block</strong> granularity (many pages, e.g. 256 KiB–4 MiB)</li>
+        <li>Cannot overwrite a page — must erase the entire containing block first</li>
+        <li>Wears out after N P/E cycles</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Controller Responsibilities</div>
+      <ul>
+        <li><strong>FTL (Flash Translation Layer):</strong> maps logical block addresses (LBAs) to physical NAND pages</li>
+        <li><strong>Wear leveling:</strong> redirect writes to the least-used blocks</li>
+        <li><strong>Garbage collection:</strong> reclaim partially-invalid blocks</li>
+        <li><strong>ECC:</strong> correct bit errors that get worse with wear</li>
+        <li><strong>Over-provisioning:</strong> hidden spare capacity (7–28%) used for GC and replacement blocks</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Write Amplification</h3>
+
+  <p>Because the controller must copy live pages out of a block before erasing it, writing 4 KiB from the host can trigger many more KiB of actual NAND writes. This is <strong>write amplification</strong> (WAF):</p>
+
+  <div class="mapping">
+    <div>Bytes written by host</div>
+    <div class="arr">÷</div>
+    <div>Bytes written to NAND</div>
+  </div>
+
+  <div class="note">
+    <strong>WAF &lt; 1</strong> is possible with compression. <strong>WAF ≈ 1.1–1.5</strong> is good (enterprise, sequential). <strong>WAF &gt; 3</strong> indicates a full, fragmented drive doing heavy GC — performance collapses and endurance burns fast.
+  </div>
+
+  <h3>Garbage Collection (GC)</h3>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <div class="label">Writes arrive</div>
+      <div class="desc">Host writes are programmed to free pages in open blocks</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <div class="label">Overwrites invalidate</div>
+      <div class="desc">Old page marked stale; new page written elsewhere (log-structured)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <div class="label">Block accumulates stale pages</div>
+      <div class="desc">Eventually mostly invalid, a few live pages</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <div class="label">GC kicks in</div>
+      <div class="desc">Live pages copied out, block erased, returned to free pool</div>
+    </div>
+  </div>
+
+  <!-- ===== NVMe ===== -->
+  <h2>NVMe — The Protocol Built for Flash</h2>
+
+  <p>SATA and AHCI were designed around the mechanical latencies of spinning disks. When you bolt a flash device to a SATA port, the protocol itself becomes the bottleneck. NVMe (Non-Volatile Memory Express) was designed from scratch for devices where the media latency is microseconds.</p>
+
+  <h3>Why PCIe Beats SATA for SSDs</h3>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header old">SATA / AHCI (legacy)</div>
+      <div class="comp-body">
+        <ul>
+          <li>Single command queue of 32 entries</li>
+          <li>6 Gb/s shared bus, ~550 MB/s real-world ceiling</li>
+          <li>Command set inherited from parallel ATA (1980s)</li>
+          <li>One I/O in flight per queue slot — no parallelism across cores</li>
+          <li>Interrupt per command, handled by a single CPU</li>
+        </ul>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header new">NVMe / PCIe</div>
+      <div class="comp-body">
+        <ul>
+          <li><strong>Up to 65,535 queues × 65,535 entries each</strong> (one queue per CPU core possible)</li>
+          <li>PCIe 4.0 x4 ≈ 7.8 GB/s, PCIe 5.0 x4 ≈ 15.7 GB/s</li>
+          <li>Minimal, flash-aware command set (13 mandatory admin commands)</li>
+          <li>MSI-X interrupts distributed across CPUs</li>
+          <li>Lockless submission/completion — each core has its own SQ/CQ pair</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tip">
+    <strong>The 64K × 64K headline</strong> is the theoretical spec. Consumer NVMe drives typically expose 8–16 queues (matching typical core counts); enterprise drives expose 64–128. What matters is that the kernel's <code>blk-mq</code> layer can submit I/O from many cores simultaneously without lock contention — the opposite of the AHCI world.
+  </div>
+
+  <h3>NVMe Namespaces</h3>
+
+  <p>An NVMe device (controller) can expose one or more <strong>namespaces</strong>. A namespace is an independent LBA range that looks like a separate block device to the host. This is analogous to LUNs in SCSI, and is how enterprise drives support multi-tenant isolation, different sector sizes, or different protection types on the same physical device.</p>
+
+  <pre><span class="cm"># A single drive exposing two namespaces:</span>
+/dev/nvme0          <span class="cm"># character device for controller admin commands</span>
+/dev/nvme0n1        <span class="cm"># namespace 1 as a block device</span>
+/dev/nvme0n2        <span class="cm"># namespace 2 as a block device</span>
+/dev/nvme0n1p1      <span class="cm"># partition 1 of namespace 1</span></pre>
+
+  <h3>Form Factors</h3>
+
+  <table>
+    <tr><th>Form factor</th><th>Interface</th><th>Typical use</th><th>Notes</th></tr>
+    <tr><td><strong>M.2 2280</strong></td><td>PCIe x4 or SATA</td><td>Laptops, consumer desktops, home servers</td><td>22 mm wide × 80 mm long. Check the <em>key</em> (M-key = PCIe/NVMe, B-key = SATA).</td></tr>
+    <tr><td><strong>U.2 / U.3</strong></td><td>PCIe x4 (SFF-8639)</td><td>Enterprise 2.5" hot-swap</td><td>Same physical bay as SAS, hot-pluggable, better thermals than M.2.</td></tr>
+    <tr><td><strong>E1.S</strong></td><td>PCIe x4</td><td>Datacenter / hyperscale 1U</td><td>EDSFF ruler form factor. Dense, hot-swap, good airflow.</td></tr>
+    <tr><td><strong>E3.S / E3.L</strong></td><td>PCIe x4/x8</td><td>Datacenter 2U+</td><td>Replaces U.2/U.3 in modern servers. Up to 32 per 2U.</td></tr>
+    <tr><td><strong>AIC</strong></td><td>PCIe x4/x8/x16</td><td>Workstations, legacy servers</td><td>Add-in card (half-height or full-height).</td></tr>
+  </table>
+
+  <!-- ===== KERNEL VIEW ===== -->
+  <h2>How the Kernel Sees Block Devices</h2>
+
+  <h3>/dev Entries and Major/Minor Numbers</h3>
+
+  <p>Every block device in Linux is represented by a <strong>device special file</strong> in <code>/dev</code>. Two integers uniquely identify a device to the kernel:</p>
+
+  <ul>
+    <li><strong>Major number:</strong> identifies the driver (sd = 8, nvme = 259, virtio-blk = 254, loop = 7)</li>
+    <li><strong>Minor number:</strong> identifies a specific device instance (and partition) handled by that driver</li>
+  </ul>
+
+  <div class="terminal">
+    <span class="prompt">$</span> ls -l /dev/sda /dev/sda1 /dev/nvme0n1 /dev/nvme0n1p1<br>
+    <span class="output">brw-rw---- 1 root disk   8,   0 Apr 20 10:12 /dev/sda<br>
+    brw-rw---- 1 root disk   8,   1 Apr 20 10:12 /dev/sda1<br>
+    brw-rw---- 1 root disk 259,   0 Apr 20 10:12 /dev/nvme0n1<br>
+    brw-rw---- 1 root disk 259,   1 Apr 20 10:12 /dev/nvme0n1p1</span>
+  </div>
+
+  <div class="note">
+    The leading <strong>b</strong> in <code>brw-rw----</code> means block device (vs <code>c</code> for character). The two numbers after the group are major and minor.
+  </div>
+
+  <h3>Naming Conventions</h3>
+
+  <table>
+    <tr><th>Pattern</th><th>Meaning</th><th>Example</th></tr>
+    <tr><td><code>/dev/sd[a-z]</code></td><td>SCSI disk (SATA, SAS, USB, iSCSI, FC — anything going through the SCSI subsystem)</td><td><code>/dev/sda</code>, <code>/dev/sdb1</code></td></tr>
+    <tr><td><code>/dev/nvme[N]n[M]</code></td><td>NVMe: controller N, namespace M. Partitions suffixed with <code>p</code>.</td><td><code>/dev/nvme0n1p2</code></td></tr>
+    <tr><td><code>/dev/vd[a-z]</code></td><td>virtio-blk — KVM/Proxmox paravirtualized disk</td><td><code>/dev/vda</code>, <code>/dev/vdb</code></td></tr>
+    <tr><td><code>/dev/xvd[a-z]</code></td><td>Xen virtual disk (older AWS EC2 instances)</td><td><code>/dev/xvda</code></td></tr>
+    <tr><td><code>/dev/mmcblk[N]p[M]</code></td><td>eMMC / SD card</td><td><code>/dev/mmcblk0p1</code></td></tr>
+    <tr><td><code>/dev/loop[N]</code></td><td>Loop device (file-backed block device)</td><td><code>/dev/loop0</code></td></tr>
+    <tr><td><code>/dev/dm-[N]</code></td><td>device-mapper (LVM, LUKS, multipath)</td><td><code>/dev/dm-0</code></td></tr>
+    <tr><td><code>/dev/md[N]</code></td><td>mdraid software RAID</td><td><code>/dev/md0</code></td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>Do not rely on <code>sda</code>/<code>sdb</code> ordering.</strong> Enumeration order depends on probe timing. For persistent mounts, use <code>/dev/disk/by-uuid/</code>, <code>/dev/disk/by-id/</code>, or <code>/dev/disk/by-partlabel/</code> — all maintained by udev and stable across reboots and bus changes.
+  </div>
+
+  <h3>udev — The Userspace Device Manager</h3>
+
+  <p>When the kernel detects a new block device, it emits a uevent. <strong>udev</strong> (part of systemd) receives the event, consults rule files in <code>/etc/udev/rules.d/</code> and <code>/lib/udev/rules.d/</code>, and creates symlinks in <code>/dev/disk/</code>:</p>
+
+  <div class="file-tree">
+<span class="dir">/dev/disk/</span>
+├── <span class="dir">by-id/</span>          <span class="highlight">nvme-Samsung_SSD_980_PRO_1TB_S5P2NF0R123456</span>
+├── <span class="dir">by-uuid/</span>        <span class="highlight">d3b07384-d9a0-4f4d-8b3a-...</span>  <span class="cm"># filesystem UUID</span>
+├── <span class="dir">by-partuuid/</span>    <span class="highlight">12345678-1234-1234-1234-...</span>   <span class="cm"># GPT partition UUID</span>
+├── <span class="dir">by-partlabel/</span>   <span class="highlight">root</span> <span class="highlight">swap</span> <span class="highlight">data</span>
+└── <span class="dir">by-path/</span>        <span class="highlight">pci-0000:04:00.0-nvme-1</span>
+  </div>
+
+  <!-- ===== INSPECTION TOOLS ===== -->
+  <h2>Inspection Tools</h2>
+
+  <h3>lsblk — The Tree View</h3>
+
+  <div class="terminal">
+    <span class="prompt">$</span> lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL<br>
+    <span class="output">NAME          SIZE TYPE FSTYPE      MOUNTPOINTS   MODEL<br>
+    nvme0n1       1.8T disk                           Samsung SSD 980 PRO 2TB<br>
+    ├─nvme0n1p1   512M part vfat        /boot/efi<br>
+    ├─nvme0n1p2     1G part ext4        /boot<br>
+    └─nvme0n1p3   1.8T part crypto_LUKS<br>
+      └─cryptroot 1.8T crypt LVM2_member<br>
+        ├─vg-root 100G lvm  ext4        /<br>
+        ├─vg-swap  16G lvm  swap        [SWAP]<br>
+        └─vg-home 1.6T lvm  ext4        /home<br>
+    sda         931.5G disk                           WDC WD10EZEX-00BN5A0<br>
+    └─sda1      931.5G part ext4        /mnt/backup</span>
+  </div>
+
+  <h3>blkid — UUIDs and Labels</h3>
+
+  <div class="terminal">
+    <span class="prompt">$</span> blkid<br>
+    <span class="output">/dev/nvme0n1p1: UUID="1234-ABCD" TYPE="vfat" PARTLABEL="EFI" PARTUUID="..."<br>
+    /dev/nvme0n1p2: UUID="a1b2c3d4-..." TYPE="ext4" PARTLABEL="boot" PARTUUID="..."<br>
+    /dev/nvme0n1p3: UUID="9a8b7c6d-..." TYPE="crypto_LUKS" PARTLABEL="crypt" PARTUUID="..."<br>
+    /dev/mapper/cryptroot: UUID="..." TYPE="LVM2_member"</span>
+  </div>
+
+  <h3>smartctl — SMART Data</h3>
+
+  <p>SMART (Self-Monitoring, Analysis, and Reporting Technology) is a standard set of health and wear counters exposed by every modern drive. <code>smartctl</code> from <code>smartmontools</code> is the canonical tool.</p>
+
+  <div class="terminal">
+    <span class="prompt">$</span> smartctl -a /dev/nvme0n1<br>
+    <span class="output">=== START OF INFORMATION SECTION ===<br>
+    Model Number: Samsung SSD 980 PRO 2TB<br>
+    Firmware Version: 5B2QGXA7<br>
+    Total NVM Capacity: 2,000,398,934,016 [2.00 TB]<br>
+    <br>
+    === START OF SMART DATA SECTION ===<br>
+    SMART/Health Information (NVMe Log 0x02)<br>
+    Critical Warning:                   0x00<br>
+    Temperature:                        42 Celsius<br>
+    Available Spare:                    100%<br>
+    Available Spare Threshold:          10%<br>
+    Percentage Used:                    3%<br>
+    Data Units Read:                    12,345,678 [6.32 TB]<br>
+    Data Units Written:                 98,765,432 [50.56 TB]<br>
+    Host Read Commands:                 234,567,890<br>
+    Host Write Commands:                987,654,321<br>
+    Controller Busy Time:               1,234<br>
+    Power Cycles:                       456<br>
+    Power On Hours:                     7,890<br>
+    Unsafe Shutdowns:                   3<br>
+    Media and Data Integrity Errors:    0<br>
+    Error Information Log Entries:      0</span>
+  </div>
+
+  <h3>SMART Attributes That Matter (HDDs)</h3>
+
+  <table>
+    <tr><th>ID</th><th>Attribute</th><th>Why it matters</th></tr>
+    <tr><td>5</td><td><strong>Reallocated Sectors Count</strong></td><td>Number of bad sectors the drive has remapped to spares. Any non-zero value means the drive has physical defects — watch the rate of growth.</td></tr>
+    <tr><td>187</td><td><strong>Reported Uncorrectable Errors</strong></td><td>ECC could not correct. Data was lost. Non-zero is a strong replace signal.</td></tr>
+    <tr><td>188</td><td><strong>Command Timeout</strong></td><td>Drive failed to respond in time. Non-zero often precedes failure.</td></tr>
+    <tr><td>197</td><td><strong>Current Pending Sectors</strong></td><td>Sectors the drive suspects are bad but hasn't remapped yet. Will become reallocated on next write. Non-zero = imminent.</td></tr>
+    <tr><td>198</td><td><strong>Offline Uncorrectable</strong></td><td>Sector unreadable during offline scan. Data loss.</td></tr>
+    <tr><td>9</td><td><strong>Power-On Hours</strong></td><td>Lifetime in hours. For context, not prediction.</td></tr>
+    <tr><td>12</td><td><strong>Power Cycle Count</strong></td><td>More cycles = more thermal stress. Matters more for HDDs than SSDs.</td></tr>
+  </table>
+
+  <h3>SMART Attributes That Matter (SSDs)</h3>
+
+  <table>
+    <tr><th>Attribute</th><th>Why it matters</th></tr>
+    <tr><td><strong>Wear Leveling Count / Percentage Used</strong></td><td>Fraction of rated endurance consumed. 0% = new, 100% = rated end-of-life (not immediate death, but warranty is out).</td></tr>
+    <tr><td><strong>Available Spare / Spare Threshold</strong></td><td>Fraction of reserve blocks remaining. When it drops below the threshold (often 10%), the drive is running out of replacement blocks.</td></tr>
+    <tr><td><strong>Total Bytes Written (TBW) / Data Units Written</strong></td><td>Lifetime host writes. Compare to the manufacturer's TBW rating.</td></tr>
+    <tr><td><strong>Media and Data Integrity Errors</strong></td><td>Unrecoverable ECC errors. Should be zero.</td></tr>
+    <tr><td><strong>Unsafe Shutdowns</strong></td><td>Power loss without flush. High count + lack of PLP = risk of data corruption.</td></tr>
+    <tr><td><strong>Critical Warning bits</strong></td><td>Bitmask — spare below threshold, temperature above threshold, reliability degraded, read-only mode, volatile memory backup failed.</td></tr>
+  </table>
+
+  <div class="tip">
+    <strong>Monitoring in practice:</strong> enable <code>smartd</code> (the daemon from smartmontools). It runs short/long self-tests on a schedule and emails/logs when attributes cross thresholds. Prometheus exporters (<code>node_exporter --collector.smartmon</code> or <code>smartctl_exporter</code>) feed these into dashboards.
+  </div>
+
+  <h3>nvme-cli — The NVMe-Specific Swiss Army Knife</h3>
+
+  <div class="terminal">
+    <span class="prompt">#</span> nvme list<br>
+    <span class="output">Node          SN           Model                  Namespace Usage        Format           FW Rev<br>
+    /dev/nvme0n1  S5P2NF0R...  Samsung SSD 980 PRO    1         2.00 TB/2.00 TB 512  B +  0 B   5B2QGXA7</span>
+    <br><br>
+    <span class="prompt">#</span> nvme id-ctrl /dev/nvme0 | head -20<br>
+    <span class="output">NVME Identify Controller:<br>
+    vid       : 0x144d<br>
+    ssvid     : 0x144d<br>
+    sn        : S5P2NF0R123456<br>
+    mn        : Samsung SSD 980 PRO 2TB<br>
+    fr        : 5B2QGXA7<br>
+    rab       : 2<br>
+    ieee      : 002538<br>
+    cmic      : 0<br>
+    mdts      : 9        <span class="cm"># max data transfer size = 2^9 × MPSMIN</span><br>
+    cntlid    : 0x6<br>
+    ver       : 0x10400  <span class="cm"># NVMe 1.4</span><br>
+    oacs      : 0x17     <span class="cm"># optional admin commands supported</span><br>
+    acl       : 7<br>
+    aerl      : 3</span>
+    <br><br>
+    <span class="prompt">#</span> nvme smart-log /dev/nvme0<br>
+    <span class="prompt">#</span> nvme error-log /dev/nvme0<br>
+    <span class="prompt">#</span> nvme format /dev/nvme0n1 --lbaf=1 --ses=1     <span class="cm"># reformat namespace to 4K sectors, secure erase</span>
+  </div>
+
+  <h3>hdparm — Legacy but Useful</h3>
+
+  <div class="terminal">
+    <span class="prompt">#</span> hdparm -I /dev/sda          <span class="cm"># identify info</span><br>
+    <span class="prompt">#</span> hdparm -tT /dev/sda         <span class="cm"># quick read benchmark (cached + buffered)</span><br>
+    <span class="prompt">#</span> hdparm -W 0 /dev/sda        <span class="cm"># disable drive write cache (for consistency guarantees)</span>
+  </div>
+
+  <h3>/sys/block/ — The Kernel's View</h3>
+
+  <p>Every block device has a directory under <code>/sys/block/</code> exposing runtime state. The <code>queue/</code> subdir holds the block-layer knobs:</p>
+
+  <div class="file-tree">
+<span class="dir">/sys/block/nvme0n1/</span>
+├── <span class="file">size</span>                  <span class="cm"># size in 512-byte sectors</span>
+├── <span class="file">stat</span>                  <span class="cm"># cumulative I/O counters</span>
+├── <span class="dir">queue/</span>
+│   ├── <span class="file">scheduler</span>         <span class="cm"># active I/O scheduler, [brackets] = current</span>
+│   ├── <span class="file">nr_requests</span>       <span class="cm"># queue depth for the scheduler</span>
+│   ├── <span class="file">rotational</span>        <span class="cm"># 1 = HDD, 0 = SSD</span>
+│   ├── <span class="file">logical_block_size</span> <span class="cm"># usually 512</span>
+│   ├── <span class="file">physical_block_size</span><span class="cm"># often 4096 on modern drives</span>
+│   ├── <span class="file">discard_granularity</span><span class="cm"># smallest TRIM unit, 0 if unsupported</span>
+│   ├── <span class="file">discard_max_bytes</span>  <span class="cm"># largest TRIM in one command</span>
+│   ├── <span class="file">read_ahead_kb</span>      <span class="cm"># readahead window (default 128)</span>
+│   ├── <span class="file">max_sectors_kb</span>     <span class="cm"># max I/O size in one request</span>
+│   └── <span class="file">write_cache</span>        <span class="cm"># "write back" or "write through"</span>
+└── <span class="dir">nvme0n1p1/</span>             <span class="cm"># each partition also appears as a child</span>
+  </div>
+
+  <!-- ===== TRIM / DISCARD ===== -->
+  <h2>TRIM / Discard</h2>
+
+  <p>The SSD's FTL knows which LBAs have been written but has no way to know when the filesystem has <em>deleted</em> data. Without hints, the controller considers all ever-written LBAs as live and must copy their stale contents during garbage collection — wasting endurance and slowing writes.</p>
+
+  <p><strong>TRIM</strong> (ATA), <strong>UNMAP</strong> (SCSI), and <strong>Dataset Management / Deallocate</strong> (NVMe) are the commands the filesystem uses to tell the drive "these LBAs are now free; don't bother preserving them." The kernel calls this <em>discard</em>.</p>
+
+  <h3>Three Ways to Discard</h3>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">1. Continuous (mount option)</div>
+      <p>Add <code>discard</code> to the mount options (or <code>issue_discards</code> in LVM). Every <code>rm</code>/truncate triggers a discard immediately.</p>
+      <p><strong>Pro:</strong> drive always knows the truth.</p>
+      <p><strong>Con:</strong> small synchronous discards can stall the filesystem. Some older drives have slow discard.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">2. Periodic (fstrim.timer)</div>
+      <p>Run <code>fstrim -av</code> from a systemd timer (usually weekly). It walks free space and issues large batched discards.</p>
+      <p><strong>Pro:</strong> amortized cost, no impact on foreground I/O.</p>
+      <p><strong>Con:</strong> drive operates blind between runs.</p>
+      <p><strong>Default</strong> on most distros.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-title">3. Manual</div>
+      <p><code>fstrim /mnt/data</code> on demand, or <code>blkdiscard /dev/nvmeXnY</code> for whole-device wipe (destructive).</p>
+      <p>Useful before benchmarks or after bulk deletions.</p>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">#</span> systemctl status fstrim.timer<br>
+    <span class="output">fstrim.timer - Discard unused blocks once a week<br>
+       Loaded: loaded (/lib/systemd/system/fstrim.timer; enabled)<br>
+       Active: active (waiting)<br>
+      Trigger: Mon 2026-04-27 00:17:43 UTC; 6 days left</span>
+    <br><br>
+    <span class="prompt">#</span> fstrim -av<br>
+    <span class="output">/boot: 398.4 MiB (417714176 bytes) trimmed on /dev/nvme0n1p2<br>
+    /: 47.2 GiB (50693652480 bytes) trimmed on /dev/mapper/vg-root</span>
+  </div>
+
+  <h3>The LUKS Discard Trade-off</h3>
+
+  <div class="warn">
+    <strong>LUKS <code>--allow-discards</code></strong> lets the kernel forward TRIM commands through the encryption layer to the underlying SSD. <strong>Security cost:</strong> an attacker with raw-disk access can distinguish <em>allocated</em> (random-looking ciphertext) from <em>unallocated</em> (reads as zeros). They learn the size and rough shape of your filesystem, though not its contents.
+    <br><br>
+    For most threat models the trade-off is worth it — disabling discard on a full-disk encrypted SSD causes steady write amplification and endurance loss. For adversaries who must not know whether the disk holds 10 GB or 900 GB of data, leave discards off.
+  </div>
+
+  <!-- ===== I/O SCHEDULERS ===== -->
+  <h2>I/O Schedulers</h2>
+
+  <p>The block layer sits between filesystems and device drivers. When multiple requests are pending, the <strong>I/O scheduler</strong> decides the order in which they are dispatched. Modern Linux uses <strong>blk-mq</strong> (multi-queue block layer); the schedulers below are the multi-queue variants.</p>
+
+  <table>
+    <tr><th>Scheduler</th><th>How it works</th><th>When to use</th></tr>
+    <tr><td><strong>none</strong></td><td>FIFO — submit in the order requests arrive. Zero overhead.</td><td><strong>NVMe SSDs</strong> — the device has its own queues and reordering logic; adding a software scheduler just burns CPU. Default for NVMe.</td></tr>
+    <tr><td><strong>mq-deadline</strong></td><td>Two queues (read, write) with per-request deadlines; prefers reads. Simple and predictable.</td><td>SATA SSDs, shared storage, databases where read latency matters. Safe default.</td></tr>
+    <tr><td><strong>bfq</strong></td><td>Budget Fair Queueing — per-process fair sharing with low-latency heuristics for interactive workloads.</td><td>Desktop/laptop HDDs, mixed-workload spinning disks. Good responsiveness, higher CPU overhead.</td></tr>
+    <tr><td><strong>kyber</strong></td><td>Tracks completion latency and throttles queue depth to keep tail latency in check.</td><td>Fast SSDs where you want to cap p99 latency at the cost of some throughput. Rarely the default.</td></tr>
+  </table>
+
+  <div class="terminal">
+    <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/scheduler<br>
+    <span class="output">[none] mq-deadline kyber bfq</span>
+    <br>
+    <span class="prompt">#</span> echo mq-deadline &gt; /sys/block/sda/queue/scheduler    <span class="cm"># switch SATA disk to deadline</span>
+  </div>
+
+  <div class="tip">
+    <strong>Persistent scheduler selection:</strong> udev rule is the clean way.
+    <pre><span class="cm"># /etc/udev/rules.d/60-ioschedulers.rules</span>
+<span class="kw">ACTION</span>==<span class="str">"add|change"</span>, <span class="kw">KERNEL</span>==<span class="str">"nvme[0-9]*"</span>, <span class="kw">ATTR</span>{queue/scheduler}=<span class="str">"none"</span>
+<span class="kw">ACTION</span>==<span class="str">"add|change"</span>, <span class="kw">KERNEL</span>==<span class="str">"sd[a-z]"</span>, <span class="kw">ATTR</span>{queue/rotational}==<span class="str">"0"</span>, <span class="kw">ATTR</span>{queue/scheduler}=<span class="str">"mq-deadline"</span>
+<span class="kw">ACTION</span>==<span class="str">"add|change"</span>, <span class="kw">KERNEL</span>==<span class="str">"sd[a-z]"</span>, <span class="kw">ATTR</span>{queue/rotational}==<span class="str">"1"</span>, <span class="kw">ATTR</span>{queue/scheduler}=<span class="str">"bfq"</span></pre>
+  </div>
+
+  <!-- ===== ALIGNMENT ===== -->
+  <h2>Alignment and Block Sizes</h2>
+
+  <h3>Logical vs Physical Sector Size</h3>
+
+  <p>Historically, disks used 512-byte sectors. Modern drives use <strong>4096-byte physical sectors</strong> (Advanced Format, aka 4Kn or 512e):</p>
+
+  <div class="comparison">
+    <div class="comp-side">
+      <div class="comp-header">512n (native 512B)</div>
+      <div class="comp-body">
+        <p>Physical = 512, Logical = 512. Legacy drives only.</p>
+      </div>
+    </div>
+    <div class="comp-side">
+      <div class="comp-header">512e (emulated)</div>
+      <div class="comp-body">
+        <p>Physical = 4096, Logical = 512. The drive buffers and RMW's for the host. <strong>Misalignment is invisible but catastrophic</strong> for performance.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="comp-header">4Kn (native 4K)</div>
+    <div class="comp-body">
+      <p>Physical = Logical = 4096. Enterprise SSDs, modern NVMe, high-capacity HDDs. The OS must speak 4K — older BIOSes and OSes cannot boot from 4Kn disks.</p>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/logical_block_size<br>
+    <span class="output">512</span><br>
+    <span class="prompt">$</span> cat /sys/block/nvme0n1/queue/physical_block_size<br>
+    <span class="output">4096</span>
+  </div>
+
+  <h3>Why Misalignment Kills Performance</h3>
+
+  <p>If the filesystem's 4 KiB block straddles two 4 KiB physical sectors, every write becomes a <strong>Read-Modify-Write (RMW)</strong>: the drive reads both physical sectors, patches the modified bytes, and writes both back. Throughput drops by up to 50% and write amplification balloons.</p>
+
+  <div class="note">
+    <strong>The 1 MiB rule:</strong> modern partitioning tools align the first partition to an LBA that is a multiple of <strong>2048 sectors (1 MiB)</strong>. 1 MiB is a common multiple of every realistic physical sector size (4K, 8K, 16K), NAND page size, NAND erase block size (up to 1 MiB), and RAID stripe size. Aligning to 1 MiB is correct for all modern devices.
+  </div>
+
+  <div class="terminal">
+    <span class="prompt">$</span> fdisk -l /dev/nvme0n1 | head<br>
+    <span class="output">Disk /dev/nvme0n1: 1.82 TiB, 2000398934016 bytes, 3907029168 sectors<br>
+    Units: sectors of 1 * 512 = 512 bytes<br>
+    Sector size (logical/physical): 512 bytes / 512 bytes<br>
+    I/O size (minimum/optimal): 512 bytes / 512 bytes<br>
+    Disklabel type: gpt<br>
+    <br>
+    Device          Start        End    Sectors  Size Type<br>
+    /dev/nvme0n1p1   <strong>2048</strong>    1050623    1048576  512M EFI System<br>
+    /dev/nvme0n1p2  1050624    3147775    2097152    1G Linux filesystem</span>
+  </div>
+
+  <div class="tip">
+    First partition starts at LBA <strong>2048</strong> (= 2048 × 512 B = 1 MiB). Every subsequent partition ends on an LBA whose next sector is also aligned. This is what <code>parted</code>, <code>sgdisk</code>, and modern <code>fdisk</code> do by default.
+  </div>
+
+  <!-- ===== SUMMARY ===== -->
+  <h2>Cheat Sheet — HDD vs SATA SSD vs NVMe</h2>
+
+  <table>
+    <tr><th>Metric</th><th>HDD (7.2K)</th><th>SATA SSD</th><th>NVMe (PCIe 4.0)</th></tr>
+    <tr><td>Random 4K IOPS</td><td>~150</td><td>~90,000</td><td>~1,000,000</td></tr>
+    <tr><td>Sequential throughput</td><td>~200 MB/s</td><td>~550 MB/s</td><td>~7,000 MB/s</td></tr>
+    <tr><td>Access latency</td><td>~8 ms</td><td>~70 µs</td><td>~20 µs</td></tr>
+    <tr><td>Queue depth</td><td>1 × 32</td><td>1 × 32</td><td>64K × 64K</td></tr>
+    <tr><td>Default scheduler</td><td>bfq / mq-deadline</td><td>mq-deadline</td><td>none</td></tr>
+    <tr><td>Endurance limit</td><td>MTBF / head crash</td><td>P/E cycles (TBW)</td><td>P/E cycles (TBW)</td></tr>
+    <tr><td>TRIM needed</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+    <tr><td>Use case</td><td>Bulk cold storage, backups</td><td>General-purpose</td><td>Databases, VMs, tiered hot data</td></tr>
+  </table>
+
+  <script src="../nav.js"></script>
+</body>
+</html>

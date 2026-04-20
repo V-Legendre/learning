@@ -74,6 +74,7 @@ Every new HTML page must be wired into the navigation and search system. Follow 
 - **Frontend** (`01-*` through `16-*`) — React/TypeScript learning path
 - **Networking** (`net-01-*` through `net-13-*`) — Network fundamentals to K8s networking
 - **Virtualization** (`virt-01-*` through `virt-10-*`) — CPU virtualization to Proxmox
+- **Linux Storage** (`storage-01-*` through `storage-08-*`) — Block devices to LUKS/TPM and ZFS/btrfs
 
 ## What NOT to Do
 

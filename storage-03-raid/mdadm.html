@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage 03 — Linux Software RAID (mdadm)</title>
+  <link rel="stylesheet" href="../styles/notes.css">
+  <style>
+    .stack-layer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 20px;
+      border: 2px solid;
+      font-size: 13px;
+      font-weight: bold;
+      text-align: center;
+      width: 100%;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .stack-fs   { background: #7c3aed15; border-color: #7c3aed; color: #a78bfa; border-radius: 8px 8px 0 0; }
+    .stack-lvm  { background: #06b6d415; border-color: #06b6d4; color: #22d3ee; }
+    .stack-luks { background: #f59e0b15; border-color: #f59e0b; color: #fbbf24; }
+    .stack-md   { background: #10b98115; border-color: #10b981; color: #34d399; }
+    .stack-part { background: #3b82f615; border-color: #3b82f6; color: #60a5fa; }
+    .stack-disk { background: #ef444415; border-color: #ef4444; color: #f87171; border-radius: 0 0 8px 8px; }
+    .stack-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Storage 03 — Linux Software RAID (mdadm)</h1>
+  <p class="subtitle">Managing arrays with the Linux MD subsystem</p>
+
+  <!-- ===== INTRODUCTION ===== -->
+  <h2>What mdadm Is</h2>
+
+  <p><strong>mdadm</strong> (multi-disk admin) is the userspace administration tool for the Linux kernel's <strong>MD (Multiple Device)</strong> subsystem. MD is the in-kernel driver that implements the actual RAID behaviour — mdadm just configures and monitors it.</p>
+
+  <ul>
+    <li>Implemented in <code>drivers/md/</code> in the kernel tree (<code>raid0.c</code>, <code>raid1.c</code>, <code>raid5.c</code>, etc.)</li>
+    <li>Supports <strong>RAID 0, 1, 4, 5, 6, 10</strong>, plus linear concatenation, multipath, and faulty (for testing)</li>
+    <li>Exposes arrays as <code>/dev/mdN</code> block devices — indistinguishable to upper layers from any other block device</li>
+    <li>Configuration state lives in <strong>superblocks on each member</strong>, not in a central controller</li>
+  </ul>
+
+  <div class="panel">
+    <div class="panel-title">Relationship to other layers</div>
+    <p>mdadm arrays are block devices. You can partition them, put LVM on top, encrypt them with LUKS, or format them directly with a filesystem. MD doesn't care what sits above it.</p>
+  </div>
+
+  <!-- ===== CREATING ARRAYS ===== -->
+  <h2>Creating Arrays</h2>
+
+  <div class="panel">
+    <div class="panel-title">Create a 4-disk RAID 5</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --create /dev/md0 \
+    --level=<span class="num">5</span> \
+    --raid-devices=<span class="num">4</span> \
+    --chunk=<span class="num">512</span> \
+    --bitmap=internal \
+    /dev/sd[abcd]<span class="num">1</span>
+<span class="cm">mdadm: Defaulting to version 1.2 metadata
+mdadm: array /dev/md0 started.</span></pre>
+  </div>
+
+  <p>Key flags:</p>
+
+  <ul>
+    <li><code>--level</code> — raid0, raid1, raid5, raid6, raid10, linear</li>
+    <li><code>--raid-devices</code> — number of active members</li>
+    <li><code>--spare-devices</code> — hot spares (see below)</li>
+    <li><code>--chunk</code> — stripe chunk size in KiB. 512 is a common default for spinning disks; 64–128 for SSDs. Large chunks favour sequential workloads; small chunks favour random I/O.</li>
+    <li><code>--bitmap=internal</code> — enable write-intent bitmap (discussed later)</li>
+    <li><code>--metadata=1.2</code> — superblock version (1.2 is the default)</li>
+  </ul>
+
+  <div class="tip">
+    <strong>Use partitions, not raw disks.</strong> Create a single partition spanning the disk with type <code>fd</code> (Linux RAID autodetect, MBR) or <code>A19D880F-05FC-4D3B-A006-743F0F84911E</code> (Linux RAID, GPT). This guards against accidental reuse (tools see a partition table) and lets you make the partition slightly smaller than the full disk, sidestepping the "replacement drive is 0.1% smaller" problem.
+  </div>
+
+  <!-- ===== SUPERBLOCK ===== -->
+  <h2>The Array Superblock</h2>
+
+  <p>Every member disk stores a <strong>superblock</strong> describing the array: UUID, level, role of this disk, event count, checksum. On boot, the kernel scans attached disks, reads superblocks, groups them by UUID, and assembles arrays automatically.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Version</th>
+        <th>Location on device</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>0.90</strong></td>
+        <td>End of device (64 KiB aligned)</td>
+        <td>Legacy; limited to 2 TB, 28 devices. Boot-friendly (filesystem appears from byte 0).</td>
+      </tr>
+      <tr>
+        <td><strong>1.0</strong></td>
+        <td>End of device</td>
+        <td>Boot-friendly. GRUB can read the filesystem without knowing about MD (for RAID 1 mostly).</td>
+      </tr>
+      <tr>
+        <td><strong>1.1</strong></td>
+        <td>Start of device (offset 0)</td>
+        <td>Rarely used.</td>
+      </tr>
+      <tr>
+        <td><strong>1.2</strong> (default)</td>
+        <td>4 KiB into the device</td>
+        <td>Current default. Data offset follows the superblock.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Boot consideration:</strong> only 0.90 and 1.0 metadata leave the filesystem at byte 0 of the device. For a RAID 1 <code>/boot</code> partition that GRUB must read directly, these versions let GRUB treat one mirror member as an ordinary disk. For any other use, 1.2 is correct.
+  </div>
+
+  <!-- ===== /proc/mdstat ===== -->
+  <h2>/proc/mdstat — The Status Window</h2>
+
+  <p>A plain-text file exported by the kernel. Reflects the live state of every assembled array.</p>
+
+  <div class="panel">
+    <div class="panel-title">Healthy array</div>
+    <pre><span class="prompt">$ </span><span class="kw">cat</span> /proc/mdstat
+<span class="output">Personalities : [raid1] [raid6] [raid5] [raid4]
+md0 : active raid5 sdd1[3] sdc1[2] sdb1[1] sda1[0]
+      23441679360 blocks super 1.2 level 5, 512k chunk, algorithm 2 [4/4] [UUUU]
+      bitmap: 0/59 pages [0KB], 65536KB chunk
+
+unused devices: &lt;none&gt;</span></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Degraded + rebuilding</div>
+    <pre><span class="prompt">$ </span><span class="kw">cat</span> /proc/mdstat
+<span class="output">Personalities : [raid1] [raid6] [raid5] [raid4]
+md0 : active raid5 sde1[4] sdc1[2] sdb1[1] sda1[0]
+      23441679360 blocks super 1.2 level 5, 512k chunk, algorithm 2 [4/3] [UUU_]
+      [===>.................]  recovery = 17.8% (1391420928/7813893120) finish=423.7min speed=252618K/sec
+      bitmap: 0/59 pages [0KB], 65536KB chunk
+
+unused devices: &lt;none&gt;</span></pre>
+  </div>
+
+  <p>Reading the status line:</p>
+
+  <ul>
+    <li><code>[4/3]</code> — 4 expected members, 3 currently up</li>
+    <li><code>[UUU_]</code> — one character per slot: <code>U</code> = up, <code>_</code> = missing/failed. Position is role index, not physical enumeration.</li>
+    <li><code>[F]</code> after a device name in the member list = faulty (e.g. <code>sdc1[2](F)</code>)</li>
+    <li><code>(S)</code> after a device = spare</li>
+    <li><code>recovery = X%</code> — sync/rebuild progress; <code>resync</code>, <code>check</code>, or <code>reshape</code> also appear here</li>
+    <li>Bitmap line appears only when a write-intent bitmap is attached</li>
+  </ul>
+
+  <!-- ===== INSPECTING ===== -->
+  <h2>Inspecting Arrays and Members</h2>
+
+  <div class="panel">
+    <div class="panel-title">Array-level detail</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --detail /dev/md0
+<span class="output">/dev/md0:
+           Version : 1.2
+     Creation Time : Wed Apr  9 14:22:31 2025
+        Raid Level : raid5
+        Array Size : 23441679360 (21.83 TiB 24.00 TB)
+     Used Dev Size : 7813893120 (7.28 TiB 8.00 TB)
+      Raid Devices : 4
+     Total Devices : 4
+       Persistence : Superblock is persistent
+
+     Intent Bitmap : Internal
+
+       Update Time : Mon Apr 20 11:04:58 2026
+             State : clean
+    Active Devices : 4
+   Working Devices : 4
+    Failed Devices : 0
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : bitmap
+
+              Name : nas:0  (local to host nas)
+              UUID : 8f2a1e3c:4b5d6e7f:8090a1b2:c3d4e5f6
+            Events : 47213
+
+    Number   Major   Minor   RaidDevice State
+       0       8        1        0      active sync   /dev/sda1
+       1       8       17        1      active sync   /dev/sdb1
+       2       8       33        2      active sync   /dev/sdc1
+       3       8       49        3      active sync   /dev/sdd1</span></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Per-device superblock</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --examine /dev/sda1
+<span class="output">/dev/sda1:
+          Magic : a92b4efc
+        Version : 1.2
+    Feature Map : 0x1
+     Array UUID : 8f2a1e3c:4b5d6e7f:8090a1b2:c3d4e5f6
+           Name : nas:0
+  Creation Time : Wed Apr  9 14:22:31 2025
+     Raid Level : raid5
+   Raid Devices : 4
+
+ Avail Dev Size : 15627786240 sectors (7.28 TiB 8.00 TB)
+     Array Size : 23441679360 KiB (21.83 TiB 24.00 TB)
+    Data Offset : 264192 sectors
+   Super Offset : 8 sectors
+          State : clean
+    Device UUID : 1a2b3c4d:5e6f7a8b:9c0d1e2f:3a4b5c6d
+
+Internal Bitmap : 8 sectors from superblock
+    Update Time : Mon Apr 20 11:04:58 2026
+       Checksum : e7d1a92b - correct
+         Events : 47213
+
+         Layout : left-symmetric
+     Chunk Size : 512K
+
+   Device Role : Active device 0
+   Array State : AAAA ('A' == active, '.' == missing, 'R' == replacing)</span></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Event counter matters.</strong> When assembling an array from disconnected members, MD picks the group with the highest event count and considers the rest stale. Comparing <code>Events</code> across <code>--examine</code> output is how you diagnose "why won't this array assemble?"
+  </div>
+
+  <!-- ===== PERSISTENT CONFIG ===== -->
+  <h2>Persistent Configuration</h2>
+
+  <p>The superblocks are sufficient to assemble an array, but <code>mdadm.conf</code> tells the system <strong>which arrays to look for</strong>, what to name them, and where to send alerts.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Distro</th>
+        <th>Path</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Debian / Ubuntu</td>
+        <td><code>/etc/mdadm/mdadm.conf</code></td>
+      </tr>
+      <tr>
+        <td>RHEL / Fedora / Arch</td>
+        <td><code>/etc/mdadm.conf</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Generating the config from running arrays</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --detail --scan &gt;&gt; /etc/mdadm/mdadm.conf
+<span class="prompt"># </span><span class="kw">cat</span> /etc/mdadm/mdadm.conf
+<span class="output">DEVICE partitions
+HOMEHOST &lt;system&gt;
+MAILADDR root
+ARRAY /dev/md0 metadata=1.2 name=nas:0 UUID=8f2a1e3c:4b5d6e7f:8090a1b2:c3d4e5f6</span></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Regenerate the initramfs after changes.</strong> If the root filesystem or <code>/boot</code> lives on an MD array, mdadm.conf must be baked into the initramfs so the kernel can assemble the array before pivoting to the real root. Forgetting this step breaks boot.
+    <pre><span class="prompt"># </span><span class="kw">update-initramfs</span> -u               <span class="cm"># Debian/Ubuntu</span>
+<span class="prompt"># </span><span class="kw">dracut</span> -f                         <span class="cm"># RHEL/Fedora</span></pre>
+  </div>
+
+  <!-- ===== MONITORING ===== -->
+  <h2>Monitoring and Alerting</h2>
+
+  <p>MD can push events to a monitoring daemon which sends email on failure. Without this, a failed disk sits unnoticed until the <em>second</em> disk fails.</p>
+
+  <div class="panel">
+    <div class="panel-title">One-shot manual invocation</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --monitor --daemonise --mail=root --delay=<span class="num">300</span> /dev/md0</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Configured via mdadm.conf + systemd</div>
+    <pre><span class="cm"># /etc/mdadm/mdadm.conf</span>
+MAILADDR ops@example.com
+MAILFROM nas-root@example.com
+
+<span class="prompt"># </span><span class="kw">systemctl</span> enable --now mdmonitor.service</pre>
+  </div>
+
+  <p>Events reported: <code>Fail</code>, <code>FailSpare</code>, <code>SpareActive</code>, <code>NewArray</code>, <code>DegradedArray</code>, <code>MoveSpare</code>, <code>TestMessage</code>.</p>
+
+  <div class="tip">
+    <strong>Test the alert path first.</strong> <code>mdadm --monitor --test --oneshot --mail=ops@example.com /dev/md0</code> sends a test email. Silent monitoring is worse than no monitoring because it produces false confidence.
+  </div>
+
+  <!-- ===== HOT SPARES ===== -->
+  <h2>Hot Spares</h2>
+
+  <p>A spare sits idle until an active member fails; MD then kicks off rebuild automatically onto the spare.</p>
+
+  <div class="panel">
+    <div class="panel-title">Create with a spare</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --create /dev/md0 \
+    --level=<span class="num">5</span> --raid-devices=<span class="num">4</span> --spare-devices=<span class="num">1</span> \
+    /dev/sd[abcd]<span class="num">1</span> /dev/sde<span class="num">1</span></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Add a spare to an existing array</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> /dev/md0 --add-spare /dev/sdf1</pre>
+  </div>
+
+  <h3>Global spares (spare-group)</h3>
+
+  <p>A single spare can be pooled across multiple arrays. Tag each array with the same <code>spare-group</code> name in <code>mdadm.conf</code>; MD's monitor daemon moves spares between arrays on demand.</p>
+
+  <pre><span class="cm"># /etc/mdadm/mdadm.conf</span>
+ARRAY /dev/md0 spare-group=pool1 UUID=...
+ARRAY /dev/md1 spare-group=pool1 UUID=...</pre>
+
+  <!-- ===== REPLACING A FAILED DISK ===== -->
+  <h2>Replacing a Failed Disk</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <strong>Identify the failed disk.</strong> <code>/proc/mdstat</code> shows which slot (<code>[UU_U]</code>), <code>mdadm --detail</code> gives the device node, <code>dmesg</code> has the kernel error log. Cross-check with <code>smartctl -a /dev/sdX</code> and the disk serial via <code>ls -l /dev/disk/by-id/</code>.
+        <pre><span class="prompt"># </span><span class="kw">ls</span> -l /dev/disk/by-id/ | <span class="kw">grep</span> sdc
+<span class="output">ata-WDC_WD80EFAX-68LHPN0_7HK5L0RC -&gt; ../../sdc</span></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <strong>Mark as failed (if not already).</strong> MD may still show the drive as active if it's flaky but not hard-failed.
+        <pre><span class="prompt"># </span><span class="kw">mdadm</span> /dev/md0 --fail /dev/sdc1</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <strong>Remove from the array.</strong>
+        <pre><span class="prompt"># </span><span class="kw">mdadm</span> /dev/md0 --remove /dev/sdc1</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <strong>Physically replace the disk.</strong> With hot-swap backplanes, pull and insert. Without, shut down, replace, and boot.
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <strong>Partition the new disk identically.</strong> Copy the partition table from a surviving member.
+        <pre><span class="cm"># MBR</span>
+<span class="prompt"># </span><span class="kw">sfdisk</span> -d /dev/sda | <span class="kw">sfdisk</span> /dev/sdc
+<span class="cm"># GPT (sgdisk is safer for GPT)</span>
+<span class="prompt"># </span><span class="kw">sgdisk</span> --replicate=/dev/sdc /dev/sda
+<span class="prompt"># </span><span class="kw">sgdisk</span> --randomize-guids /dev/sdc</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div>
+        <strong>Add the new partition to the array.</strong> If a hot spare is configured, MD may rebuild automatically onto the spare; this <code>--add</code> makes the replacement a new spare.
+        <pre><span class="prompt"># </span><span class="kw">mdadm</span> /dev/md0 --add /dev/sdc1</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div>
+        <strong>Watch the rebuild.</strong>
+        <pre><span class="prompt"># </span><span class="kw">watch</span> -n1 <span class="str">'cat /proc/mdstat'</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>During rebuild the array is degraded.</strong> A second disk failure in the same parity group destroys the array. For RAID 5 this is the exact URE risk from the levels page; for big arrays prefer RAID 6 or RAID 10 so this window isn't catastrophic.
+  </div>
+
+  <!-- ===== REBUILD SPEED ===== -->
+  <h2>Rebuild Speed Tuning</h2>
+
+  <p>MD throttles resync/rebuild/check so it doesn't starve foreground I/O. Two knobs in <code>/proc/sys/dev/raid/</code>:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Sysctl</th>
+        <th>Default</th>
+        <th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>speed_limit_min</code></td>
+        <td>1000 KB/s</td>
+        <td>Minimum guaranteed rebuild bandwidth, even under load</td>
+      </tr>
+      <tr>
+        <td><code>speed_limit_max</code></td>
+        <td>200000 KB/s</td>
+        <td>Ceiling when the array is idle</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Push rebuild faster on an idle array</div>
+    <pre><span class="prompt"># </span><span class="kw">echo</span> <span class="num">500000</span> &gt; /proc/sys/dev/raid/speed_limit_max
+<span class="prompt"># </span><span class="kw">echo</span> <span class="num">50000</span>  &gt; /proc/sys/dev/raid/speed_limit_min
+<span class="cm"># Persist via sysctl.d:</span>
+<span class="prompt"># </span><span class="kw">cat</span> &gt; /etc/sysctl.d/90-mdadm.conf <span class="str">&lt;&lt;EOF</span>
+<span class="str">dev.raid.speed_limit_min = 50000
+dev.raid.speed_limit_max = 500000
+EOF</span></pre>
+  </div>
+
+  <p>Stripe cache size (<code>/sys/block/mdN/md/stripe_cache_size</code>, for RAID 5/6) controls how many stripes are held in memory during writes. Default 256; bumping to 4096 or 8192 often helps RAID 5/6 write throughput at the cost of RAM (stripe_cache_size × chunk × (N−1) bytes).</p>
+
+  <!-- ===== SCRUBBING ===== -->
+  <h2>Scrubbing — Periodic Integrity Checks</h2>
+
+  <p>Scrubbing reads every stripe and verifies that data and parity agree (or that mirrors match). Without scrubbing, a silent read error on an otherwise-unused sector only gets noticed during rebuild — by which time it's too late.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Action</th>
+        <th>Command</th>
+        <th>What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>check</code></td>
+        <td><code>echo check &gt; /sys/block/md0/md/sync_action</code></td>
+        <td>Reads all members, compares data vs parity/mirrors. Increments <code>mismatch_cnt</code> but <strong>does not modify</strong>. Safe on live arrays.</td>
+      </tr>
+      <tr>
+        <td><code>repair</code></td>
+        <td><code>echo repair &gt; /sys/block/md0/md/sync_action</code></td>
+        <td>Rewrites parity from the data. <strong>Only safe if data is known good</strong> — blindly repairing after a power event can bake in corruption.</td>
+      </tr>
+      <tr>
+        <td><code>idle</code></td>
+        <td><code>echo idle &gt; /sys/block/md0/md/sync_action</code></td>
+        <td>Aborts the current check/repair.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Check mismatch count after a check pass</div>
+    <pre><span class="prompt"># </span><span class="kw">cat</span> /sys/block/md0/md/mismatch_cnt
+<span class="output">0</span></pre>
+  </div>
+
+  <p>On Debian/Ubuntu, <code>/etc/cron.d/mdadm</code> runs a monthly <code>checkarray</code> on the first Sunday. On RHEL, <code>mdcheck</code> timers do the same. Non-zero <code>mismatch_cnt</code> after a check is a red flag worth investigating, especially on RAID 1 where it often indicates a flaky member.</p>
+
+  <!-- ===== GROWING ===== -->
+  <h2>Growing and Reshaping Arrays</h2>
+
+  <p>MD supports online reshape — adding disks, changing RAID level, expanding after a disk swap — without taking the array offline. It is <strong>slow</strong> (hours to days for a full reshape) and <strong>risky</strong>.</p>
+
+  <div class="panel">
+    <div class="panel-title">Add a 5th disk to a 4-disk RAID 5</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> /dev/md0 --add /dev/sde1
+<span class="prompt"># </span><span class="kw">mdadm</span> --grow /dev/md0 --raid-devices=<span class="num">5</span> \
+    --backup-file=/root/md0-reshape.bak</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">After swapping all disks for larger ones, grow to full size</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --grow /dev/md0 --size=max
+<span class="prompt"># </span><span class="kw">resize2fs</span> /dev/md0            <span class="cm"># or xfs_growfs, or pvresize, etc</span></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Back up first.</strong> Reshape rewrites the data layout on every disk while the array is live. A power event or disk failure mid-reshape without a <code>--backup-file</code> can leave the array unrecoverable. Always: (1) full backup, (2) UPS, (3) <code>--backup-file</code>, (4) verify the reshape completes before doing anything else with the array.
+  </div>
+
+  <!-- ===== BITMAP ===== -->
+  <h2>Write-Intent Bitmap</h2>
+
+  <p>A bitmap that tracks which regions of the array have pending writes. On unclean shutdown or a disk re-adding after brief disconnection, MD only has to resync the <strong>dirty regions</strong> instead of the entire array — typically a few GB instead of many TB.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Option</th>
+        <th>Command</th>
+        <th>Trade-offs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Internal</strong></td>
+        <td><code>--bitmap=internal</code></td>
+        <td>Stored in the superblock area on each member. Easy, portable. Small write overhead since every write updates the bitmap on every member.</td>
+      </tr>
+      <tr>
+        <td><strong>External file</strong></td>
+        <td><code>--bitmap=/path/file</code></td>
+        <td>Stored in a file on a separate filesystem. Rarely used.</td>
+      </tr>
+      <tr>
+        <td><strong>None</strong></td>
+        <td><code>--bitmap=none</code></td>
+        <td>Every unclean event requires full resync. Only consider for write-heavy benchmarks or arrays with very short resync times.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <div class="panel-title">Add a bitmap to an existing array</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --grow --bitmap=internal /dev/md0
+<span class="prompt"># </span><span class="kw">mdadm</span> --grow --bitmap=none     /dev/md0   <span class="cm"># remove it</span></pre>
+  </div>
+
+  <div class="tip">
+    <strong>Bitmap chunk size</strong> (<code>--bitmap-chunk=</code>) controls bitmap granularity. Larger chunks = smaller bitmap, more data to resync per dirty bit. The default (64 MiB) is a reasonable compromise.
+  </div>
+
+  <!-- ===== JOURNAL ===== -->
+  <h2>Journal Device — Closing the Write Hole</h2>
+
+  <p>For RAID 4/5/6, MD supports attaching a dedicated <strong>journal device</strong> (typically a small, fast SSD with power-loss protection). Stripe updates are written to the journal first, then committed to the array. On crash, the journal is replayed — no partial stripe, no write hole.</p>
+
+  <div class="panel">
+    <div class="panel-title">Create an array with a journal</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --create /dev/md0 \
+    --level=<span class="num">5</span> --raid-devices=<span class="num">4</span> \
+    --write-journal=/dev/nvme0n1p1 \
+    /dev/sd[abcd]<span class="num">1</span></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Add a journal to an existing RAID 5</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --grow /dev/md0 --add-journal=/dev/nvme0n1p1</pre>
+  </div>
+
+  <div class="warn">
+    <strong>Journal is a SPOF.</strong> If the journal SSD fails, writes stop until it's replaced. In production, the journal device should itself be a mirrored pair (e.g. <code>md1</code> = RAID 1 of two NVMe partitions, then <code>md0</code> uses <code>/dev/md1</code> as its journal).
+  </div>
+
+  <!-- ===== STACK PATTERNS ===== -->
+  <h2>Layered Stacks — Common Patterns</h2>
+
+  <p>MD rarely stands alone. Typical compositions:</p>
+
+  <h3>Pattern A — Classic NAS</h3>
+  <div class="stack-container">
+    <div class="stack-layer stack-fs">ext4 / xfs filesystem</div>
+    <div class="stack-layer stack-md">mdadm RAID 6 (/dev/md0)</div>
+    <div class="stack-layer stack-part">GPT partition (Linux RAID)</div>
+    <div class="stack-layer stack-disk">Physical disks × 8</div>
+  </div>
+  <p>Simple, predictable. Good for single-purpose bulk storage.</p>
+
+  <h3>Pattern B — Encrypted with LVM flexibility</h3>
+  <div class="stack-container">
+    <div class="stack-layer stack-fs">ext4 / xfs filesystem</div>
+    <div class="stack-layer stack-lvm">LVM logical volume (/dev/vg/lv)</div>
+    <div class="stack-layer stack-luks">LUKS (dm-crypt)</div>
+    <div class="stack-layer stack-md">mdadm RAID 10 (/dev/md0)</div>
+    <div class="stack-layer stack-part">GPT partitions</div>
+    <div class="stack-layer stack-disk">Physical disks × 4</div>
+  </div>
+  <p>RAID first, encryption once on the aggregate device (single key, parallelism across CPU cores), LVM for flexible volume management. Standard on Debian/Ubuntu encrypted installs with RAID.</p>
+
+  <h3>Pattern C — LVM-managed RAID (no mdadm)</h3>
+  <div class="stack-container">
+    <div class="stack-layer stack-fs">ext4 / xfs filesystem</div>
+    <div class="stack-layer stack-lvm">LVM RAID LV (raid5/raid10 segment type)</div>
+    <div class="stack-layer stack-part">GPT partitions (LVM PV)</div>
+    <div class="stack-layer stack-disk">Physical disks</div>
+  </div>
+  <p>LVM can create RAID directly using the dm-raid kernel target (same MD code underneath). Unified management via <code>lvcreate --type raid5</code>. Fewer moving parts for greenfield LVM deployments.</p>
+
+  <h3>Pattern D — RAID direct to FS (no LVM)</h3>
+  <div class="stack-container">
+    <div class="stack-layer stack-fs">ext4 / xfs</div>
+    <div class="stack-layer stack-md">mdadm RAID 1 (/dev/md0)</div>
+    <div class="stack-layer stack-disk">Physical disks × 2</div>
+  </div>
+  <p>Common for <code>/boot</code> and simple mirrored system drives. Minimum layers, maximum simplicity.</p>
+
+  <div class="tip">
+    <strong>ZFS and btrfs bypass this stack entirely.</strong> They own disks directly and integrate RAID, volume management, and checksummed filesystem in one layer. If you want end-to-end integrity, pick ZFS/btrfs instead of mdadm; don't stack them on top.
+  </div>
+
+  <!-- ===== STOPPING / DELETING ===== -->
+  <h2>Stopping, Assembling, Zeroing</h2>
+
+  <div class="panel">
+    <div class="panel-title">Stop (unassemble) an array</div>
+    <pre><span class="prompt"># </span><span class="kw">umount</span> /mnt/data
+<span class="prompt"># </span><span class="kw">mdadm</span> --stop /dev/md0</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Reassemble from members</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --assemble --scan                <span class="cm"># use mdadm.conf</span>
+<span class="prompt"># </span><span class="kw">mdadm</span> --assemble /dev/md0 /dev/sd[abcd]<span class="num">1</span>   <span class="cm"># explicit</span></pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Destroy — wipe superblocks so disks can be reused</div>
+    <pre><span class="prompt"># </span><span class="kw">mdadm</span> --stop /dev/md0
+<span class="prompt"># </span><span class="kw">mdadm</span> --zero-superblock /dev/sd[abcd]<span class="num">1</span></pre>
+  </div>
+
+  <div class="warn">
+    <strong>Without <code>--zero-superblock</code>, the next boot may auto-assemble "ghost" arrays</strong> from the old member superblocks, especially if the disks get repurposed into a new array. Always zero superblocks when decommissioning.
+  </div>
+
+<script src="../nav.js"></script>
+</body>
+</html>
